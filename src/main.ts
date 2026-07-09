@@ -8,7 +8,7 @@ import {
   setNewlineSelect,
   setStatusMessage,
 } from './ui/toolbar'
-import { TabManager, type EditorTab } from './ui/tabManager'
+import { TabManager, MAX_TABS, type EditorTab } from './ui/tabManager'
 import { analyzeTTL, type IncludeResolver } from './ttl/analyzer'
 import { findIncludeRefs, normalizeIncludePath } from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
@@ -17,8 +17,13 @@ import { evaluateTTL } from './ttl/evaluator'
 import { DocumentSettings } from './text/documentSettings'
 import type { TextEncoding, NewlineType } from './text/types'
 import { ENCODING_LABELS, NEWLINE_LABELS } from './text/types'
+import { createDefaultDocumentSettings, loadAppSettings, saveAppSettings } from './storage/appSettings'
+import { loadWorkspaceSession, saveWorkspaceSession } from './storage/sessionState'
+import { showGotoLineDialog } from './ui/gotoLineDialog'
+import { setupSidePanelResize } from './ui/sidePanelResize'
 
-let isDark = true
+const appSettings = loadAppSettings()
+let isDark = appSettings.isDark
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
@@ -31,6 +36,7 @@ app.innerHTML = `
     <section class="editor-pane">
       <div id="editor"></div>
     </section>
+    <div class="pane-resizer" id="pane-resizer" title="サイドパネル幅を変更"></div>
     <aside class="side-pane" id="side-panel"></aside>
   </main>
   <footer class="status-bar">
@@ -45,6 +51,22 @@ const sidePanel = createSidePanel(document.querySelector('#side-panel')!)
 const includePanel = createIncludePanel(document.querySelector('#side-panel')!)
 sidePanel.onGotoLine((line) => editor.gotoLine(line))
 
+setupSidePanelResize(
+  document.querySelector('#pane-resizer')!,
+  document.querySelector('#side-panel')!,
+  appSettings.sidePanelWidth,
+)
+
+function applyTheme(dark: boolean) {
+  isDark = dark
+  editor.setTheme(dark)
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  setThemeButton(dark)
+  saveAppSettings({ isDark: dark })
+}
+
+applyTheme(isDark)
+
 function getActiveTab(): EditorTab {
   const tab = tabManager.activeTab
   if (!tab) throw new Error('No active tab')
@@ -57,6 +79,7 @@ function syncUiFromTab(tab: EditorTab): void {
   updateStatusBar(tab)
   runAnalysis(editor.getValue())
   updateCursorPosition()
+  schedulePersistWorkspaceSession()
 }
 
 function updateStatusBar(tab: EditorTab): void {
@@ -139,6 +162,7 @@ function refreshIncludePanel(text?: string) {
       if (tabId) tab.includeBindings[path] = tabId
       else delete tab.includeBindings[path]
       runAnalysis(editor.getValue())
+      schedulePersistWorkspaceSession()
     },
     onGotoLine(line) {
       editor.gotoLine(line)
@@ -165,11 +189,27 @@ const tabManager = new TabManager(
   syncUiFromTab,
 )
 
+let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function persistWorkspaceSession(): void {
+  tabManager.flushEditorState()
+  saveWorkspaceSession(tabManager.buildSession())
+}
+
+function schedulePersistWorkspaceSession(): void {
+  if (sessionSaveTimer) clearTimeout(sessionSaveTimer)
+  sessionSaveTimer = setTimeout(() => {
+    sessionSaveTimer = null
+    persistWorkspaceSession()
+  }, 500)
+}
+
 editor.onChange((text) => {
   tabManager.activeTab?.docSettings.markDirty()
   tabManager.notifyContentChanged()
   runAnalysis(text)
   updateCursorPosition()
+  schedulePersistWorkspaceSession()
 })
 
 function updateCursorPosition() {
@@ -185,7 +225,7 @@ editor.view.dom.addEventListener('click', updateCursorPosition)
 
 function handleNewTab() {
   if (!tabManager.canAddTab()) return
-  tabManager.addTab({ fileName: '未保存', activate: true })
+  tabManager.addTab({ fileName: '未保存', docSettings: createDefaultDocumentSettings(), activate: true })
 }
 
 function handleNew() {
@@ -217,6 +257,7 @@ async function openFile(bytes: Uint8Array, fileName: string, fileHandle: FileSys
   })
 
   if (tab) syncUiFromTab(tab)
+  else schedulePersistWorkspaceSession()
 }
 
 async function handleOpen() {
@@ -287,6 +328,7 @@ async function handleSave() {
     tabManager.markTabSaved()
     tabManager.setActiveFileName(tab.fileName)
     syncUiFromTab(tab)
+    persistWorkspaceSession()
   } catch (err) {
     if (isUserCancelError(err)) return
     const message = err instanceof Error ? err.message : String(err)
@@ -307,6 +349,7 @@ function downloadFile(bytes: Uint8Array, filename: string) {
   tab.fileHandle = null
   tabManager.markTabSaved()
   tabManager.setActiveFileName(filename)
+  persistWorkspaceSession()
 }
 
 function handleEncodingChange(encoding: TextEncoding) {
@@ -320,6 +363,7 @@ function handleEncodingChange(encoding: TextEncoding) {
   setEncodingSelect(encoding)
   updateStatusBar(tab)
   tabManager.notifyContentChanged()
+  saveAppSettings({ defaultEncoding: encoding })
   if (warning) alert(warning)
 }
 
@@ -328,18 +372,29 @@ function handleNewlineChange(newline: NewlineType) {
   tab.docSettings.changeNewline(editor.getValue(), newline)
   setNewlineSelect(newline)
   updateStatusBar(tab)
+  saveAppSettings({ defaultNewline: newline })
 }
 
 function handleThemeToggle() {
-  isDark = !isDark
-  editor.setTheme(isDark)
-  document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
-  setThemeButton(isDark)
+  applyTheme(!isDark)
+}
+
+function handleGotoLine() {
+  const pos = editor.view.state.selection.main.head
+  const currentLine = editor.view.state.doc.lineAt(pos).number
+  const maxLine = editor.view.state.doc.lines
+  showGotoLineDialog({
+    currentLine,
+    maxLine,
+    onSubmit: (line) => editor.gotoLine(line),
+  })
 }
 
 function handleCloseTab() {
   const tab = tabManager.activeTab
-  if (tab) tabManager.closeTab(tab.id)
+  if (tab && tabManager.closeTab(tab.id)) {
+    schedulePersistWorkspaceSession()
+  }
 }
 
 createToolbar(document.querySelector('#toolbar')!, editor, {
@@ -350,21 +405,76 @@ createToolbar(document.querySelector('#toolbar')!, editor, {
   onEncodingChange: handleEncodingChange,
   onNewlineChange: handleNewlineChange,
   onCloseTab: handleCloseTab,
+  onGotoLine: handleGotoLine,
+  onSwitchTab: (index) => tabManager.switchToIndex(index),
+  onSwitchTabRelative: (delta) => tabManager.switchRelativeTab(delta),
 })
 
 document.querySelector('#tab-add')!.addEventListener('click', handleNewTab)
 
-document.documentElement.dataset.theme = 'dark'
+function isOpenableFile(file: File): boolean {
+  return /\.(ttl|txt)$/i.test(file.name)
+}
 
-// 初期タブ（サンプルマクロ）
-const initialTab = tabManager.addTab({
-  fileName: 'サンプル.ttl',
-  editorState: editor.createState(SAMPLE_MACRO),
-  activate: true,
-})
-if (initialTab) syncUiFromTab(initialTab)
+function setupFileDrop() {
+  const dropTarget = document.querySelector('#app')!
+
+  const showDrag = (on: boolean) => {
+    dropTarget.classList.toggle('file-drop-active', on)
+  }
+
+  dropTarget.addEventListener('dragover', (e) => {
+    const de = e as DragEvent
+    if (![...de.dataTransfer?.items ?? []].some((item) => item.kind === 'file')) return
+    e.preventDefault()
+    showDrag(true)
+  })
+
+  dropTarget.addEventListener('dragleave', (e) => {
+    if (e.currentTarget === dropTarget && !dropTarget.contains((e as DragEvent).relatedTarget as Node)) {
+      showDrag(false)
+    }
+  })
+
+  dropTarget.addEventListener('drop', async (e) => {
+    const de = e as DragEvent
+    e.preventDefault()
+    showDrag(false)
+    const files = [...de.dataTransfer?.files ?? []].filter(isOpenableFile)
+    for (const file of files) {
+      if (!tabManager.canAddTab()) {
+        alert(`タブは最大 ${MAX_TABS} 個まで開けます。`)
+        break
+      }
+      const bytes = await readFileAsBytes(file)
+      await openFile(bytes, file.name, null)
+    }
+  })
+}
+
+setupFileDrop()
+
+function initWorkspace() {
+  const session = loadWorkspaceSession()
+  if (session && tabManager.restoreFromSession(session)) {
+    const tab = tabManager.activeTab
+    if (tab) syncUiFromTab(tab)
+    return
+  }
+
+  const initialTab = tabManager.addTab({
+    fileName: 'サンプル.ttl',
+    editorState: editor.createState(SAMPLE_MACRO),
+    activate: true,
+  })
+  if (initialTab) syncUiFromTab(initialTab)
+  persistWorkspaceSession()
+}
+
+initWorkspace()
 
 window.addEventListener('beforeunload', (e) => {
+  persistWorkspaceSession()
   if (tabManager.hasUnsavedChanges()) {
     e.preventDefault()
     e.returnValue = ''

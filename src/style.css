@@ -272,12 +272,27 @@ body {
 /* Side panel */
 .side-pane {
   width: 300px;
+  min-width: 200px;
+  max-width: 600px;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
   overflow-y: auto;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+}
+
+.pane-resizer {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.pane-resizer:hover,
+.pane-resizer.dragging {
+  background: var(--accent);
 }
 
 .panel-header {
@@ -481,6 +496,18 @@ body {
 
 .variable-item:hover {
   background: var(--bg-tertiary);
+}
+
+.panel-goto-item {
+  cursor: pointer;
+}
+
+.panel-goto-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.diagnostic-item.panel-goto-item:hover {
+  filter: brightness(1.05);
 }
 
 .variable-item.system-var {
@@ -824,6 +851,16 @@ body {
   color: #4ec9b0;
 }
 
+.cm-var-type.label {
+  background: #d7ba7d22;
+  color: #d7ba7d;
+}
+
+.cm-var-tooltip-value.value-label {
+  color: #d7ba7d;
+  font-style: italic;
+}
+
 .cm-var-tooltip-value.value-runtime {
   color: #9cdcfe;
   font-style: italic;
@@ -863,8 +900,18 @@ body {
   color: #3d8f7a;
 }
 
+[data-theme='light'] .cm-var-type.label {
+  background: #8a6d2f22;
+  color: #8a6d2f;
+}
+
 [data-theme='light'] .cm-var-tooltip-value {
   color: #8b5a3c;
+}
+
+[data-theme='light'] .cm-var-tooltip-value.value-label {
+  color: #8a6d2f;
+  font-style: italic;
 }
 
 [data-theme='light'] .cm-var-tooltip-value.value-runtime {
@@ -916,4 +963,100 @@ body {
   .side-pane {
     display: none;
   }
+
+  .pane-resizer {
+    display: none;
+  }
+}
+
+/* Go to line dialog */
+.goto-line-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 20vh;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.goto-line-dialog {
+  width: min(320px, 90vw);
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.goto-line-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.goto-line-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+
+.goto-line-input:focus {
+  outline: 1px solid var(--accent);
+}
+
+.goto-line-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.goto-line-actions button {
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.goto-line-actions button:hover {
+  background: var(--bg-tertiary);
+}
+
+.goto-line-ok {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+
+.goto-line-ok:hover {
+  background: var(--accent-hover) !important;
+}
+
+/* File drop overlay */
+#app.file-drop-active::after {
+  content: 'ファイルをドロップして開く';
+  position: fixed;
+  inset: 12px;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: rgba(0, 120, 212, 0.08);
+  color: var(--accent);
+  font-size: 18px;
+  font-weight: 600;
+  pointer-events: none;
 }

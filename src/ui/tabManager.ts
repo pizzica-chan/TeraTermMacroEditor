@@ -1,6 +1,7 @@
 import type { EditorState } from '@codemirror/state'
 import type { EditorInstance } from '../editor/createEditor'
 import { DocumentSettings } from '../text/documentSettings'
+import type { WorkspaceSession } from '../storage/sessionState'
 
 export const MAX_TABS = 10
 
@@ -20,6 +21,15 @@ let nextTabId = 1
 
 export function createTabId(): string {
   return `tab-${nextTabId++}`
+}
+
+export function syncNextTabIdFromExisting(ids: string[]): void {
+  let max = nextTabId - 1
+  for (const id of ids) {
+    const m = /^tab-(\d+)$/.exec(id)
+    if (m) max = Math.max(max, Number(m[1]))
+  }
+  nextTabId = max + 1
 }
 
 export class TabManager {
@@ -74,6 +84,11 @@ export class TabManager {
     tab.editorState = this.editor.getState()
   }
 
+  /** エディタ内容をアクティブタブへ反映（セッション保存前に呼ぶ） */
+  flushEditorState(): void {
+    this.saveCurrentState()
+  }
+
   private renderTabs(): void {
     this.tabListEl.innerHTML = ''
     for (const tab of this.tabs) {
@@ -103,10 +118,13 @@ export class TabManager {
   }
 
   addTab(options: {
+    id?: string
     fileName?: string
     editorState?: EditorState
     docSettings?: DocumentSettings
     fileHandle?: FileSystemFileHandle | null
+    savedContent?: string
+    includeBindings?: Record<string, string>
     activate?: boolean
   }): EditorTab | null {
     if (!this.canAddTab()) {
@@ -117,14 +135,15 @@ export class TabManager {
     this.saveCurrentState()
 
     const editorState = options.editorState ?? this.editor.createState('')
+    const content = editorState.doc.toString()
     const tab: EditorTab = {
-      id: createTabId(),
+      id: options.id ?? createTabId(),
       fileName: options.fileName ?? '未保存',
       docSettings: options.docSettings ?? new DocumentSettings(),
       fileHandle: options.fileHandle ?? null,
       editorState,
-      savedContent: editorState.doc.toString(),
-      includeBindings: {},
+      savedContent: options.savedContent ?? content,
+      includeBindings: options.includeBindings ? { ...options.includeBindings } : {},
     }
 
     this.tabs.push(tab)
@@ -151,6 +170,19 @@ export class TabManager {
     this.editor.focus()
     this.onActiveTabChange(tab)
     this.renderTabs()
+  }
+
+  switchToIndex(index: number): void {
+    const tab = this.tabs[index]
+    if (tab) this.switchTab(tab.id)
+  }
+
+  switchRelativeTab(delta: number): void {
+    if (this.tabs.length === 0 || !this.activeId) return
+    const currentIdx = this.tabs.findIndex((t) => t.id === this.activeId)
+    if (currentIdx < 0) return
+    const nextIdx = (currentIdx + delta + this.tabs.length) % this.tabs.length
+    this.switchTab(this.tabs[nextIdx]!.id)
   }
 
   closeTab(id: string): boolean {
@@ -239,5 +271,60 @@ export class TabManager {
       return this.editor.getValue()
     }
     return tab.editorState.doc.toString()
+  }
+
+  buildSession(): WorkspaceSession {
+    this.saveCurrentState()
+    const tabs = this.tabs.map((tab) => ({
+      id: tab.id,
+      fileName: tab.fileName,
+      content: this.getTabContent(tab),
+      savedContent: tab.savedContent,
+      encoding: tab.docSettings.encoding,
+      newline: tab.docSettings.newline,
+      includeBindings: { ...tab.includeBindings },
+    }))
+    return {
+      version: 1,
+      activeTabId: this.activeId ?? tabs[0]!.id,
+      tabs,
+      savedAt: Date.now(),
+    }
+  }
+
+  restoreFromSession(session: WorkspaceSession): boolean {
+    if (session.tabs.length === 0) return false
+
+    this.tabs = []
+    this.activeId = null
+    syncNextTabIdFromExisting(session.tabs.map((t) => t.id))
+
+    for (const saved of session.tabs.slice(0, MAX_TABS)) {
+      const docSettings = new DocumentSettings()
+      docSettings.encoding = saved.encoding
+      docSettings.newline = saved.newline
+      docSettings.loadFromText(saved.content, saved.encoding, saved.newline)
+
+      const editorState = this.editor.createState(saved.content)
+      this.tabs.push({
+        id: saved.id,
+        fileName: saved.fileName,
+        docSettings,
+        fileHandle: null,
+        editorState,
+        savedContent: saved.savedContent,
+        includeBindings: { ...saved.includeBindings },
+      })
+    }
+
+    const activeId = this.tabs.some((t) => t.id === session.activeTabId)
+      ? session.activeTabId
+      : this.tabs[0]!.id
+    this.activeId = activeId
+    const activeTab = this.tabs.find((t) => t.id === activeId)!
+    this.editor.setState(activeTab.editorState)
+    this.onActiveTabChange(activeTab)
+    this.renderTabs()
+    return true
   }
 }

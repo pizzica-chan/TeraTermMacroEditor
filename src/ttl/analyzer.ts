@@ -196,9 +196,9 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: { stopOnE
       }
     }
 
-    if (cmd === 'goto') {
+    if (cmd === 'goto' || cmd === 'call') {
       const target = tokens[1]
-      if (target?.kind === 'label' || (target?.kind === 'identifier' && tokens[1]?.text.startsWith(':'))) {
+      if (target?.kind === 'label' || (target?.kind === 'identifier' && target.text.startsWith(':'))) {
         // ok
       } else if (target?.kind === 'identifier') {
         const labelRef = target.text.replace(/^:/, '').toLowerCase()
@@ -206,7 +206,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: { stopOnE
           pushDiagnostic(ctx, {
             line: lineNum,
             column: target.column,
-            message: `ラベル ':${target.text}' が定義されていません`,
+            message: `ラベル ':${target.text.replace(/^:/, '')}' が定義されていません`,
             severity: 'warning',
           })
         }
@@ -332,6 +332,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: { stopOnE
       if (RESERVED.has(lower)) continue
       if (OUTPUT_COMMANDS.has(cmd) && i === 1) continue
       if (cmd === 'for' && i === 1) continue
+      if ((cmd === 'goto' || cmd === 'call') && i === 1) continue
 
       if (i > 0 && tokens[i - 1]?.text === '[' && tokens[i + 1]?.text === ']') {
         const info = ctx.varMap.get(lower)

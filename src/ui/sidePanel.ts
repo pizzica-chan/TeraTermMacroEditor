@@ -1,6 +1,6 @@
 import type { AnalysisResult, VariableInfo } from '../ttl/analyzer'
 import type { SendEntry } from '../ttl/evaluator'
-import { buildResolvedSendPlainText, countResolvedSendEntries } from '../ttl/sendText'
+import { buildSendPlainTextForCopy, countUnresolvedSendEntries } from '../ttl/sendText'
 
 export type SidePanelTab = 'variables' | 'sends'
 
@@ -26,7 +26,7 @@ export function createSidePanel(container: HTMLElement): {
   header.innerHTML = `
     <div class="panel-header-row">
       <h2 id="side-panel-title">変数</h2>
-      <button type="button" id="send-copy-btn" class="panel-action-btn" hidden title="静的に解決できた送信データをプレーンテキストでコピー">コピー</button>
+      <button type="button" id="send-copy-btn" class="panel-action-btn" hidden title="送信データをプレーンテキストでコピー（未解決部分はプレースホルダー付き）">コピー</button>
     </div>
     <div class="panel-stats" id="side-panel-stats"></div>
   `
@@ -82,9 +82,12 @@ export function createSidePanel(container: HTMLElement): {
     } else {
       const sendlnCount = sendEntries.filter((e) => e.command === 'sendln').length
       const sendCount = sendEntries.filter((e) => e.command === 'send').length
-      const resolvedCount = countResolvedSendEntries(sendEntries)
-      statsEl.textContent = `send ${sendCount} / sendln ${sendlnCount}（コピー可 ${resolvedCount}）`
-      sendCopyBtn.disabled = resolvedCount === 0
+      const unresolvedCount = countUnresolvedSendEntries(sendEntries)
+      statsEl.textContent =
+        unresolvedCount > 0
+          ? `send ${sendCount} / sendln ${sendlnCount}（未解決 ${unresolvedCount}）`
+          : `send ${sendCount} / sendln ${sendlnCount}`
+      sendCopyBtn.disabled = sendEntries.length === 0
     }
   }
 
@@ -99,13 +102,18 @@ export function createSidePanel(container: HTMLElement): {
 
   async function copyResolvedSendText() {
     if (!cached) return
-    const text = buildResolvedSendPlainText(cached.sendEntries)
-    if (!text) {
+    const text = buildSendPlainTextForCopy(cached.sendEntries)
+    if (!text && cached.sendEntries.length === 0) {
       showCopyFeedback('コピーできる送信データがありません')
       return
     }
     const ok = await copyToClipboard(text)
-    showCopyFeedback(ok ? '送信データをコピーしました' : 'コピーに失敗しました')
+    const unresolved = countUnresolvedSendEntries(cached.sendEntries)
+    const msg =
+      unresolved > 0
+        ? `送信データをコピーしました（未解決 ${unresolved} 件を含む）`
+        : '送信データをコピーしました'
+    showCopyFeedback(ok ? msg : 'コピーに失敗しました')
   }
 
   sendCopyBtn.addEventListener('click', () => {
@@ -120,6 +128,7 @@ export function createSidePanel(container: HTMLElement): {
       variableList.innerHTML = '<div class="empty-state">変数がありません</div>'
     } else {
       variableList.innerHTML = analysis.variables.map(renderVariable).join('')
+      bindVariableGotoHandlers()
     }
 
     if (sendEntries.length === 0) {
@@ -137,6 +146,7 @@ export function createSidePanel(container: HTMLElement): {
     } else {
       const summary = `<div class="diag-summary">${errors > 0 ? `<span class="err-count">${errors} エラー</span>` : ''}${warnings > 0 ? `<span class="warn-count">${warnings} 警告</span>` : ''}</div>`
       diagEl.innerHTML = summary + analysis.diagnostics.map(renderDiagnostic).join('')
+      bindDiagnosticGotoHandlers()
     }
   }
 
@@ -145,9 +155,11 @@ export function createSidePanel(container: HTMLElement): {
       v.type === 'integer' ? 'type-int' : v.type === 'string' ? 'type-str' : v.type === 'array' ? 'type-array' : 'type-unknown'
     const badge = v.isSystem ? '<span class="badge system">system</span>' : ''
     const unused = !v.isUsed && !v.isSystem && v.declaredAt > 0 ? '<span class="badge unused">未使用</span>' : ''
+    const gotoLine = v.declaredAt > 0 ? v.declaredAt : (v.usedAt[0] ?? 0)
+    const clickable = gotoLine > 0 ? ' panel-goto-item' : ''
 
     return `
-      <div class="variable-item ${v.isSystem ? 'system-var' : ''}">
+      <div class="variable-item ${v.isSystem ? 'system-var' : ''}${clickable}"${gotoLine > 0 ? ` data-line="${gotoLine}" title="L${gotoLine} へ移動"` : ''}>
         <div class="var-name">${escapeHtml(v.name)} ${badge}${unused}</div>
         <div class="var-meta">
           <span class="var-type ${typeClass}">${v.type}</span>
@@ -186,13 +198,31 @@ export function createSidePanel(container: HTMLElement): {
   }
 
   function renderDiagnostic(d: { severity: string; message: string; line: number }): string {
+    const clickable = d.line > 0 ? ' panel-goto-item' : ''
     return `
-      <div class="diagnostic-item severity-${d.severity}">
+      <div class="diagnostic-item severity-${d.severity}${clickable}"${d.line > 0 ? ` data-line="${d.line}" title="L${d.line} へ移動"` : ''}>
         <span class="diag-icon">${d.severity === 'error' ? '✕' : d.severity === 'warning' ? '⚠' : 'ℹ'}</span>
         <span class="diag-line">L${d.line}</span>
         <span class="diag-msg">${escapeHtml(d.message)}</span>
       </div>
     `
+  }
+
+  function bindPanelGotoItems(root: ParentNode) {
+    for (const el of root.querySelectorAll<HTMLElement>('.panel-goto-item[data-line]')) {
+      el.addEventListener('click', () => {
+        const line = Number(el.dataset.line)
+        if (gotoHandler && Number.isFinite(line) && line > 0) gotoHandler(line)
+      })
+    }
+  }
+
+  function bindVariableGotoHandlers() {
+    bindPanelGotoItems(variableList)
+  }
+
+  function bindDiagnosticGotoHandlers() {
+    bindPanelGotoItems(container.querySelector('#diagnostics-list')!)
   }
 
   function bindSendGotoHandlers() {

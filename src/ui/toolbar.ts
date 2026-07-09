@@ -10,6 +10,9 @@ export interface ToolbarActions {
   onEncodingChange: (encoding: TextEncoding) => void
   onNewlineChange: (newline: NewlineType) => void
   onCloseTab?: () => void
+  onGotoLine?: () => void
+  onSwitchTab?: (index: number) => void
+  onSwitchTabRelative?: (delta: number) => void
 }
 
 let suppressSelectChange = false
@@ -66,6 +69,19 @@ export function createToolbar(container: HTMLElement, editor: EditorInstance, ac
 
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey) {
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        actions.onSwitchTabRelative?.(e.shiftKey ? -1 : 1)
+        return
+      }
+
+      const digit = Number(e.key)
+      if (digit >= 1 && digit <= 9) {
+        e.preventDefault()
+        actions.onSwitchTab?.(digit - 1)
+        return
+      }
+
       switch (e.key.toLowerCase()) {
         case 'n':
           e.preventDefault()
@@ -82,6 +98,10 @@ export function createToolbar(container: HTMLElement, editor: EditorInstance, ac
         case 'w':
           e.preventDefault()
           actions.onCloseTab?.()
+          break
+        case 'g':
+          e.preventDefault()
+          actions.onGotoLine?.()
           break
         case 'z':
           if (!e.shiftKey) {

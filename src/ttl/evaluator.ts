@@ -20,8 +20,14 @@ export interface HoverInfo {
   display: string
   note?: string
   /** 表示スタイルの区別用 */
-  valueKind?: 'known' | 'runtime' | 'system-default' | 'unset'
+  valueKind?: 'known' | 'runtime' | 'system-default' | 'unset' | 'label'
   isSystem?: boolean
+}
+
+export interface HoverAtResult {
+  info: HoverInfo
+  from: number
+  to: number
 }
 
 export interface SendEntry {
@@ -350,7 +356,7 @@ function collectSendPayload(tokens: Token[], start: number, env: Env): { payload
         }
       } else {
         unresolved = true
-        parts.push(tok.text)
+        parts.push(`〈未定義: ${tok.text}〉`)
       }
       continue
     }
@@ -550,7 +556,7 @@ export interface EvaluationResult {
   /** 各行の実行直後の環境 */
   afterLine: Map<number, Env>
   sendEntries: SendEntry[]
-  getHoverInfo(line: number, column: number): HoverInfo | null
+  getHoverAt(line: number, column: number): HoverAtResult | null
 }
 
 export function evaluateTTL(source: string, options?: EvaluateOptions): EvaluationResult {
@@ -559,6 +565,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   const afterLine = new Map<number, Env>()
   const sendEntries: SendEntry[] = []
   const env = initEnv()
+  const labels = collectLabelDefinitions(lines)
   const evalOpts: EvalOptions = {
     includeResolver: options?.includeResolver,
     includeStack: [],
@@ -579,21 +586,73 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
     beforeLine,
     afterLine,
     sendEntries,
-    getHoverInfo(line: number, column: number): HoverInfo | null {
+    getHoverAt(line: number, column: number): HoverAtResult | null {
       const rawLine = lines[line - 1]
       if (!rawLine) return null
 
-      const token = findTokenAt(rawLine, line, column)
-      if (!token) return null
+      const target = findHoverTarget(rawLine, line, column)
+      if (!target) return null
 
-      const envAtPoint = computeEnvAtColumn(beforeLine, afterLine, rawLine, line, token.from)
-
-      if (token.arrayName) {
-        return resolveArrayHover(token.arrayName, token.arrayIndex, envAtPoint)
+      if (target.kind === 'label') {
+        return {
+          from: target.from,
+          to: target.to,
+          info: resolveLabelHover(target.name, labels, target.context ?? 'definition', line),
+        }
       }
 
-      return resolveVarHover(token.name, envAtPoint)
+      const envAtPoint = computeEnvAtColumn(beforeLine, afterLine, rawLine, line, target.from)
+
+      const info = target.arrayName
+        ? resolveArrayHover(target.arrayName, target.arrayIndex, envAtPoint)
+        : resolveVarHover(target.name, envAtPoint)
+
+      if (!info) return null
+      return { from: target.from, to: target.to, info }
     },
+  }
+}
+
+function collectLabelDefinitions(lines: string[]): Map<string, number> {
+  const labels = new Map<string, number>()
+  for (let i = 0; i < lines.length; i++) {
+    const tokens = tokenizeLine(lines[i]!, i + 1)
+    if (tokens[0]?.kind === 'label') {
+      labels.set(tokens[0].text.toLowerCase(), i + 1)
+    }
+  }
+  return labels
+}
+
+function resolveLabelHover(
+  name: string,
+  labels: Map<string, number>,
+  context: 'definition' | 'goto' | 'call',
+  currentLine: number,
+): HoverInfo {
+  const key = name.toLowerCase()
+  const definedAt = labels.get(key)
+  const labelName = `:${name}`
+
+  if (context === 'definition') {
+    return {
+      name: labelName,
+      type: 'label',
+      display: '（ラベル定義）',
+      note: `行 ${currentLine} で定義`,
+      valueKind: 'label',
+    }
+  }
+
+  const cmdLabel = context === 'goto' ? 'goto' : 'call'
+  return {
+    name: labelName,
+    type: 'label',
+    display: definedAt ? `→ L${definedAt}` : '（未定義ラベル）',
+    note: definedAt
+      ? `${cmdLabel} のジャンプ先（L${definedAt} で定義）`
+      : `${cmdLabel} のジャンプ先ですが、定義が見つかりません`,
+    valueKind: 'label',
   }
 }
 
@@ -635,51 +694,71 @@ function computeEnvAtColumn(
   return base
 }
 
-interface FoundToken {
+interface HoverTarget {
+  kind: 'variable' | 'label'
   name: string
   from: number
   to: number
   arrayName?: string
   arrayIndex?: number | 'var'
+  context?: 'definition' | 'goto' | 'call'
 }
 
-function findTokenAt(line: string, lineNum: number, column: number): FoundToken | null {
+function findHoverTarget(line: string, lineNum: number, column: number): HoverTarget | null {
   const tokens = tokenizeLine(line, lineNum)
+  const stmtOffset = tokens[0]?.kind === 'label' ? 1 : 0
+  const cmd =
+    tokens[stmtOffset]?.kind === 'identifier' ? tokens[stmtOffset].text.toLowerCase() : ''
 
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i]!
     const start = tok.column
     const end = tok.column + tok.text.length
 
-    if (tok.kind === 'identifier' && column >= start && column < end) {
-      if (RESERVED.has(tok.text.toLowerCase())) return null
+    if (tok.kind === 'label') {
+      if (column >= start && column < end) {
+        const context: 'definition' | 'goto' | 'call' =
+          i === 0 ? 'definition' : cmd === 'goto' || cmd === 'call' ? cmd : 'definition'
+        return { kind: 'label', name: tok.text, from: start, to: end, context }
+      }
+      continue
+    }
 
-      if (tokens[i + 1]?.text === '[' && tokens[i + 3]?.text === ']') {
-        const idxTok = tokens[i + 2]
-        const idxEnd = tokens[i + 3]!.column + 1
-        if (column < idxEnd) {
-          const arrayIndex =
-            idxTok?.kind === 'number'
-              ? Number(idxTok.text)
-              : idxTok?.kind === 'identifier'
-                ? 'var'
-                : undefined
-          return {
-            name: tok.text,
-            from: start,
-            to: idxEnd,
-            arrayName: tok.text,
-            arrayIndex,
-          }
+    if (tok.kind !== 'identifier' || column < start || column >= end) continue
+
+    const lower = tok.text.toLowerCase()
+    if (RESERVED.has(lower)) return null
+
+    if ((cmd === 'goto' || cmd === 'call') && i === stmtOffset + 1) {
+      return { kind: 'label', name: tok.text, from: start, to: end, context: cmd }
+    }
+
+    if (tokens[i + 1]?.text === '[' && tokens[i + 3]?.text === ']') {
+      const idxTok = tokens[i + 2]
+      const idxEnd = tokens[i + 3]!.column + 1
+      if (column < idxEnd) {
+        const arrayIndex =
+          idxTok?.kind === 'number'
+            ? Number(idxTok.text)
+            : idxTok?.kind === 'identifier'
+              ? 'var'
+              : undefined
+        return {
+          kind: 'variable',
+          name: tok.text,
+          from: start,
+          to: idxEnd,
+          arrayName: tok.text,
+          arrayIndex,
         }
       }
-
-      if (i > 0 && tokens[i - 1]?.text === '[' && tokens[i + 1]?.text === ']') {
-        return { name: tok.text, from: start, to: end }
-      }
-
-      return { name: tok.text, from: start, to: end }
     }
+
+    if (i > 0 && tokens[i - 1]?.text === '[' && tokens[i + 1]?.text === ']') {
+      return { kind: 'variable', name: tok.text, from: start, to: end }
+    }
+
+    return { kind: 'variable', name: tok.text, from: start, to: end }
   }
 
   return null

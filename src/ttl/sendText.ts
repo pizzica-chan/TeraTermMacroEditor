@@ -1,10 +1,9 @@
 import type { SendEntry } from './evaluator'
 
-/** 静的に解決できた send / sendln のみを、実際の送信ストリームとして連結する */
-export function buildResolvedSendPlainText(entries: SendEntry[]): string {
+/** send / sendln を送信ストリームとして連結（未解決部分はプレースホルダー付き） */
+export function buildSendPlainTextForCopy(entries: SendEntry[]): string {
   let out = ''
   for (const entry of entries) {
-    if (entry.unresolved) continue
     out += entry.payload
     if (entry.addsNewline) out += '\n'
   }
@@ -13,4 +12,8 @@ export function buildResolvedSendPlainText(entries: SendEntry[]): string {
 
 export function countResolvedSendEntries(entries: SendEntry[]): number {
   return entries.filter((e) => !e.unresolved).length
+}
+
+export function countUnresolvedSendEntries(entries: SendEntry[]): number {
+  return entries.filter((e) => e.unresolved).length
 }

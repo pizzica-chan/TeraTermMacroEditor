@@ -2,7 +2,6 @@ import { StateField } from '@codemirror/state'
 import { EditorView, hoverTooltip, type Tooltip } from '@codemirror/view'
 import { evaluateTTL, type EvaluationResult } from './evaluator'
 import { getIncludeResolver, includeGraphRevisionField } from './analysisContext'
-import { tokenizeLine } from './tokenize'
 
 function buildEvaluation(doc: string): EvaluationResult {
   return evaluateTTL(doc, { includeResolver: getIncludeResolver() })
@@ -27,7 +26,7 @@ function createTooltipDom(info: {
   type: string
   display: string
   note?: string
-  valueKind?: 'known' | 'runtime' | 'system-default' | 'unset'
+  valueKind?: 'known' | 'runtime' | 'system-default' | 'unset' | 'label'
   isSystem?: boolean
 }): HTMLElement {
   const dom = document.createElement('div')
@@ -35,8 +34,9 @@ function createTooltipDom(info: {
 
   const header = document.createElement('div')
   header.className = 'cm-var-tooltip-header'
-  const typeLabel = info.isSystem ? `${info.type} · system` : info.type
-  header.innerHTML = `<span class="cm-var-name">${escapeHtml(info.name)}</span><span class="cm-var-type${info.isSystem ? ' system' : ''}">${escapeHtml(typeLabel)}</span>`
+  const isLabel = info.valueKind === 'label'
+  const typeLabel = isLabel ? 'label' : info.isSystem ? `${info.type} · system` : info.type
+  header.innerHTML = `<span class="cm-var-name">${escapeHtml(info.name)}</span><span class="cm-var-type${info.isSystem ? ' system' : ''}${isLabel ? ' label' : ''}">${escapeHtml(typeLabel)}</span>`
   dom.appendChild(header)
 
   const value = document.createElement('div')
@@ -58,26 +58,6 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-function findTokenRange(line: string, lineNum: number, column: number): { from: number; to: number } {
-  const tokens = tokenizeLine(line, lineNum)
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i]!
-    if (tok.kind !== 'identifier') continue
-    const start = tok.column
-    const end = tok.column + tok.text.length
-    if (column >= start && column < end) {
-      if (tokens[i + 1]?.text === '[' && tokens[i + 3]?.text === ']') {
-        return { from: start, to: tokens[i + 3]!.column + 1 }
-      }
-      return { from: start, to: end }
-    }
-    if (i > 0 && tokens[i - 1]?.text === '[' && tokens[i + 1]?.text === ']' && column >= start && column < end) {
-      return { from: tokens[i - 2]?.column ?? start, to: tokens[i + 1]!.column + 1 }
-    }
-  }
-  return { from: column, to: column + 1 }
-}
-
 const varHoverTooltip = hoverTooltip(
   (view: EditorView, pos: number): Tooltip | null => {
     const evalResult = view.state.field(evalField, false)
@@ -85,17 +65,15 @@ const varHoverTooltip = hoverTooltip(
 
     const line = view.state.doc.lineAt(pos)
     const column = pos - line.from
-    const info = evalResult.getHoverInfo(line.number, column)
-    if (!info) return null
-
-    const range = findTokenRange(line.text, line.number, column)
+    const hover = evalResult.getHoverAt(line.number, column)
+    if (!hover) return null
 
     return {
-      pos: line.from + range.from,
-      end: line.from + range.to,
+      pos: line.from + hover.from,
+      end: line.from + hover.to,
       above: true,
       create() {
-        return { dom: createTooltipDom(info) }
+        return { dom: createTooltipDom(hover.info) }
       },
     }
   },
