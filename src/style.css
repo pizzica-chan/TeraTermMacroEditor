@@ -22,12 +22,18 @@
 }
 
 [data-theme='light'] {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f3f3f3;
-  --bg-tertiary: #e8e8e8;
-  --border-color: #d4d4d4;
-  --text-primary: #333333;
-  --text-secondary: #666666;
+  --bg-primary: #e4e2de;
+  --bg-secondary: #dbd8d3;
+  --bg-tertiary: #d0cdc7;
+  --border-color: #b8b4ad;
+  --text-primary: #3d3b39;
+  --text-secondary: #6b6864;
+  --accent: #5a7fa6;
+  --accent-hover: #6a8fb6;
+  --error: #c44a4a;
+  --warning: #9a7d28;
+  --info: #4a7ab8;
+  --success: #3d8f7a;
 }
 
 html,
@@ -779,7 +785,8 @@ body {
 }
 
 [data-theme='light'] .status-bar {
-  background: #0078d4;
+  background: #6a8499;
+  color: #f2f0ec;
 }
 
 /* Variable hover tooltip */
@@ -844,6 +851,30 @@ body {
   font-size: 11px;
   color: #858585;
   font-style: italic;
+}
+
+[data-theme='light'] .cm-var-name {
+  color: #2d6a8a;
+}
+
+[data-theme='light'] .cm-var-type,
+[data-theme='light'] .cm-var-type.system {
+  background: #3d8f7a22;
+  color: #3d8f7a;
+}
+
+[data-theme='light'] .cm-var-tooltip-value {
+  color: #8b5a3c;
+}
+
+[data-theme='light'] .cm-var-tooltip-value.value-runtime {
+  color: #2d6a8a;
+}
+
+[data-theme='light'] .cm-var-tooltip-value.value-system-default,
+[data-theme='light'] .cm-var-tooltip-value.value-unset,
+[data-theme='light'] .cm-var-tooltip-note {
+  color: #6b6864;
 }
 
 /* CodeMirror autocomplete */

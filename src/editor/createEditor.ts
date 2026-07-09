@@ -130,12 +130,16 @@ const darkTheme = EditorView.theme({
 }, { dark: true })
 
 const lightTheme = EditorView.theme({
-  '&': { backgroundColor: '#ffffff', color: '#333333' },
+  '&': { backgroundColor: '#ebe9e5', color: '#3d3b39' },
   '.cm-content': { fontFamily: "'Cascadia Code', 'Consolas', 'Meiryo UI', monospace", fontSize: '14px' },
-  '.cm-gutters': { backgroundColor: '#f5f5f5', color: '#999', border: 'none' },
-  '.cm-activeLineGutter': { backgroundColor: '#ebebeb' },
-  '.cm-activeLine': { backgroundColor: '#f0f0f0' },
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': { backgroundColor: '#add6ff' },
+  '.cm-gutters': { backgroundColor: '#e3e1dd', color: '#8a8782', border: 'none' },
+  '.cm-activeLineGutter': { backgroundColor: '#dbd9d4' },
+  '.cm-activeLine': { backgroundColor: '#d8d6d133' },
+  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': { backgroundColor: '#a8c4dc88' },
+  '.cm-cursor': { borderLeftColor: '#5a5854' },
+  '.cm-foldPlaceholder': { backgroundColor: '#d0cdc7', color: '#8a8782' },
+  '.cm-tooltip': { backgroundColor: '#dbd8d3', border: '1px solid #b8b4ad', color: '#3d3b39' },
+  '.cm-tooltip-lint': { backgroundColor: '#dbd8d3' },
 }, { dark: false })
 
 export function createEditor(parent: HTMLElement, initialText = SAMPLE_MACRO): EditorInstance {

@@ -84,7 +84,7 @@ const ttlLanguage = StreamLanguage.define<State>({
 
 export { ttlLanguage }
 
-export const ttlHighlight = HighlightStyle.define([
+export const ttlHighlightDark = HighlightStyle.define([
   { tag: t.comment, color: '#6a9955' },
   { tag: t.string, color: '#ce9178' },
   { tag: t.number, color: '#b5cea8' },
@@ -94,6 +94,21 @@ export const ttlHighlight = HighlightStyle.define([
   { tag: t.typeName, color: '#4ec9b0' },
   { tag: t.labelName, color: '#d7ba7d' },
   { tag: t.operator, color: '#d4d4d4' },
-])
+], { themeType: 'dark' })
 
-export const ttlHighlightExtension = syntaxHighlighting(ttlHighlight)
+export const ttlHighlightLight = HighlightStyle.define([
+  { tag: t.comment, color: '#5f7d52' },
+  { tag: t.string, color: '#8b5a3c' },
+  { tag: t.number, color: '#4a7c59' },
+  { tag: t.keyword, color: '#7b4e9e', fontWeight: 'bold' },
+  { tag: t.className, color: '#7a6f2e' },
+  { tag: t.variableName, color: '#2d6a8a' },
+  { tag: t.typeName, color: '#2a7a6f' },
+  { tag: t.labelName, color: '#8a6d2f' },
+  { tag: t.operator, color: '#4a4845' },
+], { themeType: 'light' })
+
+export const ttlHighlightExtension = [
+  syntaxHighlighting(ttlHighlightDark),
+  syntaxHighlighting(ttlHighlightLight),
+]

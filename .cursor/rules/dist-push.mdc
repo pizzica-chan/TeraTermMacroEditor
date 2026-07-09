@@ -1,0 +1,27 @@
+---
+description: push 前に dist を最新ビルドしてコミットに含める
+alwaysApply: true
+---
+
+# dist の Git 管理と push 手順
+
+このプロジェクトでは `dist/` をリポジトリに含め、`file://` でのオフライン利用を可能にする。
+
+## push する前に必ず実施
+
+1. `npm run build` を実行して `dist/` を最新化する
+2. （推奨）`npm run verify-dist-offline` でオフライン配布物を検証する
+3. `dist/` の変更があればコミットに含める
+4. その後に push する
+
+## コミット時の注意
+
+- `src/` や設定ファイルを変更した場合は、対応する `dist/` の更新も同一コミット（または直後のコミット）に含める
+- `dist/` だけが古い状態での push はしない
+
+## ビルドコマンド
+
+```bash
+npm run build
+npm run verify-dist-offline
+```
