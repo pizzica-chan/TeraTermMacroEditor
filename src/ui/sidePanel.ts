@@ -83,10 +83,13 @@ export function createSidePanel(container: HTMLElement): {
       const sendlnCount = sendEntries.filter((e) => e.command === 'sendln').length
       const sendCount = sendEntries.filter((e) => e.command === 'send').length
       const unresolvedCount = countUnresolvedSendEntries(sendEntries)
-      statsEl.textContent =
-        unresolvedCount > 0
-          ? `send ${sendCount} / sendln ${sendlnCount}（未解決 ${unresolvedCount}）`
+      const loopExpanded = sendEntries.some((e) => e.loopInfo)
+      const base =
+        loopExpanded
+          ? `合計 ${sendEntries.length} 件（send ${sendCount} / sendln ${sendlnCount}、ループ展開）`
           : `send ${sendCount} / sendln ${sendlnCount}`
+      statsEl.textContent =
+        unresolvedCount > 0 ? `${base}（未解決 ${unresolvedCount}）` : base
       sendCopyBtn.disabled = sendEntries.length === 0
     }
   }
@@ -175,9 +178,12 @@ export function createSidePanel(container: HTMLElement): {
     const displayPayload = entry.addsNewline ? `${escapeHtml(payload)}` : escapeHtml(payload)
     const newlineBadge = entry.addsNewline ? '<span class="badge send-nl">+改行</span>' : ''
     const unresolved = entry.unresolved ? '<span class="badge unused">未解決</span>' : ''
-    const gotoLine = parseLocalLine(entry.location)
+    const loopBadge = entry.loopInfo
+      ? `<span class="badge send-loop" title="for ${escapeAttr(entry.loopInfo.variable)} ループ展開">${escapeHtml(entry.loopInfo.variable)}=${entry.loopInfo.value} (${entry.loopInfo.index}/${entry.loopInfo.total})</span>`
+      : ''
+    const gotoLine = entry.line > 0 ? entry.line : parseLocalLine(entry.location)
     const gotoBtn =
-      gotoLine !== null
+      gotoLine !== null && gotoLine > 0
         ? `<button type="button" class="send-goto" data-line="${gotoLine}" title="行へ移動">⌖</button>`
         : ''
 
@@ -186,6 +192,7 @@ export function createSidePanel(container: HTMLElement): {
         <div class="send-item-header">
           <span class="send-location">${escapeHtml(entry.location)}</span>
           <span class="send-cmd">${entry.command}</span>
+          ${loopBadge}
           ${gotoBtn}
         </div>
         <div class="send-payload">${displayPayload}${entry.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>
@@ -246,7 +253,7 @@ export function createSidePanel(container: HTMLElement): {
 }
 
 function parseLocalLine(location: string): number | null {
-  const m = /^L(\d+)$/.exec(location)
+  const m = /L(\d+)$/.exec(location)
   return m ? Number(m[1]) : null
 }
 

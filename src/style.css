@@ -483,6 +483,13 @@ body {
   color: var(--info);
 }
 
+.badge.send-loop {
+  background: #b180d722;
+  color: #c586c0;
+  font-family: monospace;
+  font-size: 10px;
+}
+
 .variable-list {
   flex: 1;
   overflow-y: auto;

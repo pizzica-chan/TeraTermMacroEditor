@@ -38,6 +38,13 @@ export interface SendEntry {
   payload: string
   unresolved: boolean
   addsNewline: boolean
+  /** for ループ展開時の反復情報 */
+  loopInfo?: {
+    variable: string
+    value: number
+    index: number
+    total: number
+  }
 }
 
 type Env = Map<string, RuntimeValue>
@@ -50,7 +57,114 @@ const BLOCK_PAIRS: Record<string, string> = {
   until: 'enduntil',
 }
 
-const MAX_LOOP_ITERATIONS = 128
+const MAX_LOOP_ITERATIONS = 256
+
+function forLoopIterationCount(start: number, end: number): number {
+  return Math.abs(end - start) + 1
+}
+
+function canUnrollForLoop(start: number, end: number): boolean {
+  return forLoopIterationCount(start, end) <= MAX_LOOP_ITERATIONS
+}
+
+function resolveArrayIndex(indexToken: Token, env: Env): number | undefined {
+  if (indexToken.kind === 'number') return Number(indexToken.text)
+  if (indexToken.kind === 'identifier') {
+    const v = env.get(indexToken.text.toLowerCase())
+    if (v?.kind === 'int') return v.value
+  }
+  return undefined
+}
+
+function evalArrayElement(name: string, indexToken: Token, env: Env): RuntimeScalar | undefined {
+  const arr = env.get(name.toLowerCase())
+  if (!arr || arr.kind !== 'array') return undefined
+  const index = resolveArrayIndex(indexToken, env)
+  if (index === undefined) return undefined
+  return arr.elements.get(index)
+}
+
+function appendScalarToPayload(
+  scalar: RuntimeScalar | undefined,
+  parts: string[],
+  unresolved: { flag: boolean },
+  fallbackLabel?: string,
+): void {
+  if (!scalar) {
+    unresolved.flag = true
+    parts.push(fallbackLabel ?? '〈未定義〉')
+    return
+  }
+  if (scalar.kind === 'str') {
+    if (scalar.hint) {
+      parts.push(scalar.hint)
+      if (isRuntimeOrigin(scalar.origin)) unresolved.flag = true
+    } else if (isRuntimeOrigin(scalar.origin)) {
+      parts.push(runtimeSegmentLabel(scalar.origin!))
+      unresolved.flag = true
+    } else {
+      parts.push(scalar.value)
+    }
+    return
+  }
+  if (scalar.kind === 'int') {
+    if (scalar.origin === 'dialog-result') {
+      parts.push(runtimeSegmentLabel('dialog-result'))
+      unresolved.flag = true
+    } else {
+      parts.push(String(scalar.value))
+    }
+  }
+}
+
+function evalSendOperand(
+  tokens: Token[],
+  i: number,
+  env: Env,
+): { scalar?: RuntimeScalar; next: number; rawParts: string[]; label: string } | null {
+  const tok = tokens[i]
+  if (!tok) return null
+
+  if (tok.text === '#' && tokens[i + 1]?.kind === 'number') {
+    const code = Number(tokens[i + 1]!.text)
+    return {
+      scalar: { kind: 'str', value: String.fromCharCode(code), origin: 'literal' },
+      next: i + 2,
+      rawParts: [`#${tokens[i + 1]!.text}`],
+      label: `#${tokens[i + 1]!.text}`,
+    }
+  }
+
+  if (tok.kind === 'string' || tok.kind === 'number') {
+    return {
+      scalar: evalTokenValue(tok, env),
+      next: i + 1,
+      rawParts: [tok.text],
+      label: tok.text,
+    }
+  }
+
+  if (tok.kind === 'identifier') {
+    if (tokens[i + 1]?.text === '[' && tokens[i + 2] && tokens[i + 3]?.text === ']') {
+      const indexTok = tokens[i + 2]!
+      const label = `${tok.text}[${indexTok.text}]`
+      return {
+        scalar: evalArrayElement(tok.text, indexTok, env),
+        next: i + 4,
+        rawParts: [tok.text, '[', indexTok.text, ']'],
+        label,
+      }
+    }
+    return {
+      scalar: evalTokenValue(tok, env),
+      next: i + 1,
+      rawParts: [tok.text],
+      label: tok.text,
+    }
+  }
+
+  return null
+}
 
 function cloneEnv(env: Env): Env {
   const next = new Map<string, RuntimeValue>()
@@ -323,49 +437,18 @@ function formatSendLocation(lineNum: number, prefix?: string): string {
 function collectSendPayload(tokens: Token[], start: number, env: Env): { payload: string; rawArgs: string; unresolved: boolean } {
   const parts: string[] = []
   const raw: string[] = []
-  let unresolved = false
+  const unresolved = { flag: false }
 
-  for (let i = start; i < tokens.length; i++) {
-    const tok = tokens[i]!
-    if (tok.text === '#' && tokens[i + 1]?.kind === 'number') {
-      raw.push(`#${tokens[i + 1]!.text}`)
-      parts.push(String.fromCharCode(Number(tokens[i + 1]!.text)))
-      i++
-      continue
-    }
-
-    if (tok.kind === 'string' || tok.kind === 'number' || tok.kind === 'identifier') {
-      raw.push(tok.text)
-      const v = evalTokenValue(tok, env)
-      if (v?.kind === 'str') {
-        if (v.hint) {
-          parts.push(v.hint)
-          if (isRuntimeOrigin(v.origin)) unresolved = true
-        } else if (isRuntimeOrigin(v.origin)) {
-          parts.push(runtimeSegmentLabel(v.origin!))
-          unresolved = true
-        } else {
-          parts.push(v.value)
-        }
-      } else if (v?.kind === 'int') {
-        if (v.origin === 'dialog-result') {
-          parts.push(runtimeSegmentLabel('dialog-result'))
-          unresolved = true
-        } else {
-          parts.push(String(v.value))
-        }
-      } else {
-        unresolved = true
-        parts.push(`〈未定義: ${tok.text}〉`)
-      }
-      continue
-    }
-
-    if (tok.kind === 'operator' && tok.text === '#') continue
-    break
+  let i = start
+  while (i < tokens.length) {
+    const operand = evalSendOperand(tokens, i, env)
+    if (!operand) break
+    raw.push(...operand.rawParts)
+    appendScalarToPayload(operand.scalar, parts, unresolved, `〈未定義: ${operand.label}〉`)
+    i = operand.next
   }
 
-  return { payload: parts.join(''), rawArgs: raw.join(' '), unresolved }
+  return { payload: parts.join(''), rawArgs: raw.join(' '), unresolved: unresolved.flag }
 }
 
 function recordSend(
@@ -378,6 +461,7 @@ function recordSend(
 ): void {
   if (!opts.sendEntries) return
   const { payload, rawArgs, unresolved } = collectSendPayload(tokens, argStart, env)
+  const lf = opts.loopFrame
   opts.sendEntries.push({
     line: lineNum,
     location: formatSendLocation(lineNum, opts.locationPrefix),
@@ -386,6 +470,9 @@ function recordSend(
     payload,
     unresolved,
     addsNewline: command === 'sendln',
+    loopInfo: lf
+      ? { variable: lf.variable, value: lf.value, index: lf.index, total: lf.total }
+      : undefined,
   })
 }
 
@@ -410,6 +497,7 @@ interface EvalOptions {
   inInclude?: boolean
   locationPrefix?: string
   sendEntries?: SendEntry[]
+  loopFrame?: { variable: string; value: number; index: number; total: number }
 }
 
 interface StmtResult {
@@ -513,10 +601,20 @@ function processStatement(
     const end = evalIntExpr(tokens, offset + 3, env)
     const bodyEnd = findBlockEnd(lines, lineIdx, 'for', 'next')
 
-    if (start !== undefined && end !== undefined && end - start < MAX_LOOP_ITERATIONS) {
-      for (let v = start; v <= end; v++) {
+    if (start !== undefined && end !== undefined && canUnrollForLoop(start, end)) {
+      const total = forLoopIterationCount(start, end)
+      let iteration = 0
+      const step = start <= end ? 1 : -1
+      for (let v = start; step > 0 ? v <= end : v >= end; v += step) {
+        iteration++
         setScalar(env, loopVar, { kind: 'int', value: v })
-        if (processBlock(env, lines, lineIdx + 1, bodyEnd - 1, beforeLine, afterLine, opts)) {
+        const loopFrame = { variable: loopVar, value: v, index: iteration, total }
+        if (
+          processBlock(env, lines, lineIdx + 1, bodyEnd - 1, beforeLine, afterLine, {
+            ...opts,
+            loopFrame,
+          })
+        ) {
           return { nextIdx: bodyEnd, stopAll: true }
         }
       }
