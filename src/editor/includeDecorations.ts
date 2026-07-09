@@ -1,7 +1,6 @@
 import { StateField, StateEffect, RangeSetBuilder, type Extension } from '@codemirror/state'
 import { EditorView, Decoration, type DecorationSet } from '@codemirror/view'
-import type { IncludeRef } from '../ttl/includeRefs'
-import { normalizeIncludePath } from '../ttl/includeRefs'
+import { getIncludeBindingKey, type IncludeRef } from '../ttl/includeRefs'
 
 export interface IncludeDecorationInfo {
   refs: IncludeRef[]
@@ -34,10 +33,10 @@ function buildDecorations(doc: { line: (n: number) => { from: number; to: number
 
   const builder = new RangeSetBuilder<Decoration>()
   for (const ref of info.refs) {
-    if (ref.isDynamic || !ref.path) continue
+    const key = getIncludeBindingKey(ref)
+    if (!key) continue
     try {
       const line = doc.line(ref.line)
-      const key = normalizeIncludePath(ref.path)
       const linkedTabId = info.bindings[key]
       const deco = linkedTabId ? linkedLine : unlinkedLine
       builder.add(line.from, line.from, deco)
@@ -55,10 +54,18 @@ export function applyIncludeDecorations(view: EditorView, info: IncludeDecoratio
 }
 
 export function getIncludeLineTitle(ref: IncludeRef, bindings: Record<string, string>, tabNames: Record<string, string>): string {
-  if (!ref.path) return 'include（動的パス）'
-  const key = normalizeIncludePath(ref.path)
+  const key = getIncludeBindingKey(ref)
+  if (!key) return 'include（引数なし）'
+
   const tabId = bindings[key]
-  if (!tabId) return `include '${ref.path}'（未リンク）`
-  const tabName = tabNames[tabId] ?? tabId
-  return `include '${ref.path}' → ${tabName}`
+  const tabName = tabId ? (tabNames[tabId] ?? tabId) : null
+
+  if (ref.path) {
+    if (!tabId) return `include '${ref.path}'（未リンク）`
+    return `include '${ref.path}' → ${tabName}`
+  }
+
+  const argLabel = ref.raw || '（変数）'
+  if (!tabId) return `include ${argLabel}（未リンク・変数指定）`
+  return `include ${argLabel} → ${tabName}（手動リンク）`
 }

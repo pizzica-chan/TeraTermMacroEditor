@@ -1,6 +1,6 @@
 import { getSystemVariableType, getSystemVariableMeta, isSystemVariable } from './commands'
 import type { IncludeResolver } from './analyzer'
-import { normalizeIncludePath } from './includeRefs'
+import { includeDynamicBindingKey, normalizeIncludePath } from './includeRefs'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
 
 export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
@@ -563,19 +563,34 @@ function processStatement(
 
   if (cmd === 'include') {
     const arg = tokens[offset + 1]
-    if (arg?.kind === 'string' && opts.includeResolver) {
-      const path = unquoteString(arg.text)
-      const key = normalizeIncludePath(path)
-      if (!opts.includeStack.includes(key)) {
-        const content = opts.includeResolver.resolve(path)
-        if (content) {
-          const child = processIncludedContent(env, content, {
-            ...opts,
-            includeStack: [...opts.includeStack, key],
-            locationPrefix: path,
-          })
-          if (child.stopAll) return { nextIdx: lineIdx, stopAll: true }
-        }
+    if (arg && opts.includeResolver) {
+      let bindingKey: string
+      let content: string | null
+      let locationPrefix: string
+
+      if (arg.kind === 'string') {
+        const path = unquoteString(arg.text)
+        bindingKey = normalizeIncludePath(path)
+        content = opts.includeResolver.resolve(path)
+        locationPrefix = path
+      } else {
+        bindingKey = includeDynamicBindingKey(arg.text)
+        content = opts.includeResolver.resolveDynamic(arg.text)
+        locationPrefix = `${arg.text}`
+      }
+
+      if (content && !opts.includeStack.includes(bindingKey)) {
+        const linkedTabId = opts.includeResolver.getLinkedTabId(bindingKey)
+        const childResolver = linkedTabId
+          ? opts.includeResolver.resolverForLinkedTab(linkedTabId) ?? opts.includeResolver
+          : opts.includeResolver
+        const child = processIncludedContent(env, content, {
+          ...opts,
+          includeResolver: childResolver,
+          includeStack: [...opts.includeStack, bindingKey],
+          locationPrefix,
+        })
+        if (child.stopAll) return { nextIdx: lineIdx, stopAll: true }
       }
     }
     return { nextIdx: lineIdx }

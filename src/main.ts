@@ -10,7 +10,7 @@ import {
 } from './ui/toolbar'
 import { TabManager, MAX_TABS, type EditorTab } from './ui/tabManager'
 import { analyzeTTL, type IncludeResolver } from './ttl/analyzer'
-import { findIncludeRefs, normalizeIncludePath } from './ttl/includeRefs'
+import { findIncludeRefs, includeDynamicBindingKey, migrateIncludeBindings, normalizeIncludePath } from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
 import { setIncludeResolver, setExternallyUsedNames } from './ttl/analysisContext'
 import { evaluateTTL } from './ttl/evaluator'
@@ -86,16 +86,39 @@ function updateStatusBar(tab: EditorTab): void {
   setStatusMessage(`${ENCODING_LABELS[tab.docSettings.encoding]} / ${NEWLINE_LABELS[tab.docSettings.newline]}`)
 }
 
+function resolveLinkedTabContent(linkedTabId: string | undefined): string | null {
+  if (!linkedTabId) return null
+  const linkedTab = tabManager.allTabs.find((t) => t.id === linkedTabId)
+  if (!linkedTab) return null
+  return tabManager.getTabContent(linkedTab)
+}
+
 function createIncludeResolver(tab: EditorTab): IncludeResolver {
+  const resolveByKey = (key: string) => resolveLinkedTabContent(tab.includeBindings[key])
+
   return {
     resolve(path: string) {
-      const key = normalizeIncludePath(path)
-      const linkedTabId = tab.includeBindings[key]
-      if (!linkedTabId) return null
-      const linkedTab = tabManager.allTabs.find((t) => t.id === linkedTabId)
-      if (!linkedTab) return null
-      return tabManager.getTabContent(linkedTab)
+      return resolveByKey(normalizeIncludePath(path))
     },
+    resolveDynamic(rawArg: string) {
+      return resolveByKey(includeDynamicBindingKey(rawArg))
+    },
+    getLinkedTabId(bindingKey: string) {
+      return tab.includeBindings[bindingKey] ?? null
+    },
+    resolverForLinkedTab(tabId: string) {
+      if (tabId === tab.id) return null
+      const linkedTab = tabManager.allTabs.find((t) => t.id === tabId)
+      return linkedTab ? createIncludeResolver(linkedTab) : null
+    },
+  }
+}
+
+function syncTabIncludeBindings(tab: EditorTab, source: string): void {
+  const migrated = migrateIncludeBindings(source, tab.includeBindings)
+  if (migrated !== tab.includeBindings) {
+    tab.includeBindings = migrated
+    schedulePersistWorkspaceSession()
   }
 }
 
@@ -129,6 +152,7 @@ function updateAnalysisContext(tab: EditorTab | null): void {
 
 function runAnalysis(text: string) {
   const tab = tabManager.activeTab
+  if (tab) syncTabIncludeBindings(tab, text)
   updateAnalysisContext(tab)
   editor.notifyIncludeGraphChanged()
 

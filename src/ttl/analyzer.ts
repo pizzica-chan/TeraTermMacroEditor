@@ -5,7 +5,7 @@ import {
   isSystemVariable,
 } from './commands'
 import { checkCommandArgs } from './argChecker'
-import { normalizeIncludePath } from './includeRefs'
+import { includeDynamicBindingKey, normalizeIncludePath } from './includeRefs'
 import { RESERVED, tokenizeLine, stripComments, getStringLiteralError, unquoteString, type Token } from './tokenize'
 
 export type VarType = 'integer' | 'string' | 'array' | 'unknown'
@@ -44,6 +44,11 @@ export interface AnalysisResult {
 
 export interface IncludeResolver {
   resolve(path: string): string | null
+  /** 変数指定 include（引数テキストでリンク先タブを解決） */
+  resolveDynamic(rawArg: string): string | null
+  getLinkedTabId(bindingKey: string): string | null
+  /** インクルード先タブ用の resolver（ネストした include 用） */
+  resolverForLinkedTab(tabId: string): IncludeResolver | null
 }
 
 export interface AnalyzeOptions {
@@ -259,31 +264,47 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: { stopOnE
 
     if (cmd === 'include') {
       const arg = tokens[1]
-      if (arg?.kind === 'string') {
-        const path = unquoteString(arg.text)
-        const key = normalizeIncludePath(path)
-        if (ctx.includeStack.includes(key)) {
+      if (ctx.includeResolver && arg) {
+        let bindingKey: string
+        let content: string | null
+        let notLinkedMessage: string
+
+        if (arg.kind === 'string') {
+          const path = unquoteString(arg.text)
+          bindingKey = normalizeIncludePath(path)
+          content = ctx.includeResolver.resolve(path)
+          notLinkedMessage = `include '${path}' がタブにリンクされていないため、内容は解析に含まれません`
+        } else {
+          bindingKey = includeDynamicBindingKey(arg.text)
+          content = ctx.includeResolver.resolveDynamic(arg.text)
+          const argLabel = arg.text || '（引数）'
+          notLinkedMessage = `include ${argLabel}（変数指定）がタブにリンクされていないため、内容は解析に含まれません`
+        }
+
+        if (ctx.includeStack.includes(bindingKey)) {
           pushDiagnostic(ctx, {
             line: lineNum,
             column: first.column,
-            message: `循環 include が検出されました: '${path}'`,
+            message: `循環 include が検出されました: L${lineNum}`,
             severity: 'error',
           })
-        } else if (ctx.includeResolver) {
-          const content = ctx.includeResolver.resolve(path)
-          if (content) {
-            ctx.includeStack.push(key)
-            const childResult = analyzeLines(stripComments(content), ctx, { stopOnExit: true })
-            ctx.includeStack.pop()
-            if (childResult.end) return { exit: false, end: true }
-          } else if (!ctx.suppressDiagnostics) {
-            pushDiagnostic(ctx, {
-              line: lineNum,
-              column: first.column,
-              message: `include '${path}' がタブにリンクされていないため、内容は解析に含まれません`,
-              severity: 'info',
-            })
-          }
+        } else if (content) {
+          ctx.includeStack.push(bindingKey)
+          const linkedTabId = ctx.includeResolver.getLinkedTabId(bindingKey)
+          const childResolver = linkedTabId
+            ? ctx.includeResolver.resolverForLinkedTab(linkedTabId) ?? ctx.includeResolver
+            : ctx.includeResolver
+          const childCtx: AnalysisContext = { ...ctx, includeResolver: childResolver }
+          const childResult = analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
+          ctx.includeStack.pop()
+          if (childResult.end) return { exit: false, end: true }
+        } else if (!ctx.suppressDiagnostics) {
+          pushDiagnostic(ctx, {
+            line: lineNum,
+            column: first.column,
+            message: notLinkedMessage,
+            severity: 'info',
+          })
         }
       }
       continue

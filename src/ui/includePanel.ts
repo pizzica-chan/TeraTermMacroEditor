@@ -1,6 +1,5 @@
 import type { EditorTab } from './tabManager'
-import type { IncludeRef } from '../ttl/includeRefs'
-import { normalizeIncludePath } from '../ttl/includeRefs'
+import { getIncludeBindingKey, type IncludeRef } from '../ttl/includeRefs'
 
 export interface IncludePanelActions {
   onBindingChange: (path: string, tabId: string | null) => void
@@ -60,22 +59,23 @@ function renderIncludeItem(
   otherTabs: EditorTab[],
   _actions: IncludePanelActions,
 ): string {
+  const bindingKey = getIncludeBindingKey(ref)
   const pathLabel = ref.path ? escapeHtml(ref.path) : escapeHtml(ref.raw || '（引数なし）')
 
-  if (ref.isDynamic || !ref.path) {
+  if (!bindingKey) {
     return `
       <div class="include-item include-item-dynamic">
         <div class="include-item-header">
           <span class="include-line">L${ref.line}</span>
           <span class="include-path">${pathLabel}</span>
+          <button type="button" class="include-goto-line" data-line="${ref.line}" title="行へ移動">⌖</button>
         </div>
-        <div class="include-item-note">変数指定のためタブ紐づけ不可</div>
+        <div class="include-item-note">引数がないためタブ紐づけできません</div>
       </div>
     `
   }
 
-  const key = normalizeIncludePath(ref.path)
-  const linkedTabId = tab.includeBindings[key] ?? ''
+  const linkedTabId = tab.includeBindings[bindingKey] ?? ''
   const options = [
     `<option value="">（未リンク）</option>`,
     ...otherTabs.map(
@@ -88,17 +88,26 @@ function renderIncludeItem(
     ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(linkedTabId)}" title="リンク先タブを開く">→</button>`
     : ''
 
+  const dynamicNote = ref.isDynamic
+    ? '<div class="include-item-note">変数指定（引数名で紐づけ・行の増減に追従）</div>'
+    : ''
+
+  const itemClass = ref.isDynamic
+    ? `include-item include-item-dynamic${linkedTabId ? ' linked' : ''}`
+    : `include-item${linkedTabId ? ' linked' : ''}`
+
   return `
-    <div class="include-item${linkedTabId ? ' linked' : ''}">
+    <div class="${itemClass}">
       <div class="include-item-header">
         <span class="include-line">L${ref.line}</span>
-        <span class="include-path" title="${escapeAttr(ref.path)}">${pathLabel}</span>
+        <span class="include-path" title="${escapeAttr(ref.path ?? ref.raw)}">${pathLabel}</span>
         <button type="button" class="include-goto-line" data-line="${ref.line}" title="行へ移動">⌖</button>
       </div>
+      ${dynamicNote}
       <div class="include-item-link">
         <label class="include-link-label">
           <span>タブ</span>
-          <select class="include-link-select" data-path="${escapeAttr(key)}">${options}</select>
+          <select class="include-link-select" data-path="${escapeAttr(bindingKey)}">${options}</select>
         </label>
         ${openBtn}
       </div>

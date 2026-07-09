@@ -2,6 +2,7 @@ import type { EditorState } from '@codemirror/state'
 import type { EditorInstance } from '../editor/createEditor'
 import { DocumentSettings } from '../text/documentSettings'
 import type { WorkspaceSession } from '../storage/sessionState'
+import { migrateIncludeBindings } from '../ttl/includeRefs'
 
 export const MAX_TABS = 10
 
@@ -313,7 +314,7 @@ export class TabManager {
         fileHandle: null,
         editorState,
         savedContent: saved.savedContent,
-        includeBindings: { ...saved.includeBindings },
+        includeBindings: migrateIncludeBindings(saved.content, { ...saved.includeBindings }),
       })
     }
 
