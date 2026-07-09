@@ -2,7 +2,7 @@ import type { EditorTab } from './tabManager'
 import {
   getIncludeBindingKey,
   getLoopIncludeCommonTabId,
-  includeLoopIterationBindingKey,
+  getLoopIncludeIterationBindingKey,
   includeLoopLineBindingKey,
   isIncludeRefLinked,
   resolveIncludeBindingTabId,
@@ -94,32 +94,38 @@ function renderIncludeItem(
   }
 
   if (ref.loopContext) {
-    const { variable, values } = ref.loopContext
+    const { variable, values, effectiveRawsByValue } = ref.loopContext
     const commonKey = includeLoopLineBindingKey(ref.line)
     const commonTabId = getLoopIncludeCommonTabId(ref, tab.includeBindings)
-    const perIterationOverrides = values.filter((v) =>
-      !!tab.includeBindings[includeLoopIterationBindingKey(ref.line, v)],
-    ).length
-    const linkedCount = values.filter((v) =>
-      !!resolveIncludeBindingTabId(
-        tab.includeBindings,
-        includeLoopIterationBindingKey(ref.line, v),
-        ref.raw,
-      ),
-    ).length
+    const uniqueEffective = new Set(
+      effectiveRawsByValue ? Object.values(effectiveRawsByValue) : [],
+    )
+    const hasDistinctPaths = uniqueEffective.size > 1
+    const perIterationOverrides = values.filter((v) => {
+      const iterKey = getLoopIncludeIterationBindingKey(ref, v)
+      return !!tab.includeBindings[iterKey]
+    }).length
+    const linkedCount = values.filter((v) => {
+      const effectiveRaw = effectiveRawsByValue?.[v]
+      const iterKey = getLoopIncludeIterationBindingKey(ref, v)
+      return !!resolveIncludeBindingTabId(tab.includeBindings, iterKey, ref.raw, effectiveRaw)
+    }).length
     const openBtn = commonTabId
       ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(commonTabId)}" title="リンク先タブを開く">→</button>`
       : ''
     const iterationRows = values
       .map((v) => {
-        const bindingKey = includeLoopIterationBindingKey(ref.line, v)
-        const linkedTabId = tab.includeBindings[bindingKey] ?? ''
+        const effectiveRaw = effectiveRawsByValue?.[v]
+        const bindingKey = getLoopIncludeIterationBindingKey(ref, v)
+        const linkedTabId =
+          resolveIncludeBindingTabId(tab.includeBindings, bindingKey, ref.raw, effectiveRaw) ?? ''
         const iterOpenBtn = linkedTabId
           ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(linkedTabId)}" title="リンク先タブを開く">→</button>`
           : ''
+        const pathHint = effectiveRaw ? ` → ${effectiveRaw}` : ''
         return `
           <div class="include-loop-row">
-            <span class="include-loop-label">${escapeHtml(variable)}=${v}</span>
+            <span class="include-loop-label" title="${escapeAttr(effectiveRaw ?? ref.raw)}">${escapeHtml(variable)}=${v}${escapeHtml(pathHint)}</span>
             <label class="include-link-label">
               <select class="include-link-select" data-path="${escapeAttr(bindingKey)}">${renderTabOptions(otherTabs, linkedTabId)}</select>
             </label>
@@ -129,7 +135,21 @@ function renderIncludeItem(
       })
       .join('')
 
-    const detailsOpen = perIterationOverrides > 0 ? ' open' : ''
+    const detailsOpen = hasDistinctPaths || perIterationOverrides > 0 ? ' open' : ''
+    const aliasNote = effectiveRawsByValue
+      ? `<div class="include-item-note">ループ直前の代入から実効パスを検出（${Object.keys(effectiveRawsByValue).length}/${values.length} 件）</div>`
+      : `<div class="include-item-note">for ループ内（${linkedCount}/${values.length} 件リンク済）</div>`
+    const commonLinkRow = hasDistinctPaths
+      ? ''
+      : `
+        <div class="include-item-link include-loop-common">
+          <label class="include-link-label">
+            <span>全反復</span>
+            <select class="include-link-select" data-path="${escapeAttr(commonKey)}">${renderTabOptions(otherTabs, commonTabId)}</select>
+          </label>
+          ${openBtn}
+        </div>
+      `
 
     return `
       <div class="include-item include-item-loop${linked ? ' linked' : ''}">
@@ -138,16 +158,10 @@ function renderIncludeItem(
           <span class="include-path" title="${escapeAttr(ref.raw)}">${pathLabel}</span>
           <button type="button" class="include-goto-line" data-line="${ref.line}" title="行へ移動">⌖</button>
         </div>
-        <div class="include-item-note">for ループ内（${linkedCount}/${values.length} 件リンク済）</div>
-        <div class="include-item-link include-loop-common">
-          <label class="include-link-label">
-            <span>全反復</span>
-            <select class="include-link-select" data-path="${escapeAttr(commonKey)}">${renderTabOptions(otherTabs, commonTabId)}</select>
-          </label>
-          ${openBtn}
-        </div>
+        ${aliasNote}
+        ${commonLinkRow}
         <details class="include-loop-details"${detailsOpen}>
-          <summary>反復ごとに個別指定（${perIterationOverrides} 件）</summary>
+          <summary>${hasDistinctPaths ? '反復ごとにリンク（ファイル別）' : `反復ごとに個別指定（${perIterationOverrides} 件）`}</summary>
           <div class="include-loop-bindings">${iterationRows}</div>
         </details>
       </div>

@@ -7,6 +7,8 @@ export interface IncludeLoopContext {
   start: number
   end: number
   values: number[]
+  /** 反復ごとの実効 include 引数（hoge=koge[i] などから静的に解決） */
+  effectiveRawsByValue?: Record<number, string>
 }
 
 export interface IncludeRef {
@@ -21,8 +23,12 @@ export interface IncludeRef {
 }
 
 export interface IncludeResolveContext {
-  line: number
+  line?: number
   loopValue?: number
+  /** include 文の元引数テキスト（hoge など） */
+  rawArg?: string
+  /** 実行時/静的解析で解決した実効引数（ファイル名など） */
+  effectiveRaw?: string
 }
 
 interface ForLoopBlock {
@@ -93,6 +99,7 @@ export function resolveIncludeBindingTabId(
   bindings: Record<string, string>,
   bindingKey: string,
   rawArg?: string,
+  effectiveRaw?: string,
 ): string | null {
   const direct = bindings[bindingKey]
   if (direct) return direct
@@ -104,6 +111,13 @@ export function resolveIncludeBindingTabId(
     if (bindings[lineKey]) return bindings[lineKey]
   }
 
+  if (effectiveRaw) {
+    const pathKey = resolveIncludePathBindingKey(effectiveRaw)
+    if (pathKey && bindings[pathKey]) return bindings[pathKey]
+    const effDynamic = includeDynamicBindingKey(effectiveRaw)
+    if (bindings[effDynamic]) return bindings[effDynamic]
+  }
+
   if (rawArg) {
     const dynamicKey = includeDynamicBindingKey(rawArg)
     if (bindings[dynamicKey]) return bindings[dynamicKey]
@@ -112,13 +126,49 @@ export function resolveIncludeBindingTabId(
   return null
 }
 
+/** 実効 include 引数からタブ紐づけキーを得る（文字列リテラル・ファイル名） */
+export function resolveIncludePathBindingKey(effectiveRaw: string): string | null {
+  const trimmed = effectiveRaw.trim()
+  if (!trimmed) return null
+  if (
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+  ) {
+    return normalizeIncludePath(unquoteString(trimmed))
+  }
+  if (/^[\w./\\-]+$/i.test(trimmed)) {
+    return normalizeIncludePath(trimmed)
+  }
+  return null
+}
+
+export function getLoopIncludeIterationBindingKey(
+  ref: IncludeRef,
+  loopValue: number,
+): string {
+  const effectiveRaw = ref.loopContext?.effectiveRawsByValue?.[loopValue]
+  const pathKey = effectiveRaw ? resolveIncludePathBindingKey(effectiveRaw) : null
+  return pathKey ?? includeLoopIterationBindingKey(ref.line, loopValue)
+}
+
+export function resolveLoopIncludeBindingKey(
+  line: number,
+  loopValue: number,
+  effectiveRaw?: string,
+): string {
+  const pathKey = effectiveRaw ? resolveIncludePathBindingKey(effectiveRaw) : null
+  return pathKey ?? includeLoopIterationBindingKey(line, loopValue)
+}
+
 export function isIncludeRefLinked(ref: IncludeRef, bindings: Record<string, string>): boolean {
   if (ref.loopContext) {
     if (bindings[includeLoopLineBindingKey(ref.line)]) return true
     if (bindings[includeDynamicBindingKey(ref.raw)]) return true
-    return ref.loopContext.values.every(
-      (v) => !!bindings[includeLoopIterationBindingKey(ref.line, v)],
-    )
+    return ref.loopContext.values.every((v) => {
+      const iterKey = getLoopIncludeIterationBindingKey(ref, v)
+      const effectiveRaw = ref.loopContext!.effectiveRawsByValue?.[v]
+      return !!resolveIncludeBindingTabId(bindings, iterKey, ref.raw, effectiveRaw)
+    })
   }
   const key = getIncludeBindingKey(ref)
   return key ? !!bindings[key] : false
@@ -145,20 +195,168 @@ export function computeLoopValues(start: number, end: number): number[] {
 
 function collectStaticIntConstants(lines: string[]): Map<string, number> {
   const constants = new Map<string, number>()
+  let changed = true
+
+  while (changed) {
+    changed = false
+    for (let i = 0; i < lines.length; i++) {
+      const tokens = tokenizeLine(lines[i]!, i + 1)
+      let offset = 0
+      if (tokens[0]?.kind === 'label') offset = 1
+      const assignIdx = tokens.findIndex(
+        (t, j) => j > offset && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
+      )
+      if (assignIdx <= offset) continue
+      const lhs = tokens[assignIdx - 1]
+      const rhs = tokens[assignIdx + 1]
+      if (lhs?.kind !== 'identifier') continue
+
+      let value: number | undefined
+      if (rhs?.kind === 'number') {
+        value = Number(rhs.text)
+      } else if (rhs?.kind === 'identifier') {
+        value = constants.get(rhs.text.toLowerCase())
+      }
+      if (value === undefined || !Number.isFinite(value)) continue
+
+      const key = lhs.text.toLowerCase()
+      if (constants.get(key) !== value) {
+        constants.set(key, value)
+        changed = true
+      }
+    }
+  }
+
+  return constants
+}
+
+function collectStaticStringArrayValues(lines: string[]): Map<string, Map<number, string>> {
+  const arrays = new Map<string, Map<number, string>>()
+
   for (let i = 0; i < lines.length; i++) {
     const tokens = tokenizeLine(lines[i]!, i + 1)
+    const assignIdx = tokens.findIndex(
+      (t, j) => j > 0 && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
+    )
+    if (assignIdx < 4) continue
+
+    const close = tokens[assignIdx - 1]
+    const indexTok = tokens[assignIdx - 2]
+    const open = tokens[assignIdx - 3]
+    const name = tokens[assignIdx - 4]
+    const valueTok = tokens[assignIdx + 1]
+    if (
+      name?.kind !== 'identifier' ||
+      open?.text !== '[' ||
+      close?.text !== ']' ||
+      indexTok?.kind !== 'number' ||
+      valueTok?.kind !== 'string'
+    ) {
+      continue
+    }
+
+    const arrayKey = name.text.toLowerCase()
+    const index = Number(indexTok.text)
+    if (!Number.isFinite(index)) continue
+
+    let bucket = arrays.get(arrayKey)
+    if (!bucket) {
+      bucket = new Map()
+      arrays.set(arrayKey, bucket)
+    }
+    bucket.set(index, unquoteString(valueTok.text))
+  }
+
+  return arrays
+}
+
+function parseLoopArrayAliasAssign(
+  tokens: Token[],
+  assignIdx: number,
+  includeArgLower: string,
+  loopVarLower: string,
+): string | null {
+  const lhs = tokens[assignIdx - 1]
+  if (lhs?.kind !== 'identifier' || lhs.text.toLowerCase() !== includeArgLower) return null
+
+  const rhsStart = assignIdx + 1
+  const arrayName = tokens[rhsStart]
+  const open = tokens[rhsStart + 1]
+  const indexTok = tokens[rhsStart + 2]
+  const close = tokens[rhsStart + 3]
+  if (
+    arrayName?.kind !== 'identifier' ||
+    open?.text !== '[' ||
+    indexTok?.kind !== 'identifier' ||
+    close?.text !== ']'
+  ) {
+    return null
+  }
+  if (indexTok.text.toLowerCase() !== loopVarLower) return null
+  return arrayName.text.toLowerCase()
+}
+
+function findLoopIncludeAliasArray(
+  lines: string[],
+  includeLine: number,
+  loopBlock: ForLoopBlock,
+  includeArg: string,
+): string | null {
+  const includeArgLower = includeArg.toLowerCase()
+  const loopVarLower = loopBlock.variable.toLowerCase()
+
+  for (let lineNum = loopBlock.bodyStartLine; lineNum < includeLine; lineNum++) {
+    const tokens = tokenizeLine(lines[lineNum - 1]!, lineNum)
     let offset = 0
     if (tokens[0]?.kind === 'label') offset = 1
     const assignIdx = tokens.findIndex(
       (t, j) => j > offset && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
     )
     if (assignIdx <= offset) continue
-    const lhs = tokens[assignIdx - 1]
-    const rhs = tokens[assignIdx + 1]
-    if (lhs?.kind !== 'identifier' || rhs?.kind !== 'number') continue
-    constants.set(lhs.text.toLowerCase(), Number(rhs.text))
+
+    const arrayName = parseLoopArrayAliasAssign(tokens, assignIdx, includeArgLower, loopVarLower)
+    if (arrayName) return arrayName
   }
-  return constants
+
+  return null
+}
+
+/** ループ内 include の反復ごと実効引数（hoge=koge[i] から koge[v] を解決） */
+export function computeLoopIncludeEffectiveRaw(
+  lines: string[],
+  includeLine: number,
+  loopBlock: ForLoopBlock,
+  includeArg: string,
+  loopValue: number,
+  arrayConstants?: Map<string, Map<number, string>>,
+): string | undefined {
+  const arrayName = findLoopIncludeAliasArray(lines, includeLine, loopBlock, includeArg)
+  if (!arrayName) return undefined
+  const constants = arrayConstants ?? collectStaticStringArrayValues(lines)
+  return constants.get(arrayName)?.get(loopValue)
+}
+
+function buildLoopEffectiveRaws(
+  lines: string[],
+  includeLine: number,
+  loopBlock: ForLoopBlock,
+  includeArg: string,
+  values: number[],
+): Record<number, string> | undefined {
+  const arrayConstants = collectStaticStringArrayValues(lines)
+  const effectiveRawsByValue: Record<number, string> = {}
+  for (const v of values) {
+    const effectiveRaw = computeLoopIncludeEffectiveRaw(
+      lines,
+      includeLine,
+      loopBlock,
+      includeArg,
+      v,
+      arrayConstants,
+    )
+    if (effectiveRaw !== undefined) effectiveRawsByValue[v] = effectiveRaw
+  }
+  return Object.keys(effectiveRawsByValue).length > 0 ? effectiveRawsByValue : undefined
 }
 
 function resolveStaticIntToken(token: Token | undefined, constants: Map<string, number>): number | undefined {
@@ -208,6 +406,7 @@ function findForLoopBlocks(lines: string[]): ForLoopBlock[] {
       start: loopStart,
       end: loopEnd,
       bodyStartLine: lineIdx + 2,
+      /** 1-indexed: ループ本体の最終行（next の直前行） */
       bodyEndLine: nextIdx,
     })
   }
@@ -313,6 +512,7 @@ export function findIncludeRefs(source: string): IncludeRef[] {
             start: loopBlock.start,
             end: loopBlock.end,
             values,
+            effectiveRawsByValue: buildLoopEffectiveRaws(lines, lineNum, loopBlock, raw, values),
           }
         }
       }
@@ -326,6 +526,11 @@ export function findIncludeRefs(source: string): IncludeRef[] {
 /** for ループブロック一覧（解析用） */
 export function createForLoopBlockList(source: string): ForLoopBlock[] {
   return findForLoopBlocks(stripComments(source))
+}
+
+/** 指定行が属する最も内側の for ループブロック */
+export function getForLoopBlockForLine(blocks: ForLoopBlock[], line: number): ForLoopBlock | undefined {
+  return getInnermostForLoopForLine(blocks, line) ?? undefined
 }
 
 /** 指定行が静的 for ループ内なら反復コンテキストを返す */

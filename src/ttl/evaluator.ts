@@ -3,8 +3,8 @@ import type { IncludeResolver } from './analyzer'
 import {
   extractIncludeArgText,
   includeDynamicBindingKey,
-  includeLoopIterationBindingKey,
   normalizeIncludePath,
+  resolveLoopIncludeBindingKey,
 } from './includeRefs'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
 
@@ -308,6 +308,29 @@ function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefin
   return value
 }
 
+/** include 引数の実行時実効値（hoge や host[i] を env から解決） */
+function resolveIncludeEffectiveRaw(tokens: Token[], offset: number, env: Env): string | undefined {
+  const argStart = offset + 1
+  if (argStart >= tokens.length) return undefined
+
+  const name = tokens[argStart]
+  if (name?.kind === 'string') return unquoteString(name.text)
+  if (name?.kind !== 'identifier') return undefined
+
+  const open = tokens[argStart + 1]
+  const indexTok = tokens[argStart + 2]
+  const close = tokens[argStart + 3]
+  if (open?.text === '[' && close?.text === ']' && indexTok) {
+    const el = evalArrayElement(name.text, indexTok, env)
+    if (el?.kind === 'str') return el.value
+    return undefined
+  }
+
+  const v = env.get(name.text.toLowerCase())
+  if (v?.kind === 'str') return v.value
+  return undefined
+}
+
 function setScalar(env: Env, name: string, value: RuntimeScalar) {
   env.set(name.toLowerCase(), value)
 }
@@ -575,6 +598,7 @@ function processStatement(
       let content: string | null
       let locationPrefix: string
       let includeRawArg: string | undefined
+      let effectiveRaw: string | undefined
 
       if (arg.kind === 'string') {
         const path = unquoteString(arg.text)
@@ -583,20 +607,31 @@ function processStatement(
         locationPrefix = path
       } else {
         includeRawArg = extractIncludeArgText(tokens, offset)
+        effectiveRaw = resolveIncludeEffectiveRaw(tokens, offset, env)
         const loopValue = opts.loopFrame?.value
         if (loopValue !== undefined) {
-          bindingKey = includeLoopIterationBindingKey(lineNum, loopValue)
-          content = opts.includeResolver.resolveDynamic(includeRawArg, { line: lineNum, loopValue })
-          locationPrefix = `${includeRawArg}@${opts.loopFrame!.variable}=${loopValue}`
+          bindingKey = resolveLoopIncludeBindingKey(lineNum, loopValue, effectiveRaw)
+          content = opts.includeResolver.resolveDynamic(includeRawArg, {
+            line: lineNum,
+            loopValue,
+            rawArg: includeRawArg,
+            effectiveRaw,
+          })
+          locationPrefix = effectiveRaw
+            ? `${effectiveRaw}@${opts.loopFrame!.variable}=${loopValue}`
+            : `${includeRawArg}@${opts.loopFrame!.variable}=${loopValue}`
         } else {
           bindingKey = includeDynamicBindingKey(includeRawArg)
-          content = opts.includeResolver.resolveDynamic(includeRawArg)
-          locationPrefix = includeRawArg
+          content = opts.includeResolver.resolveDynamic(includeRawArg, {
+            rawArg: includeRawArg,
+            effectiveRaw,
+          })
+          locationPrefix = effectiveRaw ?? includeRawArg
         }
       }
 
       if (content && !opts.includeStack.includes(bindingKey)) {
-        const linkedTabId = opts.includeResolver.getLinkedTabId(bindingKey, includeRawArg)
+        const linkedTabId = opts.includeResolver.getLinkedTabId(bindingKey, includeRawArg, effectiveRaw)
         if (linkedTabId && opts.includeTabStack.includes(linkedTabId)) {
           return { nextIdx: lineIdx }
         }

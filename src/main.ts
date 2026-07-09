@@ -13,10 +13,10 @@ import { analyzeTTL, type IncludeResolver } from './ttl/analyzer'
 import {
   findIncludeRefs,
   includeDynamicBindingKey,
-  includeLoopIterationBindingKey,
   migrateIncludeBindings,
   normalizeIncludePath,
   resolveIncludeBindingTabId,
+  resolveLoopIncludeBindingKey,
   type IncludeResolveContext,
 } from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
@@ -102,11 +102,11 @@ function resolveLinkedTabContent(linkedTabId: string | undefined): string | null
 }
 
 function createIncludeResolver(tab: EditorTab): IncludeResolver {
-  const resolveTabId = (bindingKey: string, rawArg?: string) =>
-    resolveIncludeBindingTabId(tab.includeBindings, bindingKey, rawArg)
+  const resolveTabId = (bindingKey: string, rawArg?: string, effectiveRaw?: string) =>
+    resolveIncludeBindingTabId(tab.includeBindings, bindingKey, rawArg, effectiveRaw)
 
-  const resolveByKey = (bindingKey: string, rawArg?: string) => {
-    const tabId = resolveTabId(bindingKey, rawArg)
+  const resolveByKey = (bindingKey: string, rawArg?: string, effectiveRaw?: string) => {
+    const tabId = resolveTabId(bindingKey, rawArg, effectiveRaw)
     return tabId ? resolveLinkedTabContent(tabId) : null
   }
 
@@ -117,12 +117,12 @@ function createIncludeResolver(tab: EditorTab): IncludeResolver {
     resolveDynamic(rawArg: string, context?: IncludeResolveContext) {
       const bindingKey =
         context?.loopValue !== undefined && context.line !== undefined
-          ? includeLoopIterationBindingKey(context.line, context.loopValue)
+          ? resolveLoopIncludeBindingKey(context.line, context.loopValue, context.effectiveRaw)
           : includeDynamicBindingKey(rawArg)
-      return resolveByKey(bindingKey, rawArg)
+      return resolveByKey(bindingKey, rawArg, context?.effectiveRaw)
     },
-    getLinkedTabId(bindingKey: string, rawArg?: string) {
-      return resolveTabId(bindingKey, rawArg)
+    getLinkedTabId(bindingKey: string, rawArg?: string, effectiveRaw?: string) {
+      return resolveTabId(bindingKey, rawArg, effectiveRaw)
     },
     resolverForLinkedTab(tabId: string) {
       if (tabId === tab.id) return null

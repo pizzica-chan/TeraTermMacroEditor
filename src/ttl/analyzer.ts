@@ -6,8 +6,10 @@ import {
 } from './commands'
 import { checkCommandArgs } from './argChecker'
 import {
+  computeLoopIncludeEffectiveRaw,
   createForLoopBlockList,
   extractIncludeArgText,
+  getForLoopBlockForLine,
   getLoopContextForLine,
   includeDynamicBindingKey,
   includeLoopIterationBindingKey,
@@ -55,7 +57,7 @@ export interface IncludeResolver {
   resolve(path: string): string | null
   /** 変数指定 include（引数テキストでリンク先タブを解決） */
   resolveDynamic(rawArg: string, context?: IncludeResolveContext): string | null
-  getLinkedTabId(bindingKey: string, rawArg?: string): string | null
+  getLinkedTabId(bindingKey: string, rawArg?: string, effectiveRaw?: string): string | null
   /** インクルード先タブ用の resolver（ネストした include 用） */
   resolverForLinkedTab(tabId: string): IncludeResolver | null
 }
@@ -268,6 +270,7 @@ function analyzeResolvedInclude(
   content: string | null,
   notLinkedMessage: string,
   rawArg?: string,
+  effectiveRaw?: string,
 ): void {
   if (ctx.includeStack.includes(bindingKey)) {
     pushDiagnostic(ctx, {
@@ -278,7 +281,7 @@ function analyzeResolvedInclude(
     })
     return
   }
-  const linkedTabId = content ? ctx.includeResolver!.getLinkedTabId(bindingKey, rawArg) : null
+  const linkedTabId = content ? ctx.includeResolver!.getLinkedTabId(bindingKey, rawArg, effectiveRaw) : null
   if (linkedTabId && ctx.includeTabStack.includes(linkedTabId)) {
     pushDiagnostic(ctx, {
       line: lineNum,
@@ -378,10 +381,29 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
           const notLinkedMessage = `include ${argLabel}（変数指定）がタブにリンクされていないため、内容は解析に含まれません`
           const loopCtx = getLoopContextForLine(ctx.forLoopBlocks, lineNum)
           if (loopCtx) {
+            const loopBlock = getForLoopBlockForLine(ctx.forLoopBlocks, lineNum)
             for (const v of loopCtx.values) {
+              const effectiveRaw = loopBlock
+                ? computeLoopIncludeEffectiveRaw(lines, lineNum, loopBlock, rawArg, v)
+                : undefined
               const bindingKey = includeLoopIterationBindingKey(lineNum, v)
-              const content = ctx.includeResolver.resolveDynamic(rawArg, { line: lineNum, loopValue: v })
-              analyzeResolvedInclude(ctx, lineNum, first, bindingKey, content, notLinkedMessage, rawArg)
+              const resolveCtx: IncludeResolveContext = {
+                line: lineNum,
+                loopValue: v,
+                rawArg,
+                effectiveRaw,
+              }
+              const content = ctx.includeResolver.resolveDynamic(rawArg, resolveCtx)
+              analyzeResolvedInclude(
+                ctx,
+                lineNum,
+                first,
+                bindingKey,
+                content,
+                notLinkedMessage,
+                rawArg,
+                effectiveRaw,
+              )
             }
           } else {
             const bindingKey = includeDynamicBindingKey(rawArg)

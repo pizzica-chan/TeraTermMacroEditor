@@ -3,7 +3,7 @@ import { EditorView, Decoration, type DecorationSet } from '@codemirror/view'
 import {
   getIncludeBindingKey,
   getLoopIncludeCommonTabId,
-  includeLoopIterationBindingKey,
+  getLoopIncludeIterationBindingKey,
   isIncludeRefLinked,
   resolveIncludeBindingTabId,
   type IncludeRef,
@@ -64,16 +64,18 @@ export function getIncludeLineTitle(ref: IncludeRef, bindings: Record<string, st
 
   if (ref.loopContext) {
     const commonTabId = getLoopIncludeCommonTabId(ref, bindings)
-    if (commonTabId) {
+    if (commonTabId && !ref.loopContext.effectiveRawsByValue) {
       const tabName = tabNames[commonTabId] ?? commonTabId
       return `include ${ref.raw} → ${tabName}（全反復共通）`
     }
     const linked = ref.loopContext.values
       .map((v) => {
-        const key = includeLoopIterationBindingKey(ref.line, v)
-        const tabId = resolveIncludeBindingTabId(bindings, key, ref.raw)
+        const effectiveRaw = ref.loopContext!.effectiveRawsByValue?.[v]
+        const key = getLoopIncludeIterationBindingKey(ref, v)
+        const tabId = resolveIncludeBindingTabId(bindings, key, ref.raw, effectiveRaw)
         const tabName = tabId ? (tabNames[tabId] ?? tabId) : '未リンク'
-        return `${ref.loopContext!.variable}=${v}→${tabName}`
+        const pathLabel = effectiveRaw ? `${effectiveRaw}` : ref.raw
+        return `${ref.loopContext!.variable}=${v}(${pathLabel})→${tabName}`
       })
       .join(', ')
     return `include ${ref.raw}（ループ展開: ${linked}）`
