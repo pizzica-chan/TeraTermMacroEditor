@@ -73,6 +73,10 @@ interface LineLoopResult {
   end: boolean
 }
 
+interface LineLoopOpts {
+  stopOnExit?: boolean
+}
+
 function inferTypeFromValue(text: string): VarType {
   if (text.startsWith("'") || text.startsWith('"')) return 'string'
   if (/^-?\d+(\.\d+)?$/.test(text)) return 'integer'
@@ -219,7 +223,7 @@ function pushDiagnostic(ctx: AnalysisContext, diag: Diagnostic): void {
   if (!ctx.suppressDiagnostics) ctx.diagnostics.push(diag)
 }
 
-function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: { stopOnExit?: boolean }): LineLoopResult {
+function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopOpts): LineLoopResult {
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const lineNum = lineIdx + 1
     const line = lines[lineIdx]!
@@ -294,10 +298,13 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: { stopOnE
           const childResolver = linkedTabId
             ? ctx.includeResolver.resolverForLinkedTab(linkedTabId) ?? ctx.includeResolver
             : ctx.includeResolver
-          const childCtx: AnalysisContext = { ...ctx, includeResolver: childResolver }
-          const childResult = analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
+          const childCtx: AnalysisContext = {
+            ...ctx,
+            includeResolver: childResolver,
+            blockStack: [...ctx.blockStack],
+          }
+          analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
           ctx.includeStack.pop()
-          if (childResult.end) return { exit: false, end: true }
         } else if (!ctx.suppressDiagnostics) {
           pushDiagnostic(ctx, {
             line: lineNum,

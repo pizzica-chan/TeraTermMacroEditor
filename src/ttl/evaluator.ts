@@ -511,7 +511,8 @@ function processIncludedContent(env: Env, content: string, opts: EvalOptions): S
   let i = 0
   while (i < lines.length) {
     const result = processStatement(env, lines, i, null, null, { ...opts, inInclude: true })
-    if (result.stopAll || result.stopInclude) return result
+    if (result.stopAll) return result
+    if (result.stopInclude) break
     i = result.nextIdx + 1
   }
   return { nextIdx: Math.max(0, lines.length - 1) }
@@ -602,6 +603,7 @@ function processStatement(
   }
 
   if (cmd === 'end') {
+    if (opts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
     return { nextIdx: lineIdx, stopAll: true }
   }
 
