@@ -10,7 +10,15 @@ import {
 } from './ui/toolbar'
 import { TabManager, MAX_TABS, type EditorTab } from './ui/tabManager'
 import { analyzeTTL, type IncludeResolver } from './ttl/analyzer'
-import { findIncludeRefs, includeDynamicBindingKey, migrateIncludeBindings, normalizeIncludePath } from './ttl/includeRefs'
+import {
+  findIncludeRefs,
+  includeDynamicBindingKey,
+  includeLoopIterationBindingKey,
+  migrateIncludeBindings,
+  normalizeIncludePath,
+  resolveIncludeBindingTabId,
+  type IncludeResolveContext,
+} from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
 import { setIncludeResolver, setExternallyUsedNames } from './ttl/analysisContext'
 import { evaluateTTL } from './ttl/evaluator'
@@ -94,17 +102,27 @@ function resolveLinkedTabContent(linkedTabId: string | undefined): string | null
 }
 
 function createIncludeResolver(tab: EditorTab): IncludeResolver {
-  const resolveByKey = (key: string) => resolveLinkedTabContent(tab.includeBindings[key])
+  const resolveTabId = (bindingKey: string, rawArg?: string) =>
+    resolveIncludeBindingTabId(tab.includeBindings, bindingKey, rawArg)
+
+  const resolveByKey = (bindingKey: string, rawArg?: string) => {
+    const tabId = resolveTabId(bindingKey, rawArg)
+    return tabId ? resolveLinkedTabContent(tabId) : null
+  }
 
   return {
     resolve(path: string) {
       return resolveByKey(normalizeIncludePath(path))
     },
-    resolveDynamic(rawArg: string) {
-      return resolveByKey(includeDynamicBindingKey(rawArg))
+    resolveDynamic(rawArg: string, context?: IncludeResolveContext) {
+      const bindingKey =
+        context?.loopValue !== undefined && context.line !== undefined
+          ? includeLoopIterationBindingKey(context.line, context.loopValue)
+          : includeDynamicBindingKey(rawArg)
+      return resolveByKey(bindingKey, rawArg)
     },
-    getLinkedTabId(bindingKey: string) {
-      return tab.includeBindings[bindingKey] ?? null
+    getLinkedTabId(bindingKey: string, rawArg?: string) {
+      return resolveTabId(bindingKey, rawArg)
     },
     resolverForLinkedTab(tabId: string) {
       if (tabId === tab.id) return null
@@ -261,9 +279,15 @@ async function readFileAsBytes(file: File): Promise<Uint8Array> {
   return new Uint8Array(buffer)
 }
 
-async function openFile(bytes: Uint8Array, fileName: string, fileHandle: FileSystemFileHandle | null) {
+async function openFile(
+  bytes: Uint8Array,
+  fileName: string,
+  fileHandle: FileSystemFileHandle | null,
+  options?: { ifAlreadyOpen?: 'switch' | 'skip' },
+) {
   const existing = tabManager.findByFileName(fileName)
   if (existing && existing.fileHandle === fileHandle) {
+    if (options?.ifAlreadyOpen === 'skip') return
     tabManager.switchTab(existing.id)
     return
   }
@@ -447,12 +471,16 @@ function setupFileDrop() {
     dropTarget.classList.toggle('file-drop-active', on)
   }
 
-  dropTarget.addEventListener('dragover', (e) => {
-    const de = e as DragEvent
-    if (![...de.dataTransfer?.items ?? []].some((item) => item.kind === 'file')) return
-    e.preventDefault()
-    showDrag(true)
-  })
+  dropTarget.addEventListener(
+    'dragover',
+    (e) => {
+      const de = e as DragEvent
+      if (![...de.dataTransfer?.items ?? []].some((item) => item.kind === 'file')) return
+      e.preventDefault()
+      showDrag(true)
+    },
+    true,
+  )
 
   dropTarget.addEventListener('dragleave', (e) => {
     if (e.currentTarget === dropTarget && !dropTarget.contains((e as DragEvent).relatedTarget as Node)) {
@@ -460,20 +488,28 @@ function setupFileDrop() {
     }
   })
 
-  dropTarget.addEventListener('drop', async (e) => {
-    const de = e as DragEvent
-    e.preventDefault()
-    showDrag(false)
-    const files = [...de.dataTransfer?.files ?? []].filter(isOpenableFile)
-    for (const file of files) {
-      if (!tabManager.canAddTab()) {
-        alert(`タブは最大 ${MAX_TABS} 個まで開けます。`)
-        break
+  dropTarget.addEventListener(
+    'drop',
+    async (e) => {
+      const de = e as DragEvent
+      const files = [...de.dataTransfer?.files ?? []].filter(isOpenableFile)
+      if (files.length === 0) return
+
+      e.preventDefault()
+      e.stopPropagation()
+      showDrag(false)
+
+      for (const file of files) {
+        if (!tabManager.canAddTab()) {
+          alert(`タブは最大 ${MAX_TABS} 個まで開けます。`)
+          break
+        }
+        const bytes = await readFileAsBytes(file)
+        await openFile(bytes, file.name, null, { ifAlreadyOpen: 'skip' })
       }
-      const bytes = await readFileAsBytes(file)
-      await openFile(bytes, file.name, null)
-    }
-  })
+    },
+    true,
+  )
 }
 
 setupFileDrop()

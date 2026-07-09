@@ -1,6 +1,11 @@
 import { getSystemVariableType, getSystemVariableMeta, isSystemVariable } from './commands'
 import type { IncludeResolver } from './analyzer'
-import { includeDynamicBindingKey, normalizeIncludePath } from './includeRefs'
+import {
+  extractIncludeArgText,
+  includeDynamicBindingKey,
+  includeLoopIterationBindingKey,
+  normalizeIncludePath,
+} from './includeRefs'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
 
 export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
@@ -494,6 +499,7 @@ function findBlockEnd(lines: string[], startIdx: number, open: string, close: st
 interface EvalOptions {
   includeResolver?: IncludeResolver
   includeStack: string[]
+  includeTabStack: string[]
   inInclude?: boolean
   locationPrefix?: string
   sendEntries?: SendEntry[]
@@ -568,6 +574,7 @@ function processStatement(
       let bindingKey: string
       let content: string | null
       let locationPrefix: string
+      let includeRawArg: string | undefined
 
       if (arg.kind === 'string') {
         const path = unquoteString(arg.text)
@@ -575,13 +582,24 @@ function processStatement(
         content = opts.includeResolver.resolve(path)
         locationPrefix = path
       } else {
-        bindingKey = includeDynamicBindingKey(arg.text)
-        content = opts.includeResolver.resolveDynamic(arg.text)
-        locationPrefix = `${arg.text}`
+        includeRawArg = extractIncludeArgText(tokens, offset)
+        const loopValue = opts.loopFrame?.value
+        if (loopValue !== undefined) {
+          bindingKey = includeLoopIterationBindingKey(lineNum, loopValue)
+          content = opts.includeResolver.resolveDynamic(includeRawArg, { line: lineNum, loopValue })
+          locationPrefix = `${includeRawArg}@${opts.loopFrame!.variable}=${loopValue}`
+        } else {
+          bindingKey = includeDynamicBindingKey(includeRawArg)
+          content = opts.includeResolver.resolveDynamic(includeRawArg)
+          locationPrefix = includeRawArg
+        }
       }
 
       if (content && !opts.includeStack.includes(bindingKey)) {
-        const linkedTabId = opts.includeResolver.getLinkedTabId(bindingKey)
+        const linkedTabId = opts.includeResolver.getLinkedTabId(bindingKey, includeRawArg)
+        if (linkedTabId && opts.includeTabStack.includes(linkedTabId)) {
+          return { nextIdx: lineIdx }
+        }
         const childResolver = linkedTabId
           ? opts.includeResolver.resolverForLinkedTab(linkedTabId) ?? opts.includeResolver
           : opts.includeResolver
@@ -589,6 +607,7 @@ function processStatement(
           ...opts,
           includeResolver: childResolver,
           includeStack: [...opts.includeStack, bindingKey],
+          includeTabStack: linkedTabId ? [...opts.includeTabStack, linkedTabId] : opts.includeTabStack,
           locationPrefix,
         })
         if (child.stopAll) return { nextIdx: lineIdx, stopAll: true }
@@ -684,6 +703,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   const evalOpts: EvalOptions = {
     includeResolver: options?.includeResolver,
     includeStack: [],
+    includeTabStack: [],
     sendEntries,
   }
 

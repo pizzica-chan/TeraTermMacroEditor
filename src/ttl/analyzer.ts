@@ -5,7 +5,16 @@ import {
   isSystemVariable,
 } from './commands'
 import { checkCommandArgs } from './argChecker'
-import { includeDynamicBindingKey, normalizeIncludePath } from './includeRefs'
+import {
+  createForLoopBlockList,
+  extractIncludeArgText,
+  getLoopContextForLine,
+  includeDynamicBindingKey,
+  includeLoopIterationBindingKey,
+  normalizeIncludePath,
+  type IncludeResolveContext,
+  type ForLoopBlock,
+} from './includeRefs'
 import { RESERVED, tokenizeLine, stripComments, getStringLiteralError, unquoteString, type Token } from './tokenize'
 
 export type VarType = 'integer' | 'string' | 'array' | 'unknown'
@@ -45,8 +54,8 @@ export interface AnalysisResult {
 export interface IncludeResolver {
   resolve(path: string): string | null
   /** 変数指定 include（引数テキストでリンク先タブを解決） */
-  resolveDynamic(rawArg: string): string | null
-  getLinkedTabId(bindingKey: string): string | null
+  resolveDynamic(rawArg: string, context?: IncludeResolveContext): string | null
+  getLinkedTabId(bindingKey: string, rawArg?: string): string | null
   /** インクルード先タブ用の resolver（ネストした include 用） */
   resolverForLinkedTab(tabId: string): IncludeResolver | null
 }
@@ -64,8 +73,11 @@ interface AnalysisContext {
   blockStack: { keyword: string; line: number }[]
   includeResolver?: IncludeResolver
   includeStack: string[]
+  /** インクルード先タブ ID のスタック（同一タブへの別キー経由の循環検出） */
+  includeTabStack: string[]
   /** インクルード先の行に対する診断を抑制（親タブのリントと行番号がずれるため） */
   suppressDiagnostics: boolean
+  forLoopBlocks: ForLoopBlock[]
 }
 
 interface LineLoopResult {
@@ -219,6 +231,90 @@ const BLOCK_PAIRS: [string, string][] = [
   ['until', 'enduntil'],
 ]
 
+function markVariableUsed(ctx: AnalysisContext, lineNum: number, name: string): void {
+  const lower = name.toLowerCase()
+  if (RESERVED.has(lower)) return
+  const info = ctx.varMap.get(lower)
+  if (info) {
+    info.usedAt.push(lineNum)
+    info.isUsed = true
+  }
+}
+
+/** include の引数に現れる変数を使用済みとして記録 */
+function markIncludeArgumentUsage(ctx: AnalysisContext, tokens: Token[], lineNum: number, cmdIdx: number): void {
+  const arg = tokens[cmdIdx + 1]
+  if (!arg) return
+
+  if (arg.kind === 'identifier' && tokens[cmdIdx + 2]?.text === '[') {
+    markVariableUsed(ctx, lineNum, arg.text)
+    const indexTok = tokens[cmdIdx + 3]
+    if (indexTok?.kind === 'identifier') {
+      markVariableUsed(ctx, lineNum, indexTok.text)
+    }
+    return
+  }
+
+  if (arg.kind === 'identifier') {
+    markVariableUsed(ctx, lineNum, arg.text)
+  }
+}
+
+function analyzeResolvedInclude(
+  ctx: AnalysisContext,
+  lineNum: number,
+  first: Token,
+  bindingKey: string,
+  content: string | null,
+  notLinkedMessage: string,
+  rawArg?: string,
+): void {
+  if (ctx.includeStack.includes(bindingKey)) {
+    pushDiagnostic(ctx, {
+      line: lineNum,
+      column: first.column,
+      message: `循環 include が検出されました: L${lineNum}`,
+      severity: 'error',
+    })
+    return
+  }
+  const linkedTabId = content ? ctx.includeResolver!.getLinkedTabId(bindingKey, rawArg) : null
+  if (linkedTabId && ctx.includeTabStack.includes(linkedTabId)) {
+    pushDiagnostic(ctx, {
+      line: lineNum,
+      column: first.column,
+      message: `循環 include が検出されました（同一タブの再参照）: L${lineNum}`,
+      severity: 'error',
+    })
+    return
+  }
+  if (!content) {
+    if (!ctx.suppressDiagnostics) {
+      pushDiagnostic(ctx, {
+        line: lineNum,
+        column: first.column,
+        message: notLinkedMessage,
+        severity: 'info',
+      })
+    }
+    return
+  }
+
+  ctx.includeStack.push(bindingKey)
+  if (linkedTabId) ctx.includeTabStack.push(linkedTabId)
+  const childResolver = linkedTabId
+    ? ctx.includeResolver!.resolverForLinkedTab(linkedTabId) ?? ctx.includeResolver!
+    : ctx.includeResolver!
+  const childCtx: AnalysisContext = {
+    ...ctx,
+    includeResolver: childResolver,
+    blockStack: [...ctx.blockStack],
+  }
+  analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
+  ctx.includeStack.pop()
+  if (linkedTabId) ctx.includeTabStack.pop()
+}
+
 function pushDiagnostic(ctx: AnalysisContext, diag: Diagnostic): void {
   if (!ctx.suppressDiagnostics) ctx.diagnostics.push(diag)
 }
@@ -267,51 +363,31 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
     const cmd = first.text.toLowerCase()
 
     if (cmd === 'include') {
+      markIncludeArgumentUsage(ctx, tokens, lineNum, 0)
       const arg = tokens[1]
       if (ctx.includeResolver && arg) {
-        let bindingKey: string
-        let content: string | null
-        let notLinkedMessage: string
-
         if (arg.kind === 'string') {
           const path = unquoteString(arg.text)
-          bindingKey = normalizeIncludePath(path)
-          content = ctx.includeResolver.resolve(path)
-          notLinkedMessage = `include '${path}' がタブにリンクされていないため、内容は解析に含まれません`
+          const bindingKey = normalizeIncludePath(path)
+          const content = ctx.includeResolver.resolve(path)
+          const notLinkedMessage = `include '${path}' がタブにリンクされていないため、内容は解析に含まれません`
+          analyzeResolvedInclude(ctx, lineNum, first, bindingKey, content, notLinkedMessage)
         } else {
-          bindingKey = includeDynamicBindingKey(arg.text)
-          content = ctx.includeResolver.resolveDynamic(arg.text)
-          const argLabel = arg.text || '（引数）'
-          notLinkedMessage = `include ${argLabel}（変数指定）がタブにリンクされていないため、内容は解析に含まれません`
-        }
-
-        if (ctx.includeStack.includes(bindingKey)) {
-          pushDiagnostic(ctx, {
-            line: lineNum,
-            column: first.column,
-            message: `循環 include が検出されました: L${lineNum}`,
-            severity: 'error',
-          })
-        } else if (content) {
-          ctx.includeStack.push(bindingKey)
-          const linkedTabId = ctx.includeResolver.getLinkedTabId(bindingKey)
-          const childResolver = linkedTabId
-            ? ctx.includeResolver.resolverForLinkedTab(linkedTabId) ?? ctx.includeResolver
-            : ctx.includeResolver
-          const childCtx: AnalysisContext = {
-            ...ctx,
-            includeResolver: childResolver,
-            blockStack: [...ctx.blockStack],
+          const rawArg = extractIncludeArgText(tokens, 0)
+          const argLabel = rawArg || '（引数）'
+          const notLinkedMessage = `include ${argLabel}（変数指定）がタブにリンクされていないため、内容は解析に含まれません`
+          const loopCtx = getLoopContextForLine(ctx.forLoopBlocks, lineNum)
+          if (loopCtx) {
+            for (const v of loopCtx.values) {
+              const bindingKey = includeLoopIterationBindingKey(lineNum, v)
+              const content = ctx.includeResolver.resolveDynamic(rawArg, { line: lineNum, loopValue: v })
+              analyzeResolvedInclude(ctx, lineNum, first, bindingKey, content, notLinkedMessage, rawArg)
+            }
+          } else {
+            const bindingKey = includeDynamicBindingKey(rawArg)
+            const content = ctx.includeResolver.resolveDynamic(rawArg)
+            analyzeResolvedInclude(ctx, lineNum, first, bindingKey, content, notLinkedMessage, rawArg)
           }
-          analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
-          ctx.includeStack.pop()
-        } else if (!ctx.suppressDiagnostics) {
-          pushDiagnostic(ctx, {
-            line: lineNum,
-            column: first.column,
-            message: notLinkedMessage,
-            severity: 'info',
-          })
         }
       }
       continue
@@ -616,7 +692,9 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     blockStack: [],
     includeResolver: options?.includeResolver,
     includeStack: [],
+    includeTabStack: [],
     suppressDiagnostics: false,
+    forLoopBlocks: createForLoopBlockList(source),
   }
 
   for (const name of ['timeout', 'mtimeout', 'result', 'inputstr', 'matchstr', 'paramcnt', 'params']) {

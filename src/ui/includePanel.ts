@@ -1,5 +1,13 @@
 import type { EditorTab } from './tabManager'
-import { getIncludeBindingKey, type IncludeRef } from '../ttl/includeRefs'
+import {
+  getIncludeBindingKey,
+  getLoopIncludeCommonTabId,
+  includeLoopIterationBindingKey,
+  includeLoopLineBindingKey,
+  isIncludeRefLinked,
+  resolveIncludeBindingTabId,
+  type IncludeRef,
+} from '../ttl/includeRefs'
 
 export interface IncludePanelActions {
   onBindingChange: (path: string, tabId: string | null) => void
@@ -53,16 +61,26 @@ export function createIncludePanel(container: HTMLElement): {
   }
 }
 
+function renderTabOptions(otherTabs: EditorTab[], selectedId: string): string {
+  return [
+    `<option value="">（未リンク）</option>`,
+    ...otherTabs.map(
+      (t) =>
+        `<option value="${escapeAttr(t.id)}"${t.id === selectedId ? ' selected' : ''}>${escapeHtml(t.fileName)}</option>`,
+    ),
+  ].join('')
+}
+
 function renderIncludeItem(
   ref: IncludeRef,
   tab: EditorTab,
   otherTabs: EditorTab[],
   _actions: IncludePanelActions,
 ): string {
-  const bindingKey = getIncludeBindingKey(ref)
   const pathLabel = ref.path ? escapeHtml(ref.path) : escapeHtml(ref.raw || '（引数なし）')
+  const linked = isIncludeRefLinked(ref, tab.includeBindings)
 
-  if (!bindingKey) {
+  if (!ref.path && !ref.isDynamic) {
     return `
       <div class="include-item include-item-dynamic">
         <div class="include-item-header">
@@ -75,15 +93,71 @@ function renderIncludeItem(
     `
   }
 
-  const linkedTabId = tab.includeBindings[bindingKey] ?? ''
-  const options = [
-    `<option value="">（未リンク）</option>`,
-    ...otherTabs.map(
-      (t) =>
-        `<option value="${escapeAttr(t.id)}"${t.id === linkedTabId ? ' selected' : ''}>${escapeHtml(t.fileName)}</option>`,
-    ),
-  ].join('')
+  if (ref.loopContext) {
+    const { variable, values } = ref.loopContext
+    const commonKey = includeLoopLineBindingKey(ref.line)
+    const commonTabId = getLoopIncludeCommonTabId(ref, tab.includeBindings)
+    const perIterationOverrides = values.filter((v) =>
+      !!tab.includeBindings[includeLoopIterationBindingKey(ref.line, v)],
+    ).length
+    const linkedCount = values.filter((v) =>
+      !!resolveIncludeBindingTabId(
+        tab.includeBindings,
+        includeLoopIterationBindingKey(ref.line, v),
+        ref.raw,
+      ),
+    ).length
+    const openBtn = commonTabId
+      ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(commonTabId)}" title="リンク先タブを開く">→</button>`
+      : ''
+    const iterationRows = values
+      .map((v) => {
+        const bindingKey = includeLoopIterationBindingKey(ref.line, v)
+        const linkedTabId = tab.includeBindings[bindingKey] ?? ''
+        const iterOpenBtn = linkedTabId
+          ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(linkedTabId)}" title="リンク先タブを開く">→</button>`
+          : ''
+        return `
+          <div class="include-loop-row">
+            <span class="include-loop-label">${escapeHtml(variable)}=${v}</span>
+            <label class="include-link-label">
+              <select class="include-link-select" data-path="${escapeAttr(bindingKey)}">${renderTabOptions(otherTabs, linkedTabId)}</select>
+            </label>
+            ${iterOpenBtn}
+          </div>
+        `
+      })
+      .join('')
 
+    const detailsOpen = perIterationOverrides > 0 ? ' open' : ''
+
+    return `
+      <div class="include-item include-item-loop${linked ? ' linked' : ''}">
+        <div class="include-item-header">
+          <span class="include-line">L${ref.line}</span>
+          <span class="include-path" title="${escapeAttr(ref.raw)}">${pathLabel}</span>
+          <button type="button" class="include-goto-line" data-line="${ref.line}" title="行へ移動">⌖</button>
+        </div>
+        <div class="include-item-note">for ループ内（${linkedCount}/${values.length} 件リンク済）</div>
+        <div class="include-item-link include-loop-common">
+          <label class="include-link-label">
+            <span>全反復</span>
+            <select class="include-link-select" data-path="${escapeAttr(commonKey)}">${renderTabOptions(otherTabs, commonTabId)}</select>
+          </label>
+          ${openBtn}
+        </div>
+        <details class="include-loop-details"${detailsOpen}>
+          <summary>反復ごとに個別指定（${perIterationOverrides} 件）</summary>
+          <div class="include-loop-bindings">${iterationRows}</div>
+        </details>
+      </div>
+    `
+  }
+
+  const bindingKey = getIncludeBindingKey(ref)
+  if (!bindingKey) return ''
+
+  const linkedTabId = tab.includeBindings[bindingKey] ?? ''
   const openBtn = linkedTabId
     ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(linkedTabId)}" title="リンク先タブを開く">→</button>`
     : ''
@@ -93,8 +167,8 @@ function renderIncludeItem(
     : ''
 
   const itemClass = ref.isDynamic
-    ? `include-item include-item-dynamic${linkedTabId ? ' linked' : ''}`
-    : `include-item${linkedTabId ? ' linked' : ''}`
+    ? `include-item include-item-dynamic${linked ? ' linked' : ''}`
+    : `include-item${linked ? ' linked' : ''}`
 
   return `
     <div class="${itemClass}">
@@ -107,7 +181,7 @@ function renderIncludeItem(
       <div class="include-item-link">
         <label class="include-link-label">
           <span>タブ</span>
-          <select class="include-link-select" data-path="${escapeAttr(bindingKey)}">${options}</select>
+          <select class="include-link-select" data-path="${escapeAttr(bindingKey)}">${renderTabOptions(otherTabs, linkedTabId)}</select>
         </label>
         ${openBtn}
       </div>

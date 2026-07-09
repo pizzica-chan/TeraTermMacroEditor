@@ -1,6 +1,13 @@
 import { StateField, StateEffect, RangeSetBuilder, type Extension } from '@codemirror/state'
 import { EditorView, Decoration, type DecorationSet } from '@codemirror/view'
-import { getIncludeBindingKey, type IncludeRef } from '../ttl/includeRefs'
+import {
+  getIncludeBindingKey,
+  getLoopIncludeCommonTabId,
+  includeLoopIterationBindingKey,
+  isIncludeRefLinked,
+  resolveIncludeBindingTabId,
+  type IncludeRef,
+} from '../ttl/includeRefs'
 
 export interface IncludeDecorationInfo {
   refs: IncludeRef[]
@@ -33,12 +40,11 @@ function buildDecorations(doc: { line: (n: number) => { from: number; to: number
 
   const builder = new RangeSetBuilder<Decoration>()
   for (const ref of info.refs) {
-    const key = getIncludeBindingKey(ref)
-    if (!key) continue
+    if (!ref.path && !ref.isDynamic) continue
     try {
       const line = doc.line(ref.line)
-      const linkedTabId = info.bindings[key]
-      const deco = linkedTabId ? linkedLine : unlinkedLine
+      const linked = isIncludeRefLinked(ref, info.bindings)
+      const deco = linked ? linkedLine : unlinkedLine
       builder.add(line.from, line.from, deco)
     } catch {
       // 行番号が範囲外
@@ -54,6 +60,25 @@ export function applyIncludeDecorations(view: EditorView, info: IncludeDecoratio
 }
 
 export function getIncludeLineTitle(ref: IncludeRef, bindings: Record<string, string>, tabNames: Record<string, string>): string {
+  if (!ref.path && !ref.isDynamic) return 'include（引数なし）'
+
+  if (ref.loopContext) {
+    const commonTabId = getLoopIncludeCommonTabId(ref, bindings)
+    if (commonTabId) {
+      const tabName = tabNames[commonTabId] ?? commonTabId
+      return `include ${ref.raw} → ${tabName}（全反復共通）`
+    }
+    const linked = ref.loopContext.values
+      .map((v) => {
+        const key = includeLoopIterationBindingKey(ref.line, v)
+        const tabId = resolveIncludeBindingTabId(bindings, key, ref.raw)
+        const tabName = tabId ? (tabNames[tabId] ?? tabId) : '未リンク'
+        return `${ref.loopContext!.variable}=${v}→${tabName}`
+      })
+      .join(', ')
+    return `include ${ref.raw}（ループ展開: ${linked}）`
+  }
+
   const key = getIncludeBindingKey(ref)
   if (!key) return 'include（引数なし）'
 

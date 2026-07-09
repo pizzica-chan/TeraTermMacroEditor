@@ -656,6 +656,62 @@ body {
   gap: 6px;
 }
 
+.include-item-loop.linked {
+  border-left: 3px solid var(--accent);
+}
+
+.include-loop-common {
+  margin-top: 8px;
+}
+
+.include-loop-details {
+  margin-top: 8px;
+}
+
+.include-loop-details summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.include-loop-details summary:hover {
+  color: var(--text-primary);
+}
+
+.include-loop-bindings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.include-loop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.include-loop-label {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 3.5em;
+  flex-shrink: 0;
+}
+
+.include-loop-row .include-link-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.include-loop-row .include-link-select {
+  width: 100%;
+}
+
 .include-link-label {
   display: flex;
   align-items: center;
