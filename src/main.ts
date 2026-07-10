@@ -20,7 +20,7 @@ import {
   type IncludeResolveContext,
 } from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
-import { setIncludeResolver, setExternallyUsedNames } from './ttl/analysisContext'
+import { setIncludeResolver, setExternallyUsedNames, setAnalysisCache } from './ttl/analysisContext'
 import { evaluateTTL } from './ttl/evaluator'
 import { DocumentSettings } from './text/documentSettings'
 import type { TextEncoding, NewlineType } from './text/types'
@@ -85,7 +85,7 @@ function syncUiFromTab(tab: EditorTab): void {
   setEncodingSelect(tab.docSettings.encoding)
   setNewlineSelect(tab.docSettings.newline)
   updateStatusBar(tab)
-  runAnalysis(editor.getValue())
+  runAnalysisNow(editor.getValue())
   updateCursorPosition()
   schedulePersistWorkspaceSession()
 }
@@ -136,6 +136,7 @@ function syncTabIncludeBindings(tab: EditorTab, source: string): void {
   const migrated = migrateIncludeBindings(source, tab.includeBindings)
   if (migrated !== tab.includeBindings) {
     tab.includeBindings = migrated
+    editor.notifyIncludeGraphChanged()
     schedulePersistWorkspaceSession()
   }
 }
@@ -158,31 +159,50 @@ function getExternallyUsedVarNames(tab: EditorTab): Set<string> {
   return used
 }
 
-function updateAnalysisContext(tab: EditorTab | null): void {
-  if (!tab) {
-    setIncludeResolver(undefined)
-    setExternallyUsedNames(undefined)
-    return
-  }
-  setIncludeResolver(createIncludeResolver(tab))
-  setExternallyUsedNames(getExternallyUsedVarNames(tab))
-}
+let analysisTimer: ReturnType<typeof setTimeout> | null = null
+const ANALYSIS_DEBOUNCE_MS = 250
 
-function runAnalysis(text: string) {
+function runAnalysisImmediate(text: string): void {
   const tab = tabManager.activeTab
   if (tab) syncTabIncludeBindings(tab, text)
-  updateAnalysisContext(tab)
-  editor.notifyIncludeGraphChanged()
+
+  const resolver = tab ? createIncludeResolver(tab) : undefined
+  const externallyUsed = tab ? getExternallyUsedVarNames(tab) : undefined
+  setIncludeResolver(resolver)
+  setExternallyUsedNames(externallyUsed)
 
   const result = analyzeTTL(text, {
-    includeResolver: tab ? createIncludeResolver(tab) : undefined,
-    externallyUsedNames: tab ? getExternallyUsedVarNames(tab) : undefined,
+    includeResolver: resolver,
+    externallyUsedNames: externallyUsed,
   })
   const evaluation = evaluateTTL(text, {
-    includeResolver: tab ? createIncludeResolver(tab) : undefined,
+    includeResolver: resolver,
   })
+  setAnalysisCache(text, result, evaluation)
+  editor.notifyAnalysisCacheChanged()
+
   sidePanel.update({ analysis: result, sendEntries: evaluation.sendEntries })
   refreshIncludePanel(text)
+}
+
+function runAnalysis(text: string, immediate = false): void {
+  if (immediate) {
+    if (analysisTimer) {
+      clearTimeout(analysisTimer)
+      analysisTimer = null
+    }
+    runAnalysisImmediate(text)
+    return
+  }
+  if (analysisTimer) clearTimeout(analysisTimer)
+  analysisTimer = setTimeout(() => {
+    analysisTimer = null
+    runAnalysisImmediate(text)
+  }, ANALYSIS_DEBOUNCE_MS)
+}
+
+function runAnalysisNow(text: string): void {
+  runAnalysis(text, true)
 }
 
 function buildTabNameMap(): Record<string, string> {
@@ -203,7 +223,8 @@ function refreshIncludePanel(text?: string) {
     onBindingChange(path, tabId) {
       if (tabId) tab.includeBindings[path] = tabId
       else delete tab.includeBindings[path]
-      runAnalysis(editor.getValue())
+      editor.notifyIncludeGraphChanged()
+      runAnalysisNow(editor.getValue())
       schedulePersistWorkspaceSession()
     },
     onGotoLine(line) {
@@ -405,7 +426,7 @@ function handleEncodingChange(encoding: TextEncoding) {
   const { text, warning } = tab.docSettings.changeEncoding(editor.getValue(), encoding)
   if (text !== editor.getValue()) {
     editor.setValue(text)
-    runAnalysis(text)
+    runAnalysisNow(text)
   }
   tab.editorState = editor.getState()
   setEncodingSelect(encoding)

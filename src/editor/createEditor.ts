@@ -10,7 +10,7 @@ import { ttlLinter } from '../ttl/linter'
 import { valueTooltipExtension } from '../ttl/valueTooltip'
 import { ttlAutocompletion } from '../ttl/completion'
 import { includeDecorationExtension, applyIncludeDecorations, type IncludeDecorationInfo } from './includeDecorations'
-import { includeGraphRevisionExtension, bumpIncludeGraphRevision } from '../ttl/analysisContext'
+import { includeGraphRevisionExtension, bumpIncludeGraphRevision, bumpAnalysisCacheRevision } from '../ttl/analysisContext'
 
 const SAMPLE_MACRO = `; Tera Term マクロ サンプル
 ; 自動ログインの例
@@ -60,6 +60,7 @@ export interface EditorInstance {
   gotoLine: (line: number) => void
   setIncludeDecorations: (info: IncludeDecorationInfo | null) => void
   notifyIncludeGraphChanged: () => void
+  notifyAnalysisCacheChanged: () => void
 }
 
 const themeCompartment = new Compartment()
@@ -211,6 +212,9 @@ export function createEditor(parent: HTMLElement, initialText = SAMPLE_MACRO): E
     },
     notifyIncludeGraphChanged() {
       bumpIncludeGraphRevision(view)
+    },
+    notifyAnalysisCacheChanged() {
+      bumpAnalysisCacheRevision(view)
     },
   }
 }

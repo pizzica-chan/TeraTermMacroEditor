@@ -1,21 +1,29 @@
 import { StateField } from '@codemirror/state'
 import { EditorView, hoverTooltip, type Tooltip } from '@codemirror/view'
-import { evaluateTTL, type EvaluationResult } from './evaluator'
-import { getIncludeResolver, includeGraphRevisionField } from './analysisContext'
+import type { EvaluationResult } from './evaluator'
+import {
+  analysisCacheRevisionField,
+  getCachedEvaluation,
+  includeGraphRevisionField,
+} from './analysisContext'
 
-function buildEvaluation(doc: string): EvaluationResult {
-  return evaluateTTL(doc, { includeResolver: getIncludeResolver() })
+const emptyEvaluation: EvaluationResult = {
+  beforeLine: new Map(),
+  afterLine: new Map(),
+  sendEntries: [],
+  getHoverAt: () => null,
 }
 
 const evalField = StateField.define<EvaluationResult>({
   create(state) {
-    return buildEvaluation(state.doc.toString())
+    return getCachedEvaluation(state.doc.toString()) ?? emptyEvaluation
   },
   update(value, tr) {
     const revisionChanged =
-      tr.startState.field(includeGraphRevisionField) !== tr.state.field(includeGraphRevisionField)
+      tr.startState.field(includeGraphRevisionField) !== tr.state.field(includeGraphRevisionField) ||
+      tr.startState.field(analysisCacheRevisionField) !== tr.state.field(analysisCacheRevisionField)
     if (tr.docChanged || revisionChanged) {
-      return buildEvaluation(tr.state.doc.toString())
+      return getCachedEvaluation(tr.state.doc.toString()) ?? emptyEvaluation
     }
     return value
   },

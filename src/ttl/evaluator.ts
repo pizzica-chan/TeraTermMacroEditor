@@ -547,6 +547,12 @@ function processIncludedContent(env: Env, content: string, opts: EvalOptions): S
   return { nextIdx: Math.max(0, lines.length - 1) }
 }
 
+function shouldCaptureLineEnv(opts: EvalOptions, beforeLine: Map<number, Env> | null): boolean {
+  if (!beforeLine) return false
+  if (!opts.loopFrame) return true
+  return opts.loopFrame.index === opts.loopFrame.total
+}
+
 function processBlock(
   env: Env,
   lines: string[],
@@ -556,12 +562,13 @@ function processBlock(
   afterLine: Map<number, Env> | null,
   opts: EvalOptions,
 ): boolean {
+  const captureLineEnv = shouldCaptureLineEnv(opts, beforeLine)
   let i = startIdx
   while (i <= endIdx) {
     const lineNum = i + 1
-    if (beforeLine) beforeLine.set(lineNum, cloneEnv(env))
+    if (captureLineEnv && beforeLine) beforeLine.set(lineNum, cloneEnv(env))
     const result = processStatement(env, lines, i, beforeLine, afterLine, opts)
-    if (afterLine) afterLine.set(lineNum, cloneEnv(env))
+    if (captureLineEnv && afterLine) afterLine.set(lineNum, cloneEnv(env))
     if (result.stopAll) return true
     if (result.stopInclude) return false
     i = result.nextIdx > i ? result.nextIdx + 1 : i + 1

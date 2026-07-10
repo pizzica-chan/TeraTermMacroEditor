@@ -71,6 +71,69 @@ function renderTabOptions(otherTabs: EditorTab[], selectedId: string): string {
   ].join('')
 }
 
+const MAX_LOOP_ITERATION_ROWS = 32
+
+interface LoopLinkRow {
+  bindingKey: string
+  label: string
+  title: string
+  linkedTabId: string
+}
+
+function buildLoopLinkRows(ref: IncludeRef, tab: EditorTab): LoopLinkRow[] {
+  const { variable, values, effectiveRawsByValue } = ref.loopContext!
+  if (effectiveRawsByValue && Object.keys(effectiveRawsByValue).length > 0) {
+    const byPath = new Map<string, { count: number; sampleValue: number }>()
+    for (const v of values) {
+      const effectiveRaw = effectiveRawsByValue[v]
+      if (!effectiveRaw) continue
+      const existing = byPath.get(effectiveRaw)
+      if (existing) existing.count++
+      else byPath.set(effectiveRaw, { count: 1, sampleValue: v })
+    }
+    return [...byPath.entries()].map(([effectiveRaw, info]) => {
+      const bindingKey = getLoopIncludeIterationBindingKey(ref, info.sampleValue)
+      const linkedTabId =
+        resolveIncludeBindingTabId(tab.includeBindings, bindingKey, ref.raw, effectiveRaw) ?? ''
+      const countLabel = info.count > 1 ? ` (${info.count}回)` : ''
+      return {
+        bindingKey,
+        label: `${effectiveRaw}${countLabel}`,
+        title: `${variable}=${info.sampleValue} → ${effectiveRaw}`,
+        linkedTabId,
+      }
+    })
+  }
+
+  const rows: LoopLinkRow[] = []
+  for (const v of values) {
+    if (rows.length >= MAX_LOOP_ITERATION_ROWS) break
+    const bindingKey = getLoopIncludeIterationBindingKey(ref, v)
+    rows.push({
+      bindingKey,
+      label: `${variable}=${v}`,
+      title: ref.raw,
+      linkedTabId: tab.includeBindings[bindingKey] ?? '',
+    })
+  }
+  return rows
+}
+
+function renderLoopLinkRow(row: LoopLinkRow, otherTabs: EditorTab[]): string {
+  const iterOpenBtn = row.linkedTabId
+    ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(row.linkedTabId)}" title="リンク先タブを開く">→</button>`
+    : ''
+  return `
+    <div class="include-loop-row">
+      <span class="include-loop-label" title="${escapeAttr(row.title)}">${escapeHtml(row.label)}</span>
+      <label class="include-link-label">
+        <select class="include-link-select" data-path="${escapeAttr(row.bindingKey)}">${renderTabOptions(otherTabs, row.linkedTabId)}</select>
+      </label>
+      ${iterOpenBtn}
+    </div>
+  `
+}
+
 function renderIncludeItem(
   ref: IncludeRef,
   tab: EditorTab,
@@ -94,7 +157,7 @@ function renderIncludeItem(
   }
 
   if (ref.loopContext) {
-    const { variable, values, effectiveRawsByValue } = ref.loopContext
+    const { values, effectiveRawsByValue } = ref.loopContext
     const commonKey = includeLoopLineBindingKey(ref.line)
     const commonTabId = getLoopIncludeCommonTabId(ref, tab.includeBindings)
     const uniqueEffective = new Set(
@@ -113,27 +176,16 @@ function renderIncludeItem(
     const openBtn = commonTabId
       ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(commonTabId)}" title="リンク先タブを開く">→</button>`
       : ''
-    const iterationRows = values
-      .map((v) => {
-        const effectiveRaw = effectiveRawsByValue?.[v]
-        const bindingKey = getLoopIncludeIterationBindingKey(ref, v)
-        const linkedTabId =
-          resolveIncludeBindingTabId(tab.includeBindings, bindingKey, ref.raw, effectiveRaw) ?? ''
-        const iterOpenBtn = linkedTabId
-          ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(linkedTabId)}" title="リンク先タブを開く">→</button>`
-          : ''
-        const pathHint = effectiveRaw ? ` → ${effectiveRaw}` : ''
-        return `
-          <div class="include-loop-row">
-            <span class="include-loop-label" title="${escapeAttr(effectiveRaw ?? ref.raw)}">${escapeHtml(variable)}=${v}${escapeHtml(pathHint)}</span>
-            <label class="include-link-label">
-              <select class="include-link-select" data-path="${escapeAttr(bindingKey)}">${renderTabOptions(otherTabs, linkedTabId)}</select>
-            </label>
-            ${iterOpenBtn}
-          </div>
-        `
-      })
-      .join('')
+    const linkRows = buildLoopLinkRows(ref, tab)
+    const truncated =
+      !effectiveRawsByValue && values.length > MAX_LOOP_ITERATION_ROWS
+        ? values.length - MAX_LOOP_ITERATION_ROWS
+        : 0
+    const iterationRows = linkRows.map((row) => renderLoopLinkRow(row, otherTabs)).join('')
+    const truncatedNote =
+      truncated > 0
+        ? `<div class="include-item-note">反復が多いため先頭 ${MAX_LOOP_ITERATION_ROWS} 件のみ表示（残り ${truncated} 件）。全反復リンクを利用してください。</div>`
+        : ''
 
     const detailsOpen = hasDistinctPaths || perIterationOverrides > 0 ? ' open' : ''
     const aliasNote = effectiveRawsByValue
@@ -159,9 +211,10 @@ function renderIncludeItem(
           <button type="button" class="include-goto-line" data-line="${ref.line}" title="行へ移動">⌖</button>
         </div>
         ${aliasNote}
+        ${truncatedNote}
         ${commonLinkRow}
         <details class="include-loop-details"${detailsOpen}>
-          <summary>${hasDistinctPaths ? '反復ごとにリンク（ファイル別）' : `反復ごとに個別指定（${perIterationOverrides} 件）`}</summary>
+          <summary>${hasDistinctPaths ? 'ファイル別リンク' : `反復ごとに個別指定（${perIterationOverrides} 件）`}</summary>
           <div class="include-loop-bindings">${iterationRows}</div>
         </details>
       </div>

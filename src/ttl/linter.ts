@@ -1,6 +1,8 @@
 import { linter, type Diagnostic as CMDiagnostic } from '@codemirror/lint'
 import { analyzeTTL } from './analyzer'
 import {
+  analysisCacheRevisionField,
+  getCachedAnalysis,
   getExternallyUsedNames,
   getIncludeResolver,
   includeGraphRevisionField,
@@ -14,10 +16,14 @@ function toSeverity(sev: 'error' | 'warning' | 'info'): CMDiagnostic['severity']
 
 export const ttlLinter = linter(
   (view) => {
-    const result = analyzeTTL(view.state.doc.toString(), {
-      includeResolver: getIncludeResolver(),
-      externallyUsedNames: getExternallyUsedNames(),
-    })
+    const source = view.state.doc.toString()
+    const cached = getCachedAnalysis(source)
+    const result =
+      cached ??
+      analyzeTTL(source, {
+        includeResolver: getIncludeResolver(),
+        externallyUsedNames: getExternallyUsedNames(),
+      })
     return result.diagnostics.map((d) => ({
       from: view.state.doc.line(d.line).from + d.column,
       to: view.state.doc.line(d.line).from + (d.endColumn ?? d.column + 1),
@@ -26,8 +32,10 @@ export const ttlLinter = linter(
     }))
   },
   {
+    delay: 300,
     needsRefresh: (update) =>
       update.docChanged ||
-      update.startState.field(includeGraphRevisionField) !== update.state.field(includeGraphRevisionField),
+      update.startState.field(includeGraphRevisionField) !== update.state.field(includeGraphRevisionField) ||
+      update.startState.field(analysisCacheRevisionField) !== update.state.field(analysisCacheRevisionField),
   },
 )
