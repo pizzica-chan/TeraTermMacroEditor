@@ -106,7 +106,9 @@ function evalArrayElement(name: string, indexToken: Token, env: Env): RuntimeSca
 function isUnresolvedOperand(v: RuntimeScalar): boolean {
   if (v.kind === 'int') return v.origin === 'dialog-result'
   if (v.kind !== 'str') return false
+  if (v.hasUnresolvedParts) return true
   if (isRuntimeOrigin(v.origin)) return true
+  if (v.hint !== undefined && v.hint.includes('実行時')) return true
   return v.value === '' && v.hint !== undefined
 }
 
