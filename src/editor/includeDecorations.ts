@@ -66,7 +66,7 @@ export function getIncludeLineTitle(ref: IncludeRef, bindings: Record<string, st
     const commonTabId = getLoopIncludeCommonTabId(ref, bindings)
     if (commonTabId && !ref.loopContext.effectiveRawsByValue) {
       const tabName = tabNames[commonTabId] ?? commonTabId
-      return `include ${ref.raw} → ${tabName}（全反復共通）`
+      return `include ${ref.raw} → ${tabName}`
     }
     const linked = ref.loopContext.values
       .map((v) => {
@@ -74,11 +74,11 @@ export function getIncludeLineTitle(ref: IncludeRef, bindings: Record<string, st
         const key = getLoopIncludeIterationBindingKey(ref, v)
         const tabId = resolveIncludeBindingTabId(bindings, key, ref.raw, effectiveRaw)
         const tabName = tabId ? (tabNames[tabId] ?? tabId) : '未リンク'
-        const pathLabel = effectiveRaw ? `${effectiveRaw}` : ref.raw
-        return `${ref.loopContext!.variable}=${v}(${pathLabel})→${tabName}`
+        const pathLabel = effectiveRaw ?? ref.raw
+        return `${pathLabel} → ${tabName}`
       })
       .join(', ')
-    return `include ${ref.raw}（ループ展開: ${linked}）`
+    return `include ${ref.raw}: ${linked}`
   }
 
   const key = getIncludeBindingKey(ref)
@@ -92,7 +92,7 @@ export function getIncludeLineTitle(ref: IncludeRef, bindings: Record<string, st
     return `include '${ref.path}' → ${tabName}`
   }
 
-  const argLabel = ref.raw || '（変数）'
-  if (!tabId) return `include ${argLabel}（未リンク・変数指定）`
-  return `include ${argLabel} → ${tabName}（手動リンク）`
+  const argLabel = ref.raw || '（引数なし）'
+  if (!tabId) return `include ${argLabel}（未リンク）`
+  return `include ${argLabel} → ${tabName}`
 }

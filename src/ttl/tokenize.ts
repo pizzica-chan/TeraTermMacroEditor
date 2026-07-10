@@ -30,21 +30,10 @@ export function tokenizeLine(line: string, lineNum: number): Token[] {
       continue
     }
 
-    if (line[i] === ';') break
-
     if (line.slice(i, i + 2) === '/*') {
       const end = line.indexOf('*/', i + 2)
       i = end === -1 ? line.length : end + 2
       continue
-    }
-
-    if (line[i] === ':' && (i === 0 || /\s/.test(line[i - 1]!))) {
-      const m = line.slice(i + 1).match(/^[\w]+/)
-      if (m) {
-        tokens.push({ text: m[0], line: lineNum, column: col, kind: 'label' })
-        i += 1 + m[0].length
-        continue
-      }
     }
 
     if (line[i] === "'" || line[i] === '"') {
@@ -55,6 +44,17 @@ export function tokenizeLine(line: string, lineNum: number): Token[] {
       tokens.push({ text, line: lineNum, column: col, kind: 'string' })
       i = j < line.length ? j + 1 : line.length
       continue
+    }
+
+    if (line[i] === ';') break
+
+    if (line[i] === ':' && (i === 0 || /\s/.test(line[i - 1]!))) {
+      const m = line.slice(i + 1).match(/^[\w]+/)
+      if (m) {
+        tokens.push({ text: m[0], line: lineNum, column: col, kind: 'label' })
+        i += 1 + m[0].length
+        continue
+      }
     }
 
     const numMatch = line.slice(i).match(/^-?\d+(\.\d+)?/)
@@ -92,6 +92,7 @@ export function stripComments(source: string): string[] {
   for (const rawLine of source.split('\n')) {
     let line = ''
     let i = 0
+    let inString: "'" | '"' | null = null
 
     while (i < rawLine.length) {
       if (inBlock) {
@@ -102,15 +103,31 @@ export function stripComments(source: string): string[] {
         continue
       }
 
+      const ch = rawLine[i]!
+
+      if (inString) {
+        line += ch
+        if (ch === inString) inString = null
+        i++
+        continue
+      }
+
       if (rawLine.slice(i, i + 2) === '/*') {
         inBlock = true
         i += 2
         continue
       }
 
-      if (rawLine[i] === ';') break
+      if (ch === "'" || ch === '"') {
+        inString = ch
+        line += ch
+        i++
+        continue
+      }
 
-      line += rawLine[i]
+      if (ch === ';') break
+
+      line += ch
       i++
     }
 

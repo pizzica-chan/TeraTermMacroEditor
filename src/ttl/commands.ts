@@ -1,5 +1,7 @@
 /** TTL コマンド・キーワード・システム変数の定義 */
 
+import { COMMAND_OUTPUT_EFFECTS } from './commandOutputs'
+
 export const CONTROL_KEYWORDS = new Set([
   'if', 'then', 'elseif', 'else', 'endif',
   'for', 'next',
@@ -59,18 +61,19 @@ export const TTL_COMMANDS = new Set([
 
 export const LOGICAL_OPERATORS = new Set(['and', 'or', 'not'])
 
-/** 出力先（第1引数）として変数を受け取るコマンド */
-export const OUTPUT_COMMANDS = new Set([
-  'int2str', 'str2int', 'str2code', 'code2str', 'strlen', 'strconcat', 'strcopy',
-  'strinsert', 'strremove', 'strreplace', 'strtrim', 'tolower', 'toupper',
-  'strscan', 'strmatch', 'strsplit', 'strjoin', 'sprintf', 'sprintf2',
-  'getdate', 'gettime', 'getenv', 'gethostname', 'gettitle', 'getttdir',
-  'getver', 'getipv4addr', 'getipv6addr', 'getspecialfolder', 'expandenv',
-  'random', 'checksum8', 'checksum16', 'checksum32', 'crc16', 'crc32',
-  'uptime', 'clipb2var', 'recvln', 'fileread', 'filereadln', 'filesearch',
-  'findfirst', 'findnext', 'getpassword', 'getpassword2', 'inputbox',
-  'passwordbox', 'filenamebox', 'dirnamebox', 'listbox', 'intdim', 'strdim',
-])
+export {
+  getCommandOutputEffect,
+  getOutputVariableIndices,
+  getOutputVariableType,
+  isArg1OutputCommand,
+} from './commandOutputs'
+
+/** 第1引数が出力変数のコマンド（後方互換） */
+export const OUTPUT_COMMANDS = new Set(
+  Object.entries(COMMAND_OUTPUT_EFFECTS)
+    .filter(([, effect]) => effect.variables?.some((v) => v.index === 1))
+    .map(([cmd]) => cmd),
+)
 
 /** システム変数（型付き） */
 export const SYSTEM_VARIABLES: Record<string, 'integer' | 'string' | 'array'> = {

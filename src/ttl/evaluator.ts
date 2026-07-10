@@ -7,6 +7,7 @@ import {
   resolveLoopIncludeBindingKey,
 } from './includeRefs'
 import { findAssignmentIndex } from './argChecker'
+import { getCommandOutputEffect } from './commandOutputs'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
 
 export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
@@ -346,6 +347,62 @@ function setArrayElement(env: Env, name: string, index: number, value: RuntimeSc
   arr.elements.set(index, value)
 }
 
+function applyCommandOutputEffects(cmd: string, tokens: Token[], env: Env): boolean {
+  const effect = getCommandOutputEffect(cmd)
+  if (!effect) return false
+
+  let applied = false
+
+  for (const slot of effect.variables ?? []) {
+    const tok = tokens[slot.index]
+    if (tok?.kind !== 'identifier') continue
+    applied = true
+    if (slot.type === 'integer') {
+      setScalar(env, tok.text, {
+        kind: 'int',
+        value: 0,
+        hint: `（${cmd} の出力 / 実行時）`,
+      })
+    } else {
+      setScalar(env, tok.text, {
+        kind: 'str',
+        value: '',
+        hint: `（${cmd} の出力 / 実行時）`,
+      })
+    }
+  }
+
+  for (const sys of effect.systemVariables ?? []) {
+    applied = true
+    const origin =
+      sys.name === 'inputstr'
+        ? 'user-input'
+        : sys.name === 'matchstr' || sys.name.startsWith('groupmatchstr')
+          ? 'match-received'
+          : 'dialog-result'
+    if (sys.type === 'integer') {
+      setScalar(env, sys.name, { kind: 'int', value: 0, origin })
+    } else {
+      setScalar(env, sys.name, {
+        kind: 'str',
+        value: '',
+        origin,
+        hint:
+          sys.name === 'matchstr' || sys.name.startsWith('groupmatchstr')
+            ? '（正規表現マッチ / 実行時）'
+            : undefined,
+      })
+    }
+  }
+
+  if (effect.setsResult) {
+    applied = true
+    setScalar(env, 'result', { kind: 'int', value: 0, origin: 'dialog-result' })
+  }
+
+  return applied
+}
+
 function processLine(env: Env, line: string, lineNum: number): void {
   const tokens = tokenizeLine(line, lineNum)
   if (tokens.length === 0) return
@@ -422,17 +479,6 @@ function processLine(env: Env, line: string, lineNum: number): void {
     return
   }
 
-  if (cmd === 'inputbox' || cmd === 'passwordbox') {
-    setScalar(env, 'inputstr', { kind: 'str', value: '', origin: 'user-input' })
-    setScalar(env, 'result', { kind: 'int', value: 0, origin: 'dialog-result' })
-    return
-  }
-
-  if (cmd === 'yesnobox' || cmd === 'messagebox' || cmd === 'listbox') {
-    setScalar(env, 'result', { kind: 'int', value: 0, origin: 'dialog-result' })
-    return
-  }
-
   if (cmd === 'wait' || cmd === 'waitln' || cmd === 'waitregex') {
     const arg = tokens[offset + 1]
     if (arg?.kind === 'string') {
@@ -442,6 +488,8 @@ function processLine(env: Env, line: string, lineNum: number): void {
     }
     return
   }
+
+  if (applyCommandOutputEffects(cmd, tokens, env)) return
 }
 
 function isArrayAssignTarget(tokens: Token[], eqIdx: number): string | null {
@@ -1144,6 +1192,17 @@ function resolveVarHover(name: string, env: Env): HoverInfo {
       display,
       note: runtimeStrNote(v.origin, isSystem, meta),
       valueKind: isRuntimeOrigin(v.origin) ? 'runtime' : 'known',
+      isSystem,
+    }
+  }
+
+  if (v.kind === 'int' && v.hint) {
+    return {
+      name,
+      type: 'integer',
+      display: v.hint,
+      note: '実行時に決定されます',
+      valueKind: 'runtime',
       isSystem,
     }
   }

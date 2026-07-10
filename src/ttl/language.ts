@@ -28,6 +28,15 @@ const ttlLanguage = StreamLanguage.define<State>({
       return 'comment'
     }
 
+    // String literal (single or double quoted) — must precede line-comment detection
+    if (stream.match(/['"]/)) {
+      const quote = stream.current()
+      while (!stream.eol()) {
+        if (stream.next() === quote) break
+      }
+      return 'string'
+    }
+
     // Line comment
     if (stream.match(';')) {
       stream.skipToEnd()
@@ -38,15 +47,6 @@ const ttlLanguage = StreamLanguage.define<State>({
     if (stream.sol() && stream.match(':')) {
       stream.eatWhile(/[\w]/)
       return 'labelName'
-    }
-
-    // String literal (single or double quoted)
-    if (stream.match(/['"]/)) {
-      const quote = stream.current()
-      while (!stream.eol()) {
-        if (stream.next() === quote) break
-      }
-      return 'string'
     }
 
     // Number

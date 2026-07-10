@@ -1,10 +1,10 @@
 import {
-  OUTPUT_COMMANDS,
   TTL_COMMANDS,
   getSystemVariableType,
   isSystemVariable,
 } from './commands'
 import { checkCommandArgs, findAssignmentIndex } from './argChecker'
+import { getCommandOutputEffect, getOutputVariableIndices } from './commandOutputs'
 import {
   computeLoopIncludeEffectiveRaw,
   createForLoopBlockList,
@@ -139,6 +139,14 @@ function markMacroTerminator(ctx: AnalysisContext, atTopLevel: boolean): void {
     ctx.blockUnreachableStack[depth - 1] = true
   } else {
     ctx.fileUnreachable = true
+  }
+}
+
+/** if ブロックの別分岐（elseif / else）に入るとき、直前分岐の end / exit 状態をリセット */
+function startNewIfBranch(ctx: AnalysisContext): void {
+  const depth = ctx.blockUnreachableStack.length
+  if (depth > 0) {
+    ctx.blockUnreachableStack[depth - 1] = false
   }
 }
 
@@ -314,6 +322,52 @@ function shouldWarnDeadCode(tokens: Token[]): boolean {
   return true
 }
 
+function registerCommandOutputVariables(
+  ctx: AnalysisContext,
+  cmd: string,
+  tokens: Token[],
+  lineNum: number,
+): void {
+  const effect = getCommandOutputEffect(cmd)
+  if (!effect?.variables) return
+
+  for (const slot of effect.variables) {
+    const tok = tokens[slot.index]
+    if (tok?.kind !== 'identifier') continue
+
+    const varName = tok.text
+    const varKey = varName.toLowerCase()
+    const outputType: VarType = slot.type === 'integer' ? 'integer' : 'string'
+    const existing = ctx.varMap.get(varKey)
+
+    if (!existing) {
+      ctx.varMap.set(varKey, {
+        name: varName,
+        type: outputType,
+        declaredAt: lineNum,
+        usedAt: [],
+        isSystem: isSystemVariable(varName),
+        isUsed: false,
+      })
+    } else if (
+      !existing.isSystem &&
+      existing.type !== 'unknown' &&
+      existing.type !== outputType
+    ) {
+      pushDiagnostic(ctx, {
+        line: lineNum,
+        column: tok.column,
+        endColumn: tok.column + tok.text.length,
+        message: `変数 '${varName}' の型が ${existing.type} ですが、'${cmd}' は ${outputType} 型の値を出力します`,
+        severity: 'error',
+      })
+    } else if (existing.type === 'unknown') {
+      existing.type = outputType
+      if (existing.declaredAt === 0) existing.declaredAt = lineNum
+    }
+  }
+}
+
 function markVariableUsed(ctx: AnalysisContext, lineNum: number, name: string): void {
   const lower = name.toLowerCase()
   if (RESERVED.has(lower)) return
@@ -459,7 +513,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
         } else {
           const rawArg = extractIncludeArgText(tokens, 0)
           const argLabel = rawArg || '（引数）'
-          const notLinkedMessage = `include ${argLabel}（変数指定）がタブにリンクされていないため、内容は解析に含まれません`
+          const notLinkedMessage = `include ${argLabel} がタブにリンクされていないため、内容は解析に含まれません`
           const loopCtx = getLoopContextForLine(ctx.forLoopBlocks, lineNum)
           if (loopCtx) {
             const loopBlock = getForLoopBlockForLine(ctx.forLoopBlocks, lineNum)
@@ -498,6 +552,13 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
 
     if (cmd === 'exit' || cmd === 'end') {
       markMacroTerminator(ctx, ctx.blockStack.length === 0)
+    }
+
+    if (
+      (cmd === 'elseif' || cmd === 'else') &&
+      ctx.blockStack[ctx.blockStack.length - 1]?.keyword === 'if'
+    ) {
+      startNewIfBranch(ctx)
     }
 
     for (const [open, close] of BLOCK_PAIRS) {
@@ -697,23 +758,11 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
       }
     }
 
-    if (OUTPUT_COMMANDS.has(cmd) && tokens[1]?.kind === 'identifier') {
-      const varName = tokens[1].text
-      const varKey = varName.toLowerCase()
-      if (!ctx.varMap.has(varKey)) {
-        ctx.varMap.set(varKey, {
-          name: varName,
-          type: 'unknown',
-          declaredAt: lineNum,
-          usedAt: [],
-          isSystem: isSystemVariable(varName),
-          isUsed: false,
-        })
-      }
-    }
+    registerCommandOutputVariables(ctx, cmd, tokens, lineNum)
 
     const assignVarKey = assignVarName?.toLowerCase() ?? null
     const arrayAssignName = assignIdx > 0 ? isArrayAssignTarget(tokens, assignIdx) : null
+    const outputVarIndices = getOutputVariableIndices(cmd)
 
     for (let i = 0; i < tokens.length; i++) {
       const tok = tokens[i]!
@@ -721,7 +770,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
 
       const lower = tok.text.toLowerCase()
       if (RESERVED.has(lower)) continue
-      if (OUTPUT_COMMANDS.has(cmd) && i === 1) continue
+      if (outputVarIndices.has(i)) continue
       if (cmd === 'for' && i === 1) continue
       if ((cmd === 'strdim' || cmd === 'intdim') && i === 1) continue
       if ((cmd === 'goto' || cmd === 'call') && i === 1) continue

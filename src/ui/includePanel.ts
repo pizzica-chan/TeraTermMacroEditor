@@ -63,7 +63,7 @@ export function createIncludePanel(container: HTMLElement): {
 
 function renderTabOptions(otherTabs: EditorTab[], selectedId: string): string {
   return [
-    `<option value="">（未リンク）</option>`,
+    `<option value="">選んでください</option>`,
     ...otherTabs.map(
       (t) =>
         `<option value="${escapeAttr(t.id)}"${t.id === selectedId ? ' selected' : ''}>${escapeHtml(t.fileName)}</option>`,
@@ -151,7 +151,7 @@ function renderIncludeItem(
           <span class="include-path">${pathLabel}</span>
           <button type="button" class="include-goto-line" data-line="${ref.line}" title="行へ移動">⌖</button>
         </div>
-        <div class="include-item-note">引数がないためタブ紐づけできません</div>
+        <div class="include-item-note">リンク先を指定できません</div>
       </div>
     `
   }
@@ -184,13 +184,14 @@ function renderIncludeItem(
     const iterationRows = linkRows.map((row) => renderLoopLinkRow(row, otherTabs)).join('')
     const truncatedNote =
       truncated > 0
-        ? `<div class="include-item-note">反復が多いため先頭 ${MAX_LOOP_ITERATION_ROWS} 件のみ表示（残り ${truncated} 件）。全反復リンクを利用してください。</div>`
+        ? `<div class="include-item-note">${values.length} 件中、先頭 ${MAX_LOOP_ITERATION_ROWS} 件のみ表示しています</div>`
         : ''
 
     const detailsOpen = hasDistinctPaths || perIterationOverrides > 0 ? ' open' : ''
-    const aliasNote = effectiveRawsByValue
-      ? `<div class="include-item-note">ループ直前の代入から実効パスを検出（${Object.keys(effectiveRawsByValue).length}/${values.length} 件）</div>`
-      : `<div class="include-item-note">for ループ内（${linkedCount}/${values.length} 件リンク済）</div>`
+    const statusNote =
+      !linked && !commonTabId && linkedCount === 0
+        ? '<div class="include-item-note">リンク先のタブを選んでください</div>'
+        : ''
     const commonLinkRow = hasDistinctPaths
       ? ''
       : `
@@ -210,11 +211,11 @@ function renderIncludeItem(
           <span class="include-path" title="${escapeAttr(ref.raw)}">${pathLabel}</span>
           <button type="button" class="include-goto-line" data-line="${ref.line}" title="行へ移動">⌖</button>
         </div>
-        ${aliasNote}
+        ${statusNote}
         ${truncatedNote}
         ${commonLinkRow}
         <details class="include-loop-details"${detailsOpen}>
-          <summary>${hasDistinctPaths ? 'ファイル別リンク' : `反復ごとに個別指定（${perIterationOverrides} 件）`}</summary>
+          <summary>${hasDistinctPaths ? 'ファイルごとに指定' : '個別に指定'}</summary>
           <div class="include-loop-bindings">${iterationRows}</div>
         </details>
       </div>
@@ -229,13 +230,13 @@ function renderIncludeItem(
     ? `<button type="button" class="include-open-tab" data-tab-id="${escapeAttr(linkedTabId)}" title="リンク先タブを開く">→</button>`
     : ''
 
-  const dynamicNote = ref.isDynamic
-    ? '<div class="include-item-note">変数指定（引数名で紐づけ・行の増減に追従）</div>'
-    : ''
-
   const itemClass = ref.isDynamic
     ? `include-item include-item-dynamic${linked ? ' linked' : ''}`
     : `include-item${linked ? ' linked' : ''}`
+
+  const unlinkedNote = !linked
+    ? '<div class="include-item-note">リンク先のタブを選んでください</div>'
+    : ''
 
   return `
     <div class="${itemClass}">
@@ -244,7 +245,7 @@ function renderIncludeItem(
         <span class="include-path" title="${escapeAttr(ref.path ?? ref.raw)}">${pathLabel}</span>
         <button type="button" class="include-goto-line" data-line="${ref.line}" title="行へ移動">⌖</button>
       </div>
-      ${dynamicNote}
+      ${unlinkedNote}
       <div class="include-item-link">
         <label class="include-link-label">
           <span>タブ</span>
