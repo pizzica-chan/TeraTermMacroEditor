@@ -175,7 +175,6 @@ export function createSidePanel(container: HTMLElement): {
 
   function renderSend(entry: SendEntry, index: number): string {
     const payload = entry.payload || '（空）'
-    const displayPayload = entry.addsNewline ? `${escapeHtml(payload)}` : escapeHtml(payload)
     const newlineBadge = entry.addsNewline ? '<span class="badge send-nl">+改行</span>' : ''
     const unresolved = entry.unresolved ? '<span class="badge unused">未解決</span>' : ''
     const loopBadge = entry.loopInfo
@@ -186,6 +185,7 @@ export function createSidePanel(container: HTMLElement): {
       gotoLine !== null && gotoLine > 0
         ? `<button type="button" class="send-goto" data-line="${gotoLine}" title="行へ移動">⌖</button>`
         : ''
+    const payloadTitle = entry.rawArgs ? ` title="${escapeAttr(entry.rawArgs)}"` : ''
 
     return `
       <div class="send-item" data-index="${index}">
@@ -195,10 +195,9 @@ export function createSidePanel(container: HTMLElement): {
           ${loopBadge}
           ${gotoBtn}
         </div>
-        <div class="send-payload">${displayPayload}${entry.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>
+        <div class="send-payload"${payloadTitle}>${escapeHtml(payload)}${entry.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>
         <div class="send-meta">
           ${newlineBadge}${unresolved}
-          <span class="send-raw" title="${escapeAttr(entry.rawArgs)}">${escapeHtml(entry.rawArgs || '（引数なし）')}</span>
         </div>
       </div>
     `

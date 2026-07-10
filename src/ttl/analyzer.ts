@@ -36,6 +36,8 @@ export interface VariableInfo {
   arrayElementType?: 'integer' | 'string'
   /** 数値リテラル代入などで静的に判明した整数値 */
   constantValue?: number
+  /** include 先のソース内でのみ宣言された（親タブの未使用警告対象外） */
+  declaredInInclude?: boolean
 }
 
 export type DiagnosticSeverity = 'error' | 'warning' | 'info'
@@ -341,14 +343,14 @@ function registerCommandOutputVariables(
     const existing = ctx.varMap.get(varKey)
 
     if (!existing) {
-      ctx.varMap.set(varKey, {
+      ctx.varMap.set(varKey, applyIncludeDeclarationScope({
         name: varName,
         type: outputType,
         declaredAt: lineNum,
         usedAt: [],
         isSystem: isSystemVariable(varName),
         isUsed: false,
-      })
+      }, ctx))
     } else if (
       !existing.isSystem &&
       existing.type !== 'unknown' &&
@@ -363,9 +365,19 @@ function registerCommandOutputVariables(
       })
     } else if (existing.type === 'unknown') {
       existing.type = outputType
-      if (existing.declaredAt === 0) existing.declaredAt = lineNum
+      if (existing.declaredAt === 0) {
+        existing.declaredAt = lineNum
+        if (ctx.suppressDiagnostics) existing.declaredInInclude = true
+      }
     }
   }
+}
+
+function applyIncludeDeclarationScope(info: VariableInfo, ctx: AnalysisContext): VariableInfo {
+  if (ctx.suppressDiagnostics) {
+    info.declaredInInclude = true
+  }
+  return info
 }
 
 function markVariableUsed(ctx: AnalysisContext, lineNum: number, name: string): void {
@@ -659,14 +671,14 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
             severity: 'error',
           })
         } else if (!existing) {
-          const info: VariableInfo = {
+          const info = applyIncludeDeclarationScope({
             name: assignVarName,
             type: effectiveType,
             declaredAt: lineNum,
             usedAt: [],
             isSystem: isSystemVariable(assignVarName),
             isUsed: false,
-          }
+          }, ctx)
           applyConstantValue(info, valueToken, ctx.varMap)
           ctx.varMap.set(varKey, info)
         } else {
@@ -690,14 +702,14 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
           severity: 'error',
         })
       } else if (!existing) {
-        ctx.varMap.set(varKey, {
+        ctx.varMap.set(varKey, applyIncludeDeclarationScope({
           name: varName,
           type: 'integer',
           declaredAt: lineNum,
           usedAt: [lineNum],
           isSystem: false,
           isUsed: true,
-        })
+        }, ctx))
       } else {
         existing.type = existing.type === 'unknown' ? 'integer' : existing.type
         existing.constantValue = undefined
@@ -725,7 +737,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
 
       const existing = ctx.varMap.get(varKey)
       if (!existing) {
-        ctx.varMap.set(varKey, {
+        ctx.varMap.set(varKey, applyIncludeDeclarationScope({
           name: varName,
           type: 'array',
           declaredAt: lineNum,
@@ -735,7 +747,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
           arrayDeclared: true,
           arraySize: staticSize,
           arrayElementType: elementType,
-        })
+        }, ctx))
       } else {
         if (
           existing.type !== 'unknown' &&
@@ -880,7 +892,7 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
   }
 
   for (const info of ctx.varMap.values()) {
-    if (!info.isSystem && !info.isUsed && info.declaredAt > 0) {
+    if (!info.isSystem && !info.isUsed && info.declaredAt > 0 && !info.declaredInInclude) {
       if (options?.externallyUsedNames?.has(info.name.toLowerCase())) {
         info.isUsed = true
         continue
@@ -894,7 +906,9 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     }
   }
 
-  const variables = [...ctx.varMap.values()].sort((a, b) => {
+  const variables = [...ctx.varMap.values()]
+    .filter((v) => !v.declaredInInclude)
+    .sort((a, b) => {
     if (a.isSystem !== b.isSystem) return a.isSystem ? 1 : -1
     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
   })

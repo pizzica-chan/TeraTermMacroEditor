@@ -103,15 +103,18 @@ function appendScalarToPayload(
     return
   }
   if (scalar.kind === 'str') {
-    if (scalar.hint) {
-      parts.push(scalar.hint)
-      if (isRuntimeOrigin(scalar.origin)) unresolved.flag = true
-    } else if (isRuntimeOrigin(scalar.origin)) {
+    if (isRuntimeOrigin(scalar.origin)) {
+      if (scalar.value) parts.push(scalar.value)
       parts.push(runtimeSegmentLabel(scalar.origin!))
       unresolved.flag = true
-    } else {
-      parts.push(scalar.value)
+      return
     }
+    if (!scalar.value && scalar.hint) {
+      parts.push(scalar.hint)
+      unresolved.flag = true
+      return
+    }
+    parts.push(scalar.value)
     return
   }
   if (scalar.kind === 'int') {
@@ -520,6 +523,13 @@ function collectSendPayload(tokens: Token[], start: number, env: Env): { payload
 
   let i = start
   while (i < tokens.length) {
+    const tok = tokens[i]
+    if (tok?.kind === 'operator' && tok.text === '+') {
+      raw.push(tok.text)
+      i++
+      continue
+    }
+
     const operand = evalSendOperand(tokens, i, env)
     if (!operand) break
     raw.push(...operand.rawParts)
