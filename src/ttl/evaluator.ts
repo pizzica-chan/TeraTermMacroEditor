@@ -14,7 +14,14 @@ export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-re
 
 export type RuntimeScalar =
   | { kind: 'int'; value: number; origin?: ValueOrigin; hint?: string }
-  | { kind: 'str'; value: string; origin?: ValueOrigin; hint?: string }
+  | {
+      kind: 'str'
+      value: string
+      origin?: ValueOrigin
+      hint?: string
+      /** 文字列結合に実行時未定のオペランドを含む */
+      hasUnresolvedParts?: boolean
+    }
 
 export type RuntimeValue =
   | RuntimeScalar
@@ -91,6 +98,13 @@ function evalArrayElement(name: string, indexToken: Token, env: Env): RuntimeSca
   return arr.elements.get(index)
 }
 
+function isUnresolvedOperand(v: RuntimeScalar): boolean {
+  if (v.kind === 'int') return v.origin === 'dialog-result'
+  if (v.kind !== 'str') return false
+  if (isRuntimeOrigin(v.origin)) return true
+  return v.value === '' && v.hint !== undefined
+}
+
 function appendScalarToPayload(
   scalar: RuntimeScalar | undefined,
   parts: string[],
@@ -103,9 +117,13 @@ function appendScalarToPayload(
     return
   }
   if (scalar.kind === 'str') {
+    if (scalar.hasUnresolvedParts && scalar.hint) {
+      parts.push(scalar.hint)
+      unresolved.flag = true
+      return
+    }
     if (isRuntimeOrigin(scalar.origin)) {
-      if (scalar.value) parts.push(scalar.value)
-      parts.push(runtimeSegmentLabel(scalar.origin!))
+      parts.push(scalar.hint ?? runtimeSegmentLabel(scalar.origin!))
       unresolved.flag = true
       return
     }
@@ -266,11 +284,14 @@ function buildStringFromOperands(operands: RuntimeScalar[]): RuntimeScalar & { k
     if (part) hintParts.push(part)
   }
 
+  const hasUnresolvedParts = operands.some(isUnresolvedOperand)
+
   return {
     kind: 'str',
     value,
     origin,
     hint: hintParts.length > 0 ? hintParts.join(' + ') : undefined,
+    hasUnresolvedParts: hasUnresolvedParts ? true : undefined,
   }
 }
 
