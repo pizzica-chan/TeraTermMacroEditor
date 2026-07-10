@@ -2,12 +2,14 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 
+import { cloudflare } from "@cloudflare/vite-plugin";
+
 const base = './'
 
 function assetRelativePath(href: string): string {
   const assetsIndex = href.indexOf('assets/')
   if (assetsIndex >= 0) return href.slice(assetsIndex)
-  return href.replace(/^\.\//, '')
+  return href.replace(/^\.\//, '');
 }
 
 /** 配布向け HTML 調整 — CSS インライン化、classic script を #app の後ろへ */
@@ -43,12 +45,12 @@ function fixDistHtml(): Plugin {
 
       writeFileSync(htmlPath, html)
     },
-  }
+  };
 }
 
 export default defineConfig({
   base,
-  plugins: [fixDistHtml()],
+  plugins: [fixDistHtml(), cloudflare()],
   build: {
     cssCodeSplit: false,
     target: 'es2015',
