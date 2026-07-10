@@ -4,7 +4,7 @@ import {
   getSystemVariableType,
   isSystemVariable,
 } from './commands'
-import { checkCommandArgs } from './argChecker'
+import { checkCommandArgs, findAssignmentIndex } from './argChecker'
 import {
   computeLoopIncludeEffectiveRaw,
   createForLoopBlockList,
@@ -80,15 +80,79 @@ interface AnalysisContext {
   /** インクルード先の行に対する診断を抑制（親タブのリントと行番号がずれるため） */
   suppressDiagnostics: boolean
   forLoopBlocks: ForLoopBlock[]
+  /** トップレベルの end / exit 以降（ファイル全体がデッドコード） */
+  fileUnreachable: boolean
+  /** ブロック内の end / exit 以降（endif 等でスコープ復帰） */
+  blockUnreachableStack: boolean[]
+}
+
+/** include 先は独立したソース単位で解析する（親のブロック・到達不能状態は引き継がない） */
+function createIncludeChildContext(
+  parent: AnalysisContext,
+  content: string,
+  childResolver: IncludeResolver,
+): AnalysisContext {
+  return {
+    diagnostics: parent.diagnostics,
+    varMap: parent.varMap,
+    labels: new Set(),
+    blockStack: [],
+    includeResolver: childResolver,
+    includeStack: parent.includeStack,
+    includeTabStack: parent.includeTabStack,
+    suppressDiagnostics: true,
+    forLoopBlocks: createForLoopBlockList(content),
+    fileUnreachable: false,
+    blockUnreachableStack: [],
+  }
 }
 
 interface LineLoopResult {
   exit: boolean
-  end: boolean
 }
 
 interface LineLoopOpts {
   stopOnExit?: boolean
+}
+
+function isLineUnreachable(ctx: AnalysisContext): boolean {
+  const blockUnreachable =
+    ctx.blockUnreachableStack[ctx.blockUnreachableStack.length - 1] ?? false
+  return ctx.fileUnreachable || blockUnreachable
+}
+
+function enterBlockScope(ctx: AnalysisContext): void {
+  ctx.blockUnreachableStack.push(false)
+}
+
+function leaveBlockScope(ctx: AnalysisContext): void {
+  ctx.blockUnreachableStack.pop()
+}
+
+function markMacroTerminator(ctx: AnalysisContext, atTopLevel: boolean): void {
+  if (atTopLevel) {
+    ctx.fileUnreachable = true
+    return
+  }
+  const depth = ctx.blockUnreachableStack.length
+  if (depth > 0) {
+    ctx.blockUnreachableStack[depth - 1] = true
+  } else {
+    ctx.fileUnreachable = true
+  }
+}
+
+function warnDeadCode(ctx: AnalysisContext, lineNum: number): void {
+  if (ctx.suppressDiagnostics) return
+  const message = ctx.fileUnreachable
+    ? 'この行には到達しません（end / exit によりマクロの実行が終了した後のコードです）'
+    : 'この行には到達しません（ブロック内の end / exit より後のコードです）'
+  pushDiagnostic(ctx, {
+    line: lineNum,
+    column: 0,
+    message,
+    severity: 'warning',
+  })
 }
 
 function inferTypeFromValue(text: string): VarType {
@@ -233,6 +297,23 @@ const BLOCK_PAIRS: [string, string][] = [
   ['until', 'enduntil'],
 ]
 
+/** ブロック構造キーワード（デッドコード警告の対象外） */
+const BLOCK_BRANCH_KEYWORDS = new Set([
+  ...BLOCK_PAIRS.map(([, close]) => close),
+  'elseif',
+  'else',
+])
+
+function shouldWarnDeadCode(tokens: Token[]): boolean {
+  let offset = 0
+  if (tokens[0]?.kind === 'label') offset = 1
+  const first = tokens[offset]
+  if (first?.kind === 'identifier' && BLOCK_BRANCH_KEYWORDS.has(first.text.toLowerCase())) {
+    return false
+  }
+  return true
+}
+
 function markVariableUsed(ctx: AnalysisContext, lineNum: number, name: string): void {
   const lower = name.toLowerCase()
   if (RESERVED.has(lower)) return
@@ -308,12 +389,7 @@ function analyzeResolvedInclude(
   const childResolver = linkedTabId
     ? ctx.includeResolver!.resolverForLinkedTab(linkedTabId) ?? ctx.includeResolver!
     : ctx.includeResolver!
-  const childCtx: AnalysisContext = {
-    ...ctx,
-    includeResolver: childResolver,
-    blockStack: [...ctx.blockStack],
-    suppressDiagnostics: true,
-  }
+  const childCtx = createIncludeChildContext(ctx, content, childResolver)
   analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
   ctx.includeStack.pop()
   if (linkedTabId) ctx.includeTabStack.pop()
@@ -323,11 +399,15 @@ function pushDiagnostic(ctx: AnalysisContext, diag: Diagnostic): void {
   if (!ctx.suppressDiagnostics) ctx.diagnostics.push(diag)
 }
 
-function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopOpts): LineLoopResult {
+function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoopOpts): LineLoopResult {
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const lineNum = lineIdx + 1
     const line = lines[lineIdx]!
     const tokens = tokenizeLine(line, lineNum)
+
+    if (isLineUnreachable(ctx) && line.trim().length > 0 && shouldWarnDeadCode(tokens)) {
+      warnDeadCode(ctx, lineNum)
+    }
 
     if (tokens.length === 0) continue
 
@@ -416,22 +496,21 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
       continue
     }
 
-    if (cmd === 'exit') {
-      if (loopOpts.stopOnExit) return { exit: true, end: false }
-      return { exit: false, end: true }
-    }
-
-    if (cmd === 'end') {
-      return { exit: false, end: true }
+    if (cmd === 'exit' || cmd === 'end') {
+      markMacroTerminator(ctx, ctx.blockStack.length === 0)
     }
 
     for (const [open, close] of BLOCK_PAIRS) {
       if (cmd === open) {
+        enterBlockScope(ctx)
         ctx.blockStack.push({ keyword: open, line: lineNum })
       }
       if (cmd === close) {
-        const last = ctx.blockStack.pop()
-        if (!last || last.keyword !== open) {
+        const last = ctx.blockStack[ctx.blockStack.length - 1]
+        if (last?.keyword === open) {
+          leaveBlockScope(ctx)
+          ctx.blockStack.pop()
+        } else {
           pushDiagnostic(ctx, {
             line: lineNum,
             column: first.column,
@@ -459,9 +538,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
       }
     }
 
-    const assignIdx = tokens.findIndex(
-      (t, i) => i > 0 && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
-    )
+    const assignIdx = findAssignmentIndex(tokens, tokens[0]?.kind === 'label' ? 1 : 0)
 
     let assignVarName: string | null = null
     if (assignIdx > 0) {
@@ -703,7 +780,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
     }
   }
 
-  return { exit: false, end: false }
+  return { exit: false }
 }
 
 export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisResult {
@@ -718,6 +795,8 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     includeTabStack: [],
     suppressDiagnostics: false,
     forLoopBlocks: createForLoopBlockList(source),
+    fileUnreachable: false,
+    blockUnreachableStack: [],
   }
 
   for (const name of ['timeout', 'mtimeout', 'result', 'inputstr', 'matchstr', 'paramcnt', 'params']) {
@@ -740,16 +819,15 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     })
   }
 
-  const { end } = analyzeLines(lines, ctx, {})
-  if (!end) {
-    for (const block of ctx.blockStack) {
-      pushDiagnostic(ctx, {
-        line: block.line,
-        column: 0,
-        message: `'${block.keyword}' ブロックが閉じられていません`,
-        severity: 'error',
-      })
-    }
+  analyzeLines(lines, ctx, {})
+
+  for (const block of ctx.blockStack) {
+    pushDiagnostic(ctx, {
+      line: block.line,
+      column: 0,
+      message: `'${block.keyword}' ブロックが閉じられていません`,
+      severity: 'error',
+    })
   }
 
   for (const info of ctx.varMap.values()) {

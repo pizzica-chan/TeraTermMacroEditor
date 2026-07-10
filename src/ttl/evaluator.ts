@@ -6,6 +6,7 @@ import {
   normalizeIncludePath,
   resolveLoopIncludeBindingKey,
 } from './includeRefs'
+import { findAssignmentIndex } from './argChecker'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
 
 export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
@@ -370,14 +371,16 @@ function processLine(env: Env, line: string, lineNum: number): void {
     return
   }
 
-  const assignIdx = tokens.findIndex(
-    (t, i) => i > offset && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
-  )
+  const assignIdx = findAssignmentIndex(tokens, offset)
 
   if (assignIdx > offset) {
     const arrayName = isArrayAssignTarget(tokens, assignIdx)
     const valueToken = tokens[assignIdx + 1]
-    const scalar = evalTokenValue(valueToken, env)
+    let scalar = evalTokenValue(valueToken, env)
+    if (!scalar && valueToken) {
+      const intVal = evalIntExpr(tokens, assignIdx + 1, env)
+      if (intVal !== undefined) scalar = { kind: 'int', value: intVal }
+    }
 
     if (arrayName !== null && scalar) {
       const indexTok = tokens[assignIdx - 2]
@@ -504,6 +507,159 @@ function recordSend(
   })
 }
 
+function lineKeyword(line: string, lineIdx: number): string {
+  const tokens = tokenizeLine(line, lineIdx + 1)
+  let off = tokens[0]?.kind === 'label' ? 1 : 0
+  return tokens[off]?.kind === 'identifier' ? tokens[off]!.text.toLowerCase() : ''
+}
+
+function findNextIfSiblingLine(lines: string[], fromLineIdx: number, endIdx: number): number {
+  for (let i = fromLineIdx + 1; i <= endIdx; i++) {
+    const kw = lineKeyword(lines[i]!, i)
+    if (kw === 'elseif' || kw === 'else' || kw === 'endif') return i
+    if (kw === 'if') i = findBlockEnd(lines, i, 'if', 'endif')
+  }
+  return endIdx
+}
+
+function scalarCompare(
+  lhs: RuntimeScalar | undefined,
+  op: string,
+  rhs: RuntimeScalar | undefined,
+): boolean | undefined {
+  if (!lhs || !rhs) return undefined
+  if (lhs.kind === 'str' && rhs.kind === 'str') {
+    if (op === '=') return lhs.value === rhs.value
+    if (op === '<>') return lhs.value !== rhs.value
+    return undefined
+  }
+  if (lhs.kind === 'int' && rhs.kind === 'int') {
+    switch (op) {
+      case '=':
+        return lhs.value === rhs.value
+      case '<>':
+        return lhs.value !== rhs.value
+      case '<':
+        return lhs.value < rhs.value
+      case '>':
+        return lhs.value > rhs.value
+      case '<=':
+        return lhs.value <= rhs.value
+      case '>=':
+        return lhs.value >= rhs.value
+      default:
+        return undefined
+    }
+  }
+  return undefined
+}
+
+function evalBoolExpr(tokens: Token[], env: Env): boolean | undefined {
+  if (tokens.length === 0) return undefined
+
+  if (tokens[0]?.kind === 'identifier' && tokens[0].text.toLowerCase() === 'not') {
+    const inner = evalBoolExpr(tokens.slice(1), env)
+    return inner === undefined ? undefined : !inner
+  }
+
+  for (let j = 1; j < tokens.length; j++) {
+    const op = tokens[j]
+    if (op?.kind !== 'operator' || !['=', '<>', '<', '>', '<=', '>='].includes(op.text)) continue
+
+    const lhs = evalTokenValue(tokens[j - 1], env)
+    const rhs = evalTokenValue(tokens[j + 1], env)
+    const cmp = scalarCompare(lhs, op.text, rhs)
+    if (cmp === undefined) return undefined
+
+    const andOr = tokens[j + 2]
+    if (andOr?.kind === 'identifier') {
+      const lo = andOr.text.toLowerCase()
+      if (lo === 'and' || lo === 'or') {
+        const rest = evalBoolExpr(tokens.slice(j + 3), env)
+        if (rest === undefined) return undefined
+        return lo === 'and' ? cmp && rest : cmp || rest
+      }
+    }
+    return cmp
+  }
+
+  return undefined
+}
+
+function tryEvalCondition(line: string, lineIdx: number, env: Env, cmd: string): boolean | undefined {
+  const tokens = tokenizeLine(line, lineIdx + 1)
+  let off = tokens[0]?.kind === 'label' ? 1 : 0
+  let condEnd = tokens.length
+
+  if (cmd === 'if' || cmd === 'elseif') {
+    const thenIdx = tokens.findIndex(
+      (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
+    )
+    if (thenIdx < 0) return undefined
+    condEnd = thenIdx
+  } else if (cmd !== 'while' && cmd !== 'until') {
+    return undefined
+  }
+
+  return evalBoolExpr(tokens.slice(off + 1, condEnd), env)
+}
+
+function processIfChain(
+  env: Env,
+  lines: string[],
+  lineIdx: number,
+  beforeLine: Map<number, Env> | null,
+  afterLine: Map<number, Env> | null,
+  opts: EvalOptions,
+): StmtResult {
+  const endIdx = findBlockEnd(lines, lineIdx, 'if', 'endif')
+  let cursor = lineIdx
+  let executed = false
+
+  while (cursor <= endIdx) {
+    const kw = lineKeyword(lines[cursor]!, cursor)
+    if (kw === 'endif') break
+
+    if (kw === 'else') {
+      if (!executed) {
+        const bodyStart = cursor + 1
+        const bodyEnd = endIdx - 1
+        if (
+          bodyStart <= bodyEnd &&
+          processBlock(env, lines, bodyStart, bodyEnd, beforeLine, afterLine, opts)
+        ) {
+          return { nextIdx: endIdx, stopAll: true }
+        }
+      }
+      break
+    }
+
+    if (kw === 'if' || kw === 'elseif') {
+      const condResult = tryEvalCondition(lines[cursor]!, cursor, env, kw)
+      const nextSibling = findNextIfSiblingLine(lines, cursor, endIdx)
+      const bodyStart = cursor + 1
+      const bodyEnd = nextSibling - 1
+
+      if (condResult !== false && bodyStart <= bodyEnd) {
+        if (
+          processBlock(env, lines, bodyStart, bodyEnd, beforeLine, afterLine, opts)
+        ) {
+          return { nextIdx: endIdx, stopAll: true }
+        }
+        executed = true
+        break
+      }
+
+      cursor = nextSibling
+      continue
+    }
+
+    cursor++
+  }
+
+  return { nextIdx: endIdx }
+}
+
 function findBlockEnd(lines: string[], startIdx: number, open: string, close: string): number {
   let depth = 1
   for (let i = startIdx + 1; i < lines.length; i++) {
@@ -524,6 +680,8 @@ interface EvalOptions {
   includeStack: string[]
   includeTabStack: string[]
   inInclude?: boolean
+  /** if/while/for 等のブロック内（end/exit はブロック脱出のみ） */
+  inBlock?: boolean
   locationPrefix?: string
   sendEntries?: SendEntry[]
   loopFrame?: { variable: string; value: number; index: number; total: number }
@@ -533,13 +691,19 @@ interface StmtResult {
   nextIdx: number
   stopAll?: boolean
   stopInclude?: boolean
+  /** ブロック内の end/exit（マクロ全体は継続） */
+  stopBlock?: boolean
 }
 
 function processIncludedContent(env: Env, content: string, opts: EvalOptions): StmtResult {
   const lines = stripComments(content)
   let i = 0
   while (i < lines.length) {
-    const result = processStatement(env, lines, i, null, null, { ...opts, inInclude: true })
+    const result = processStatement(env, lines, i, null, null, {
+      ...opts,
+      inInclude: true,
+      inBlock: false,
+    })
     if (result.stopAll) return result
     if (result.stopInclude) break
     i = result.nextIdx + 1
@@ -567,10 +731,10 @@ function processBlock(
   while (i <= endIdx) {
     const lineNum = i + 1
     if (captureLineEnv && beforeLine) beforeLine.set(lineNum, cloneEnv(env))
-    const result = processStatement(env, lines, i, beforeLine, afterLine, opts)
+    const result = processStatement(env, lines, i, beforeLine, afterLine, { ...opts, inBlock: true })
     if (captureLineEnv && afterLine) afterLine.set(lineNum, cloneEnv(env))
     if (result.stopAll) return true
-    if (result.stopInclude) return false
+    if (result.stopBlock || result.stopInclude) return false
     i = result.nextIdx > i ? result.nextIdx + 1 : i + 1
   }
   return false
@@ -659,12 +823,14 @@ function processStatement(
   }
 
   if (cmd === 'exit') {
-    if (opts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
+    if (opts.inInclude && !opts.inBlock) return { nextIdx: lineIdx, stopInclude: true }
+    if (opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
     return { nextIdx: lineIdx, stopAll: true }
   }
 
   if (cmd === 'end') {
-    if (opts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
+    if (opts.inInclude && !opts.inBlock) return { nextIdx: lineIdx, stopInclude: true }
+    if (opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
     return { nextIdx: lineIdx, stopAll: true }
   }
 
@@ -709,6 +875,9 @@ function processStatement(
   }
 
   for (const [open, close] of Object.entries(BLOCK_PAIRS)) {
+    if (cmd === 'if') {
+      return processIfChain(env, lines, lineIdx, beforeLine, afterLine, opts)
+    }
     if (cmd === open && open !== 'for') {
       const endIdx = findBlockEnd(lines, lineIdx, open, close)
       if (processBlock(env, lines, lineIdx + 1, endIdx - 1, beforeLine, afterLine, opts)) {
@@ -750,7 +919,10 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   }
 
   let lineIdx = 0
+  const maxSteps = Math.max(lines.length * 4, 64)
+  let steps = 0
   while (lineIdx < lines.length) {
+    if (++steps > maxSteps) break
     const lineNum = lineIdx + 1
     beforeLine.set(lineNum, cloneEnv(env))
     const result = processStatement(env, lines, lineIdx, beforeLine, afterLine, evalOpts)
@@ -851,11 +1023,10 @@ function computeEnvAtColumn(
 ): Env {
   const base = getEnvForLine(lineNum, beforeLine, afterLine)
   const tokens = tokenizeLine(line, lineNum)
+  let stmtOffset = 0
+  if (tokens[0]?.kind === 'label') stmtOffset = 1
 
-  // 同一行内でホバー位置より前に完了した代入を反映
-  const assignIdx = tokens.findIndex(
-    (t, j) => j > 0 && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
-  )
+  const assignIdx = findAssignmentIndex(tokens, stmtOffset)
   if (assignIdx < 0) return base
 
   const assignEnd = tokens[assignIdx + 1]

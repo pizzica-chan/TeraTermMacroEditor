@@ -2,6 +2,7 @@ import { linter, type Diagnostic as CMDiagnostic } from '@codemirror/lint'
 import { analyzeTTL } from './analyzer'
 import {
   analysisCacheRevisionField,
+  getCachedAnalysis,
   getExternallyUsedNames,
   getIncludeResolver,
   includeGraphRevisionField,
@@ -38,10 +39,12 @@ function mapDiagnostics(
 export const ttlLinter = linter(
   (view) => {
     const source = view.state.doc.toString()
-    const result = analyzeTTL(source, {
-      includeResolver: getIncludeResolver(),
-      externallyUsedNames: getExternallyUsedNames(),
-    })
+    const result =
+      getCachedAnalysis(source) ??
+      analyzeTTL(source, {
+        includeResolver: getIncludeResolver(),
+        externallyUsedNames: getExternallyUsedNames(),
+      })
     return mapDiagnostics(view.state.doc, result.diagnostics)
   },
   {

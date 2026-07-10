@@ -1,3 +1,4 @@
+import { findAssignmentIndex } from './argChecker'
 import { stripComments, tokenizeLine, unquoteString, type Token } from './tokenize'
 
 export const MAX_INCLUDE_LOOP_ITERATIONS = 256
@@ -208,9 +209,7 @@ function collectStaticIntConstants(lines: string[], beforeLineIdx?: number): Map
       const tokens = tokenizeLine(lines[i]!, i + 1)
       let offset = 0
       if (tokens[0]?.kind === 'label') offset = 1
-      const assignIdx = tokens.findIndex(
-        (t, j) => j > offset && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
-      )
+      const assignIdx = findAssignmentIndex(tokens, offset)
       if (assignIdx <= offset) continue
       const lhs = tokens[assignIdx - 1]
       const rhs = tokens[assignIdx + 1]
@@ -241,9 +240,9 @@ function collectStaticStringArrayValues(lines: string[], beforeLineIdx?: number)
 
   for (let i = 0; i < endLine; i++) {
     const tokens = tokenizeLine(lines[i]!, i + 1)
-    const assignIdx = tokens.findIndex(
-      (t, j) => j > 0 && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
-    )
+    let offset = 0
+    if (tokens[0]?.kind === 'label') offset = 1
+    const assignIdx = findAssignmentIndex(tokens, offset)
     if (assignIdx < 4) continue
 
     const close = tokens[assignIdx - 1]

@@ -8,15 +8,42 @@ export interface ArgDiagnostic {
   severity: 'error' | 'warning' | 'info'
 }
 
+const CONDITIONAL_CMDS = new Set(['if', 'elseif', 'while', 'until'])
+
+/**
+ * 代入演算子の位置を返す。if/elseif/while/until の条件内の = は除外する。
+ */
+export function findAssignmentIndex(tokens: Token[], stmtOffset = 0): number {
+  const cmd =
+    tokens[stmtOffset]?.kind === 'identifier' ? tokens[stmtOffset].text.toLowerCase() : ''
+
+  if (CONDITIONAL_CMDS.has(cmd)) {
+    if (cmd === 'if' || cmd === 'elseif') {
+      const thenIdx = tokens.findIndex(
+        (t, i) => i > stmtOffset && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
+      )
+      if (thenIdx < 0) return -1
+      return tokens.findIndex(
+        (t, i) => i > thenIdx && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
+      )
+    }
+    return -1
+  }
+
+  return tokens.findIndex(
+    (t, i) => i > stmtOffset && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
+  )
+}
+
 /** 代入行かどうか */
 export function isAssignmentLine(tokens: Token[]): boolean {
-  const assignIdx = tokens.findIndex(
-    (t, i) => i > 0 && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
-  )
-  if (assignIdx <= 0) return false
+  let offset = 0
+  if (tokens[0]?.kind === 'label') offset = 1
+  const assignIdx = findAssignmentIndex(tokens, offset)
+  if (assignIdx <= offset) return false
   if (tokens[assignIdx - 1]?.kind === 'identifier') return true
   return (
-    assignIdx >= 4 &&
+    assignIdx >= offset + 4 &&
     tokens[assignIdx - 1]?.text === ']' &&
     tokens[assignIdx - 4]?.kind === 'identifier'
   )
