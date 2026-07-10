@@ -184,22 +184,27 @@ export function getLoopIncludeCommonTabId(ref: IncludeRef, bindings: Record<stri
 }
 
 export function computeLoopValues(start: number, end: number): number[] {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return []
+  const estimated = Math.abs(end - start) + 1
+  if (estimated > MAX_INCLUDE_LOOP_ITERATIONS) return []
+
   const values: number[] = []
   const step = start <= end ? 1 : -1
   for (let v = start; step > 0 ? v <= end : v >= end; v += step) {
     values.push(v)
-    if (values.length > MAX_INCLUDE_LOOP_ITERATIONS) return []
   }
   return values
 }
 
-function collectStaticIntConstants(lines: string[]): Map<string, number> {
+/** for 行より前に確定している整数定数のみ収集（後方参照は使わない） */
+function collectStaticIntConstants(lines: string[], beforeLineIdx?: number): Map<string, number> {
+  const endLine = beforeLineIdx ?? lines.length
   const constants = new Map<string, number>()
   let changed = true
 
   while (changed) {
     changed = false
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = 0; i < endLine; i++) {
       const tokens = tokenizeLine(lines[i]!, i + 1)
       let offset = 0
       if (tokens[0]?.kind === 'label') offset = 1
@@ -230,10 +235,11 @@ function collectStaticIntConstants(lines: string[]): Map<string, number> {
   return constants
 }
 
-function collectStaticStringArrayValues(lines: string[]): Map<string, Map<number, string>> {
+function collectStaticStringArrayValues(lines: string[], beforeLineIdx?: number): Map<string, Map<number, string>> {
+  const endLine = beforeLineIdx ?? lines.length
   const arrays = new Map<string, Map<number, string>>()
 
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = 0; i < endLine; i++) {
     const tokens = tokenizeLine(lines[i]!, i + 1)
     const assignIdx = tokens.findIndex(
       (t, j) => j > 0 && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
@@ -332,7 +338,7 @@ export function computeLoopIncludeEffectiveRaw(
 ): string | undefined {
   const arrayName = findLoopIncludeAliasArray(lines, includeLine, loopBlock, includeArg)
   if (!arrayName) return undefined
-  const constants = arrayConstants ?? collectStaticStringArrayValues(lines)
+  const constants = arrayConstants ?? collectStaticStringArrayValues(lines, includeLine - 1)
   return constants.get(arrayName)?.get(loopValue)
 }
 
@@ -343,7 +349,7 @@ function buildLoopEffectiveRaws(
   includeArg: string,
   values: number[],
 ): Record<number, string> | undefined {
-  const arrayConstants = collectStaticStringArrayValues(lines)
+  const arrayConstants = collectStaticStringArrayValues(lines, includeLine - 1)
   const effectiveRawsByValue: Record<number, string> = {}
   for (const v of values) {
     const effectiveRaw = computeLoopIncludeEffectiveRaw(
@@ -382,7 +388,6 @@ function findBlockEndIndex(lines: string[], startIdx: number, open: string, clos
 }
 
 function findForLoopBlocks(lines: string[]): ForLoopBlock[] {
-  const constants = collectStaticIntConstants(lines)
   const blocks: ForLoopBlock[] = []
 
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
@@ -393,6 +398,7 @@ function findForLoopBlocks(lines: string[]): ForLoopBlock[] {
     if (tokens[start + 1]?.kind !== 'identifier') continue
 
     const variable = tokens[start + 1]!.text
+    const constants = collectStaticIntConstants(lines, lineIdx)
     const loopStart = resolveStaticIntToken(tokens[start + 2], constants)
     const loopEnd = resolveStaticIntToken(tokens[start + 3], constants)
     if (loopStart === undefined || loopEnd === undefined) continue

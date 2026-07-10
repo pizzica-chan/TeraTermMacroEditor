@@ -20,7 +20,7 @@ import {
   type IncludeResolveContext,
 } from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
-import { setIncludeResolver, setExternallyUsedNames, setAnalysisCache } from './ttl/analysisContext'
+import { setIncludeResolver, setExternallyUsedNames, setAnalysisCache, clearAnalysisCache } from './ttl/analysisContext'
 import { evaluateTTL } from './ttl/evaluator'
 import { DocumentSettings } from './text/documentSettings'
 import type { TextEncoding, NewlineType } from './text/types'
@@ -85,6 +85,7 @@ function syncUiFromTab(tab: EditorTab): void {
   setEncodingSelect(tab.docSettings.encoding)
   setNewlineSelect(tab.docSettings.newline)
   updateStatusBar(tab)
+  clearAnalysisCache()
   runAnalysisNow(editor.getValue())
   updateCursorPosition()
   schedulePersistWorkspaceSession()
@@ -178,6 +179,9 @@ function runAnalysisImmediate(text: string): void {
   const evaluation = evaluateTTL(text, {
     includeResolver: resolver,
   })
+
+  if (editor.getValue() !== text) return
+
   setAnalysisCache(text, result, evaluation)
   editor.notifyAnalysisCacheChanged()
 

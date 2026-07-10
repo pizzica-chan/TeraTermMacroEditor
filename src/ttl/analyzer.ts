@@ -312,6 +312,7 @@ function analyzeResolvedInclude(
     ...ctx,
     includeResolver: childResolver,
     blockStack: [...ctx.blockStack],
+    suppressDiagnostics: true,
   }
   analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
   ctx.includeStack.pop()
