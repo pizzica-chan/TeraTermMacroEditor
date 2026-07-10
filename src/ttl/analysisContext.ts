@@ -1,10 +1,15 @@
 import { StateEffect, StateField, type Extension } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
-import type { AnalysisResult, IncludeResolver } from './analyzer'
+import type { AnalysisResult, IncludeResolver, VariableInfo } from './analyzer'
 import type { EvaluationResult } from './evaluator'
 
 let currentResolver: IncludeResolver | undefined
-let externallyUsedNames: ReadonlySet<string> | undefined
+let includeCrossTabContext:
+  | {
+      externallyDeclared: ReadonlyMap<string, VariableInfo>
+      externallyUsed: ReadonlySet<string>
+    }
+  | undefined
 
 let cachedSource = ''
 let cachedAnalysis: AnalysisResult | null = null
@@ -49,12 +54,29 @@ export function getIncludeResolver(): IncludeResolver | undefined {
   return currentResolver
 }
 
-export function setExternallyUsedNames(names: ReadonlySet<string> | undefined): void {
-  externallyUsedNames = names
+export function setIncludeCrossTabContext(
+  context:
+    | {
+        externallyDeclared: ReadonlyMap<string, VariableInfo>
+        externallyUsed: ReadonlySet<string>
+      }
+    | undefined,
+): void {
+  includeCrossTabContext = context
 }
 
+export function getIncludeCrossTabContext():
+  | {
+      externallyDeclared: ReadonlyMap<string, VariableInfo>
+      externallyUsed: ReadonlySet<string>
+    }
+  | undefined {
+  return includeCrossTabContext
+}
+
+/** @deprecated getIncludeCrossTabContext().externallyUsed を使用 */
 export function getExternallyUsedNames(): ReadonlySet<string> | undefined {
-  return externallyUsedNames
+  return includeCrossTabContext?.externallyUsed
 }
 
 export function setAnalysisCache(

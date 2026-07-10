@@ -38,6 +38,10 @@ export interface VariableInfo {
   constantValue?: number
   /** include 先のソース内でのみ宣言された（親タブの未使用警告対象外） */
   declaredInInclude?: boolean
+  /** include 元タブで宣言された変数（include 先タブ解析用に注入） */
+  declaredExternally?: boolean
+  /** include 元タブ側での使用（include 先で宣言した変数の未使用判定用） */
+  usedOutsideInclude?: boolean
 }
 
 export type DiagnosticSeverity = 'error' | 'warning' | 'info'
@@ -68,6 +72,38 @@ export interface AnalyzeOptions {
   includeResolver?: IncludeResolver
   /** 他タブ（include 元）での使用として扱う変数名 */
   externallyUsedNames?: ReadonlySet<string>
+  /** include 元タブで宣言済みの変数（include 先タブ解析時に注入） */
+  externallyDeclaredVars?: ReadonlyMap<string, VariableInfo>
+  /** include 連携の変数収集（親タブ解析時に指定） */
+  includeExchange?: IncludeCrossTabVarCollector
+}
+
+/** include 親子タブ間の変数連携 */
+export interface IncludeCrossTabVarContext {
+  /** 親タブで宣言され include 先から参照可能な変数 */
+  externallyDeclared: Map<string, VariableInfo>
+  /** include 先で宣言され親タブでのみ使用される変数名 */
+  externallyUsed: Set<string>
+}
+
+export interface IncludeCrossTabVarCollector {
+  targetTabId: string
+  externallyDeclared: Map<string, VariableInfo>
+  externallyUsed: Set<string>
+}
+
+export function collectIncludeCrossTabVarContext(
+  parentSource: string,
+  parentResolver: IncludeResolver,
+  childTabId: string,
+): IncludeCrossTabVarContext {
+  const externallyDeclared = new Map<string, VariableInfo>()
+  const externallyUsed = new Set<string>()
+  analyzeTTL(parentSource, {
+    includeResolver: parentResolver,
+    includeExchange: { targetTabId: childTabId, externallyDeclared, externallyUsed },
+  })
+  return { externallyDeclared, externallyUsed }
 }
 
 interface AnalysisContext {
@@ -86,6 +122,39 @@ interface AnalysisContext {
   fileUnreachable: boolean
   /** ブロック内の end / exit 以降（endif 等でスコープ復帰） */
   blockUnreachableStack: boolean[]
+  includeExchange?: IncludeCrossTabVarCollector
+}
+
+function cloneVariableInfo(info: VariableInfo): VariableInfo {
+  return { ...info, usedAt: [...info.usedAt] }
+}
+
+function snapshotParentScopeVars(varMap: Map<string, VariableInfo>): Map<string, VariableInfo> {
+  const snap = new Map<string, VariableInfo>()
+  for (const [key, info] of varMap) {
+    if (info.declaredInInclude || info.declaredExternally) continue
+    snap.set(key, cloneVariableInfo(info))
+  }
+  return snap
+}
+
+function mergeExternalVarMaps(
+  target: Map<string, VariableInfo>,
+  source: ReadonlyMap<string, VariableInfo>,
+): void {
+  for (const [key, info] of source) {
+    if (!target.has(key)) {
+      target.set(key, cloneVariableInfo(info))
+    }
+  }
+}
+
+function recordVariableUsage(ctx: AnalysisContext, info: VariableInfo, lineNum: number): void {
+  info.usedAt.push(lineNum)
+  info.isUsed = true
+  if (!ctx.suppressDiagnostics) {
+    info.usedOutsideInclude = true
+  }
 }
 
 /** include 先は独立したソース単位で解析する（親のブロック・到達不能状態は引き継がない） */
@@ -385,8 +454,7 @@ function markVariableUsed(ctx: AnalysisContext, lineNum: number, name: string): 
   if (RESERVED.has(lower)) return
   const info = ctx.varMap.get(lower)
   if (info) {
-    info.usedAt.push(lineNum)
-    info.isUsed = true
+    recordVariableUsage(ctx, info, lineNum)
   }
 }
 
@@ -455,6 +523,10 @@ function analyzeResolvedInclude(
   const childResolver = linkedTabId
     ? ctx.includeResolver!.resolverForLinkedTab(linkedTabId) ?? ctx.includeResolver!
     : ctx.includeResolver!
+  const exchange = ctx.includeExchange
+  if (linkedTabId && exchange?.targetTabId === linkedTabId) {
+    mergeExternalVarMaps(exchange.externallyDeclared, snapshotParentScopeVars(ctx.varMap))
+  }
   const childCtx = createIncludeChildContext(ctx, content, childResolver)
   analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
   ctx.includeStack.pop()
@@ -702,19 +774,20 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
           severity: 'error',
         })
       } else if (!existing) {
-        ctx.varMap.set(varKey, applyIncludeDeclarationScope({
+        const info = applyIncludeDeclarationScope({
           name: varName,
           type: 'integer',
           declaredAt: lineNum,
-          usedAt: [lineNum],
+          usedAt: [],
           isSystem: false,
-          isUsed: true,
-        }, ctx))
+          isUsed: false,
+        }, ctx)
+        recordVariableUsage(ctx, info, lineNum)
+        ctx.varMap.set(varKey, info)
       } else {
         existing.type = existing.type === 'unknown' ? 'integer' : existing.type
         existing.constantValue = undefined
-        existing.usedAt.push(lineNum)
-        existing.isUsed = true
+        recordVariableUsage(ctx, existing, lineNum)
       }
     }
 
@@ -790,8 +863,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
       if (i > 0 && tokens[i - 1]?.text === '[' && tokens[i + 1]?.text === ']') {
         const info = ctx.varMap.get(lower)
         if (info) {
-          info.usedAt.push(lineNum)
-          info.isUsed = true
+          recordVariableUsage(ctx, info, lineNum)
         } else if (!isSystemVariable(lower)) {
           pushDiagnostic(ctx, {
             line: lineNum,
@@ -808,8 +880,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
         const indexToken = tokens[i + 2]
         const info = ctx.varMap.get(lower)
         if (info) {
-          info.usedAt.push(lineNum)
-          info.isUsed = true
+          recordVariableUsage(ctx, info, lineNum)
         } else if (!isSystemVariable(lower)) {
           pushDiagnostic(ctx, {
             line: lineNum,
@@ -827,8 +898,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
 
       const info = ctx.varMap.get(lower)
       if (info) {
-        info.usedAt.push(lineNum)
-        info.isUsed = true
+        recordVariableUsage(ctx, info, lineNum)
       } else if (!isSystemVariable(lower)) {
         pushDiagnostic(ctx, {
           line: lineNum,
@@ -858,6 +928,7 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     forLoopBlocks: createForLoopBlockList(source),
     fileUnreachable: false,
     blockUnreachableStack: [],
+    includeExchange: options?.includeExchange,
   }
 
   for (const name of ['timeout', 'mtimeout', 'result', 'inputstr', 'matchstr', 'paramcnt', 'params']) {
@@ -880,7 +951,27 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     })
   }
 
+  if (options?.externallyDeclaredVars) {
+    for (const [key, info] of options.externallyDeclaredVars) {
+      if (ctx.varMap.has(key)) continue
+      ctx.varMap.set(key, {
+        ...cloneVariableInfo(info),
+        declaredExternally: true,
+        declaredInInclude: undefined,
+        usedOutsideInclude: undefined,
+      })
+    }
+  }
+
   analyzeLines(lines, ctx, {})
+
+  if (options?.includeExchange) {
+    for (const [key, info] of ctx.varMap) {
+      if (info.declaredInInclude && info.usedOutsideInclude) {
+        options.includeExchange.externallyUsed.add(key)
+      }
+    }
+  }
 
   for (const block of ctx.blockStack) {
     pushDiagnostic(ctx, {
@@ -892,7 +983,13 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
   }
 
   for (const info of ctx.varMap.values()) {
-    if (!info.isSystem && !info.isUsed && info.declaredAt > 0 && !info.declaredInInclude) {
+    if (
+      !info.isSystem &&
+      !info.isUsed &&
+      info.declaredAt > 0 &&
+      !info.declaredInInclude &&
+      !info.declaredExternally
+    ) {
       if (options?.externallyUsedNames?.has(info.name.toLowerCase())) {
         info.isUsed = true
         continue
@@ -907,7 +1004,7 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
   }
 
   const variables = [...ctx.varMap.values()]
-    .filter((v) => !v.declaredInInclude)
+    .filter((v) => !v.declaredInInclude && !v.declaredExternally)
     .sort((a, b) => {
     if (a.isSystem !== b.isSystem) return a.isSystem ? 1 : -1
     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })

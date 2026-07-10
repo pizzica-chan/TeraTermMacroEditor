@@ -3,7 +3,7 @@ import { analyzeTTL } from './analyzer'
 import {
   analysisCacheRevisionField,
   getCachedAnalysis,
-  getExternallyUsedNames,
+  getIncludeCrossTabContext,
   getIncludeResolver,
   includeGraphRevisionField,
 } from './analysisContext'
@@ -39,11 +39,13 @@ function mapDiagnostics(
 export const ttlLinter = linter(
   (view) => {
     const source = view.state.doc.toString()
+    const crossTab = getIncludeCrossTabContext()
     const result =
       getCachedAnalysis(source) ??
       analyzeTTL(source, {
         includeResolver: getIncludeResolver(),
-        externallyUsedNames: getExternallyUsedNames(),
+        externallyUsedNames: crossTab?.externallyUsed,
+        externallyDeclaredVars: crossTab?.externallyDeclared,
       })
     return mapDiagnostics(view.state.doc, result.diagnostics)
   },

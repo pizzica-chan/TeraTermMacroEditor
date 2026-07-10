@@ -9,7 +9,7 @@ import {
   setStatusMessage,
 } from './ui/toolbar'
 import { TabManager, MAX_TABS, type EditorTab } from './ui/tabManager'
-import { analyzeTTL, type IncludeResolver } from './ttl/analyzer'
+import { analyzeTTL, collectIncludeCrossTabVarContext, type IncludeResolver, type VariableInfo } from './ttl/analyzer'
 import {
   findIncludeRefs,
   includeDynamicBindingKey,
@@ -20,7 +20,7 @@ import {
   type IncludeResolveContext,
 } from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
-import { setIncludeResolver, setExternallyUsedNames, setAnalysisCache, clearAnalysisCache } from './ttl/analysisContext'
+import { setIncludeResolver, setIncludeCrossTabContext, setAnalysisCache, clearAnalysisCache } from './ttl/analysisContext'
 import { evaluateTTL } from './ttl/evaluator'
 import { DocumentSettings } from './text/documentSettings'
 import type { TextEncoding, NewlineType } from './text/types'
@@ -142,22 +142,30 @@ function syncTabIncludeBindings(tab: EditorTab, source: string): void {
   }
 }
 
-function getExternallyUsedVarNames(tab: EditorTab): Set<string> {
-  const used = new Set<string>()
+function getIncludeCrossTabContext(tab: EditorTab): {
+  externallyDeclared: Map<string, VariableInfo>
+  externallyUsed: Set<string>
+} {
+  const externallyDeclared = new Map<string, VariableInfo>()
+  const externallyUsed = new Set<string>()
+
   for (const parentTab of tabManager.allTabs) {
     if (parentTab.id === tab.id) continue
     const includesThis = Object.values(parentTab.includeBindings).includes(tab.id)
     if (!includesThis) continue
-    const parentResult = analyzeTTL(tabManager.getTabContent(parentTab), {
-      includeResolver: createIncludeResolver(parentTab),
-    })
-    for (const variable of parentResult.variables) {
-      if (variable.isUsed && !variable.isSystem) {
-        used.add(variable.name.toLowerCase())
-      }
+
+    const ctx = collectIncludeCrossTabVarContext(
+      tabManager.getTabContent(parentTab),
+      createIncludeResolver(parentTab),
+      tab.id,
+    )
+    for (const [key, info] of ctx.externallyDeclared) {
+      if (!externallyDeclared.has(key)) externallyDeclared.set(key, info)
     }
+    for (const name of ctx.externallyUsed) externallyUsed.add(name)
   }
-  return used
+
+  return { externallyDeclared, externallyUsed }
 }
 
 let analysisTimer: ReturnType<typeof setTimeout> | null = null
@@ -168,13 +176,14 @@ function runAnalysisImmediate(text: string): void {
   if (tab) syncTabIncludeBindings(tab, text)
 
   const resolver = tab ? createIncludeResolver(tab) : undefined
-  const externallyUsed = tab ? getExternallyUsedVarNames(tab) : undefined
+  const crossTab = tab ? getIncludeCrossTabContext(tab) : undefined
   setIncludeResolver(resolver)
-  setExternallyUsedNames(externallyUsed)
+  setIncludeCrossTabContext(crossTab)
 
   const result = analyzeTTL(text, {
     includeResolver: resolver,
-    externallyUsedNames: externallyUsed,
+    externallyUsedNames: crossTab?.externallyUsed,
+    externallyDeclaredVars: crossTab?.externallyDeclared,
   })
   const evaluation = evaluateTTL(text, {
     includeResolver: resolver,

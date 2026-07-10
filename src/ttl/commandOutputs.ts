@@ -63,7 +63,6 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
     'int2str',
     'code2str',
     'strconcat',
-    'strcopy',
     'strinsert',
     'strremove',
     'strreplace',
@@ -83,6 +82,9 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
     'clipb2var',
     'loginfo',
   ),
+  strcopy: {
+    variables: [{ index: 4, type: 'string' }],
+  },
   filecreate: {
     variables: [{ index: 1, type: 'integer' }],
     setsResult: true,
