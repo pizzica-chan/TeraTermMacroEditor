@@ -154,7 +154,11 @@ export const COMMAND_ARG_SPECS: Record<string, CommandArgSpec> = {
   setenv: { min: 2, max: 2 },
 
   // ── ファイル操作 ──
+  basename: { min: 2, max: 2 },
+  dirname: { min: 2, max: 2 },
   fileclose: { min: 1, max: 1 },
+  fileopen: { min: 3, max: 4 },
+  filemarkptr: { min: 1, max: 1 },
   fileconcat: { min: 2, max: 2 },
   filecopy: { min: 2, max: 2 },
   filecreate: { min: 2, max: 2 },
@@ -179,7 +183,10 @@ export const COMMAND_ARG_SPECS: Record<string, CommandArgSpec> = {
   foldercreate: { min: 1, max: 1 },
   folderdelete: { min: 1, max: 1 },
   foldersearch: { min: 1, max: 1 },
+  getdir: { min: 1, max: 1 },
   getfileattr: { min: 1, max: 1 },
+  makepath: { min: 3, max: 3 },
+  setdir: { min: 1, max: 1 },
   setfileattr: { min: 2, max: 2 },
 
   // ── パスワード ──

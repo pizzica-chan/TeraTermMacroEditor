@@ -110,6 +110,8 @@ interface AnalysisContext {
   diagnostics: Diagnostic[]
   varMap: Map<string, VariableInfo>
   labels: Set<string>
+  /** ファイル内の全ラベル（前方参照の解決用） */
+  knownLabels: Set<string>
   blockStack: { keyword: string; line: number }[]
   includeResolver?: IncludeResolver
   includeStack: string[]
@@ -167,6 +169,7 @@ function createIncludeChildContext(
     diagnostics: parent.diagnostics,
     varMap: parent.varMap,
     labels: new Set(),
+    knownLabels: collectLabels(stripComments(content)),
     blockStack: [],
     includeResolver: childResolver,
     includeStack: parent.includeStack,
@@ -375,6 +378,71 @@ const BLOCK_PAIRS: [string, string][] = [
   ['do', 'loop'],
   ['until', 'enduntil'],
 ]
+
+function stmtOffset(tokens: Token[]): number {
+  return tokens[0]?.kind === 'label' ? 1 : 0
+}
+
+function hasThenKeyword(tokens: Token[], offset: number): boolean {
+  return tokens.some(
+    (t, i) => i > offset && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
+  )
+}
+
+/** 1行形式 if（then なしで直後にコマンド）のコマンド開始位置 */
+function findSingleLineIfTailStart(tokens: Token[], offset: number): number | null {
+  if (hasThenKeyword(tokens, offset)) return null
+  for (let i = offset + 1; i < tokens.length; i++) {
+    const tok = tokens[i]
+    if (tok?.kind === 'identifier' && TTL_COMMANDS.has(tok.text.toLowerCase())) {
+      return i
+    }
+  }
+  return null
+}
+
+function isGotoCallLabelRef(tokens: Token[], index: number): boolean {
+  if (index <= 0) return false
+  const prev = tokens[index - 1]
+  return (
+    prev?.kind === 'identifier' &&
+    (prev.text.toLowerCase() === 'goto' || prev.text.toLowerCase() === 'call')
+  )
+}
+
+function collectLabels(lines: string[]): Set<string> {
+  const labels = new Set<string>()
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const tokens = tokenizeLine(lines[lineIdx]!, lineIdx + 1)
+    if (tokens[0]?.kind === 'label') {
+      labels.add(tokens[0].text.toLowerCase())
+    }
+  }
+  return labels
+}
+
+function closeBlock(ctx: AnalysisContext, open: string, lineNum: number, column: number, closeName: string): void {
+  let matchIdx = -1
+  for (let i = ctx.blockStack.length - 1; i >= 0; i--) {
+    if (ctx.blockStack[i]!.keyword === open) {
+      matchIdx = i
+      break
+    }
+  }
+  if (matchIdx < 0) {
+    pushDiagnostic(ctx, {
+      line: lineNum,
+      column,
+      message: `'${closeName}' に対応する開始ブロックがありません`,
+      severity: 'error',
+    })
+    return
+  }
+  while (ctx.blockStack.length > matchIdx) {
+    leaveBlockScope(ctx)
+    ctx.blockStack.pop()
+  }
+}
 
 /** ブロック構造キーワード（デッドコード警告の対象外） */
 const BLOCK_BRANCH_KEYWORDS = new Set([
@@ -647,20 +715,31 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
 
     for (const [open, close] of BLOCK_PAIRS) {
       if (cmd === open) {
+        if (open === 'if' && !hasThenKeyword(tokens, stmtOffset(tokens))) {
+          continue
+        }
         enterBlockScope(ctx)
         ctx.blockStack.push({ keyword: open, line: lineNum })
       }
       if (cmd === close) {
-        const last = ctx.blockStack[ctx.blockStack.length - 1]
-        if (last?.keyword === open) {
-          leaveBlockScope(ctx)
-          ctx.blockStack.pop()
-        } else {
+        closeBlock(ctx, open, lineNum, first.column, first.text)
+      }
+    }
+
+    const lineOffset = stmtOffset(tokens)
+    const singleLineIfTail = cmd === 'if' ? findSingleLineIfTailStart(tokens, lineOffset) : null
+    if (singleLineIfTail !== null) {
+      const tailCmdTok = tokens[singleLineIfTail]
+      const tailCmd = tailCmdTok?.kind === 'identifier' ? tailCmdTok.text.toLowerCase() : ''
+      if ((tailCmd === 'goto' || tailCmd === 'call') && tokens[singleLineIfTail + 1]?.kind === 'identifier') {
+        const target = tokens[singleLineIfTail + 1]!
+        const labelRef = target.text.replace(/^:/, '').toLowerCase()
+        if (!ctx.knownLabels.has(labelRef)) {
           pushDiagnostic(ctx, {
             line: lineNum,
-            column: first.column,
-            message: `'${first.text}' に対応する開始ブロックがありません`,
-            severity: 'error',
+            column: target.column,
+            message: `ラベル ':${target.text.replace(/^:/, '')}' が定義されていません`,
+            severity: 'warning',
           })
         }
       }
@@ -672,7 +751,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
         // ok
       } else if (target?.kind === 'identifier') {
         const labelRef = target.text.replace(/^:/, '').toLowerCase()
-        if (!ctx.labels.has(labelRef)) {
+        if (!ctx.knownLabels.has(labelRef)) {
           pushDiagnostic(ctx, {
             line: lineNum,
             column: target.column,
@@ -859,6 +938,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
       if (cmd === 'for' && i === 1) continue
       if ((cmd === 'strdim' || cmd === 'intdim') && i === 1) continue
       if ((cmd === 'goto' || cmd === 'call') && i === 1) continue
+      if (isGotoCallLabelRef(tokens, i)) continue
 
       if (i > 0 && tokens[i - 1]?.text === '[' && tokens[i + 1]?.text === ']') {
         const info = ctx.varMap.get(lower)
@@ -920,6 +1000,7 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     diagnostics: [],
     varMap: new Map(),
     labels: new Set(),
+    knownLabels: collectLabels(lines),
     blockStack: [],
     includeResolver: options?.includeResolver,
     includeStack: [],

@@ -75,6 +75,10 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
     'gethostname',
     'gettitle',
     'getttdir',
+    'getdir',
+    'basename',
+    'dirname',
+    'makepath',
     'getdate',
     'gettime',
     'getver',
@@ -88,6 +92,9 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
   filecreate: {
     variables: [{ index: 1, type: 'integer' }],
     setsResult: true,
+  },
+  fileopen: {
+    variables: [{ index: 1, type: 'integer' }],
   },
   getenv: {
     variables: [{ index: 2, type: 'string' }],

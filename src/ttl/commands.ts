@@ -39,12 +39,12 @@ export const TTL_COMMANDS = new Set([
   'strjoin', 'strlength', 'strmatch', 'strremove', 'strreplace', 'strscan',
   'strspecial', 'strsplit', 'strtrim', 'tolower', 'toupper', 'strlen',
   // File
-  'dirnamebox', 'exec', 'fileclose', 'fileconcat', 'filecopy', 'filecreate',
-  'filedelete', 'filelock', 'filenamebox', 'fileread', 'filereadln', 'filerename',
+  'basename', 'dirname', 'dirnamebox', 'exec', 'fileclose', 'fileconcat', 'filecopy', 'filecreate',
+  'filedelete', 'filelock', 'filemarkptr', 'fileopen', 'filenamebox', 'fileread', 'filereadln', 'filerename',
   'filesearch', 'fileseek', 'fileseekback', 'filestat', 'filestrseek',
   'filestrseek2', 'filetruncate', 'fileunlock', 'filewrite', 'filewriteln',
   'findclose', 'findfirst', 'findnext', 'foldercreate', 'folderdelete',
-  'foldersearch', 'getfileattr', 'setfileattr',
+  'foldersearch', 'getdir', 'getfileattr', 'makepath', 'setdir', 'setfileattr',
   // Password
   'delpassword', 'delpassword2', 'getpassword', 'getpassword2', 'ispassword',
   'ispassword2', 'passwordbox', 'setpassword', 'setpassword2',
