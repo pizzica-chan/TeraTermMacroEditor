@@ -18,6 +18,11 @@ import {
   type ForLoopBlock,
 } from './includeRefs'
 import {
+  tryStaticIntegerCommand,
+  tryStaticStringCommand,
+  type StaticValueContext,
+} from './staticCommandEval'
+import {
   RESERVED,
   tokenizeLine,
   stripComments,
@@ -44,6 +49,8 @@ export interface VariableInfo {
   arrayElementType?: 'integer' | 'string'
   /** 数値リテラル代入などで静的に判明した整数値 */
   constantValue?: number
+  /** 文字列リテラル代入や strcopy などで静的に判明した文字列値 */
+  constantString?: string
   /** include 先のソース内でのみ宣言された（親タブの未使用警告対象外） */
   declaredInInclude?: boolean
   /** include 元タブで宣言された変数（include 先タブ解析用に注入） */
@@ -293,9 +300,99 @@ function applyConstantValue(
 ): void {
   if (!valueToken) {
     info.constantValue = undefined
+    info.constantString = undefined
     return
   }
   info.constantValue = resolveStaticInteger(valueToken, varMap)
+  applyConstantString(info, valueToken, varMap)
+}
+
+function resolveStaticString(
+  token: Token | undefined,
+  varMap: Map<string, VariableInfo>,
+): string | undefined {
+  if (!token) return undefined
+  if (token.kind === 'string') return unquoteString(token.text)
+  if (token.kind === 'identifier') {
+    return varMap.get(token.text.toLowerCase())?.constantString
+  }
+  return undefined
+}
+
+function applyConstantString(
+  info: VariableInfo,
+  valueToken: Token | undefined,
+  varMap: Map<string, VariableInfo>,
+): void {
+  if (!valueToken) {
+    info.constantString = undefined
+    return
+  }
+  if (valueToken.kind === 'string') {
+    info.constantString = unquoteString(valueToken.text)
+    return
+  }
+  if (valueToken.kind === 'identifier') {
+    info.constantString = varMap.get(valueToken.text.toLowerCase())?.constantString
+    return
+  }
+  info.constantString = undefined
+}
+
+function createAnalyzerStaticCtx(
+  tokens: Token[],
+  offset: number,
+  varMap: Map<string, VariableInfo>,
+): StaticValueContext {
+  return {
+    tokenAt(rel) {
+      return tokens[offset + rel]
+    },
+    resolveString(rel) {
+      return resolveStaticString(tokens[offset + rel], varMap)
+    },
+    resolveInt(rel) {
+      return resolveStaticInteger(tokens[offset + rel], varMap)
+    },
+    resolveInPlaceVar(rel) {
+      const tok = tokens[offset + rel]
+      if (tok?.kind !== 'identifier') return undefined
+      return varMap.get(tok.text.toLowerCase())?.constantString
+    },
+  }
+}
+
+function applyStaticCommandConstants(
+  ctx: AnalysisContext,
+  tokens: Token[],
+  offset: number,
+  cmd: string,
+): void {
+  const staticCtx = createAnalyzerStaticCtx(tokens, offset, ctx.varMap)
+  const strResult = tryStaticStringCommand(cmd, offset, staticCtx)
+  if (strResult) {
+    const destTok = tokens[strResult.destIndex]
+    if (destTok?.kind === 'identifier') {
+      const varKey = destTok.text.toLowerCase()
+      const existing = ctx.varMap.get(varKey)
+      if (existing) {
+        existing.constantString = strResult.value
+        if (existing.type === 'unknown') existing.type = 'string'
+      }
+    }
+    return
+  }
+
+  const intResult = tryStaticIntegerCommand(cmd, offset, staticCtx)
+  if (!intResult) return
+  const destTok = tokens[intResult.destIndex]
+  if (destTok?.kind !== 'identifier') return
+  const varKey = destTok.text.toLowerCase()
+  const existing = ctx.varMap.get(varKey)
+  if (existing) {
+    existing.constantValue = intResult.value
+    if (existing.type === 'unknown') existing.type = 'integer'
+  }
 }
 
 function isSystemArray(name: string): boolean {
@@ -931,6 +1028,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
     }
 
     registerCommandOutputVariables(ctx, cmd, tokens, lineNum)
+    applyStaticCommandConstants(ctx, tokens, lineOffset, cmd)
 
     const assignVarKey = assignVarName?.toLowerCase() ?? null
     const arrayAssignName = assignIdx > 0 ? isArrayAssignTarget(tokens, assignIdx) : null

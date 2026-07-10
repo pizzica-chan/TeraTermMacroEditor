@@ -8,6 +8,11 @@ import {
 } from './includeRefs'
 import { findAssignmentIndex } from './argChecker'
 import { getCommandOutputEffect } from './commandOutputs'
+import {
+  tryStaticIntegerCommand,
+  tryStaticStringCommand,
+  type StaticValueContext,
+} from './staticCommandEval'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
 
 export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
@@ -357,6 +362,73 @@ function resolveIncludeEffectiveRaw(tokens: Token[], offset: number, env: Env): 
   return undefined
 }
 
+function isKnownStringValue(v: RuntimeScalar): v is RuntimeScalar & { kind: 'str' } {
+  if (v.kind !== 'str') return false
+  if (isRuntimeOrigin(v.origin)) return false
+  if (v.hasUnresolvedParts) return false
+  if (!v.value && v.hint) return false
+  return true
+}
+
+function resolveKnownString(token: Token | undefined, env: Env): string | undefined {
+  if (!token) return undefined
+  if (token.kind === 'string') return unquoteString(token.text)
+  if (token.kind === 'identifier') {
+    const v = env.get(token.text.toLowerCase())
+    if (v?.kind === 'str' && isKnownStringValue(v)) return v.value
+  }
+  return undefined
+}
+
+function createEvaluatorStaticCtx(tokens: Token[], offset: number, env: Env): StaticValueContext {
+  return {
+    tokenAt(rel) {
+      return tokens[offset + rel]
+    },
+    resolveString(rel) {
+      return resolveKnownString(tokens[offset + rel], env)
+    },
+    resolveInt(rel) {
+      return evalIntExpr(tokens, offset + rel, env)
+    },
+    resolveInPlaceVar(rel) {
+      const tok = tokens[offset + rel]
+      if (tok?.kind !== 'identifier') return undefined
+      const v = env.get(tok.text.toLowerCase())
+      if (v?.kind === 'str' && isKnownStringValue(v)) return v.value
+      return undefined
+    },
+  }
+}
+
+function applyStaticCommandEffects(
+  cmd: string,
+  tokens: Token[],
+  offset: number,
+  env: Env,
+): boolean {
+  const staticCtx = createEvaluatorStaticCtx(tokens, offset, env)
+  const strResult = tryStaticStringCommand(cmd, offset, staticCtx)
+  if (strResult) {
+    const destTok = tokens[strResult.destIndex]
+    if (destTok?.kind === 'identifier') {
+      setScalar(env, destTok.text, { kind: 'str', value: strResult.value, origin: 'literal' })
+      return true
+    }
+  }
+
+  const intResult = tryStaticIntegerCommand(cmd, offset, staticCtx)
+  if (intResult) {
+    const destTok = tokens[intResult.destIndex]
+    if (destTok?.kind === 'identifier') {
+      setScalar(env, destTok.text, { kind: 'int', value: intResult.value })
+      return true
+    }
+  }
+
+  return false
+}
+
 function setScalar(env: Env, name: string, value: RuntimeScalar) {
   env.set(name.toLowerCase(), value)
 }
@@ -485,6 +557,7 @@ function processLine(env: Env, line: string, lineNum: number): void {
   }
 
   if (cmd === 'strconcat' && tokens[offset + 1]?.kind === 'identifier') {
+    if (applyStaticCommandEffects(cmd, tokens, offset, env)) return
     const dest = tokens[offset + 1].text
     const operands: RuntimeScalar[] = []
     const existing = env.get(dest.toLowerCase())
@@ -497,11 +570,7 @@ function processLine(env: Env, line: string, lineNum: number): void {
     return
   }
 
-  if (cmd === 'int2str' && tokens[offset + 1]?.kind === 'identifier') {
-    const v = evalTokenValue(tokens[offset + 2], env)
-    if (v?.kind === 'int') setScalar(env, tokens[offset + 1].text, { kind: 'str', value: String(v.value) })
-    return
-  }
+  if (applyStaticCommandEffects(cmd, tokens, offset, env)) return
 
   if (cmd === 'wait' || cmd === 'waitln' || cmd === 'waitregex') {
     const arg = tokens[offset + 1]
