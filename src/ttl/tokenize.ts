@@ -144,6 +144,87 @@ export function unquoteString(text: string): string {
   return text
 }
 
+export interface NonAsciiOutsideLiteralSpan {
+  line: number
+  column: number
+  length: number
+}
+
+/** マクロ構文部（コメント・文字列リテラル外）で許可されるコードポイント */
+export function isAllowedCodePointInMacroSyntax(code: number): boolean {
+  return code === 0x09 || (code >= 0x20 && code <= 0x7e)
+}
+
+function isInvalidInMacroSyntaxChar(ch: string): boolean {
+  const code = ch.codePointAt(0)
+  return code !== undefined && !isAllowedCodePointInMacroSyntax(code)
+}
+
+function advanceChar(rawLine: string, i: number): number {
+  const cp = rawLine[i]!.codePointAt(0)!
+  return i + (cp > 0xffff ? 2 : 1)
+}
+
+/** コメントおよび文字列リテラル以外に現れる非 ASCII 文字の位置を返す */
+export function findNonAsciiOutsideLiterals(source: string): NonAsciiOutsideLiteralSpan[] {
+  const spans: NonAsciiOutsideLiteralSpan[] = []
+  const lines = source.split('\n')
+  let inBlockComment = false
+  let inString: "'" | '"' | null = null
+
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const rawLine = lines[lineIdx]!
+    const lineNum = lineIdx + 1
+    let i = 0
+
+    while (i < rawLine.length) {
+      if (inBlockComment) {
+        const end = rawLine.indexOf('*/', i)
+        if (end === -1) break
+        inBlockComment = false
+        i = end + 2
+        continue
+      }
+
+      const ch = rawLine[i]!
+
+      if (inString) {
+        if (ch === inString) inString = null
+        i = advanceChar(rawLine, i)
+        continue
+      }
+
+      if (rawLine.slice(i, i + 2) === '/*') {
+        inBlockComment = true
+        i += 2
+        continue
+      }
+
+      if (ch === "'" || ch === '"') {
+        inString = ch
+        i++
+        continue
+      }
+
+      if (ch === ';') break
+
+      if (isInvalidInMacroSyntaxChar(ch)) {
+        const start = i
+        i = advanceChar(rawLine, i)
+        while (i < rawLine.length && isInvalidInMacroSyntaxChar(rawLine[i]!)) {
+          i = advanceChar(rawLine, i)
+        }
+        spans.push({ line: lineNum, column: start, length: i - start })
+        continue
+      }
+
+      i = advanceChar(rawLine, i)
+    }
+  }
+
+  return spans
+}
+
 /** 文字列リテラルの構文エラーを返す（正常なら null） */
 export function getStringLiteralError(text: string): string | null {
   if (!text.startsWith("'") && !text.startsWith('"')) return null

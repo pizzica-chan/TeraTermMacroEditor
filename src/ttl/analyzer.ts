@@ -17,7 +17,15 @@ import {
   type IncludeResolveContext,
   type ForLoopBlock,
 } from './includeRefs'
-import { RESERVED, tokenizeLine, stripComments, getStringLiteralError, unquoteString, type Token } from './tokenize'
+import {
+  RESERVED,
+  tokenizeLine,
+  stripComments,
+  getStringLiteralError,
+  unquoteString,
+  findNonAsciiOutsideLiterals,
+  type Token,
+} from './tokenize'
 
 export type VarType = 'integer' | 'string' | 'array' | 'unknown'
 
@@ -1042,6 +1050,17 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
         usedOutsideInclude: undefined,
       })
     }
+  }
+
+  for (const span of findNonAsciiOutsideLiterals(source)) {
+    pushDiagnostic(ctx, {
+      line: span.line,
+      column: span.column,
+      endColumn: span.column + span.length,
+      message:
+        'コメントおよび文字列リテラル以外に使用できない文字が含まれています（日本語・絵文字など。Tera Term ではエラーになります）',
+      severity: 'error',
+    })
   }
 
   analyzeLines(lines, ctx, {})
