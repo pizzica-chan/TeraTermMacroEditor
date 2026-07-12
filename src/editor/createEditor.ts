@@ -116,14 +116,14 @@ function buildExtensions(onDocChange: (text: string) => void): Extension[] {
     }),
     EditorView.domEventHandlers({
       dragover(event) {
-        if ([...(event.dataTransfer?.items ?? [])].some((item) => item.kind === 'file')) {
+        if (Array.from(event.dataTransfer?.items ?? []).some((item) => item.kind === 'file')) {
           event.preventDefault()
           return true
         }
         return false
       },
       drop(event) {
-        if ([...(event.dataTransfer?.files ?? [])].some((f) => /\.(ttl|txt)$/i.test(f.name))) {
+        if (Array.from(event.dataTransfer?.files ?? []).some((f) => /\.(ttl|txt)$/i.test(f.name))) {
           event.preventDefault()
           return true
         }
