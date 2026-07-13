@@ -40,6 +40,7 @@ import {
   normalizeLabelName,
 } from './labels'
 import {
+  findIfThenTailStart,
   findSingleLineIfTailStart,
   hasThenKeyword,
   MAX_LABEL_COUNT,
@@ -141,7 +142,7 @@ interface AnalysisContext {
   labels: Set<string>
   /** ファイル内の全ラベル（前方参照の解決用） */
   knownLabels: Set<string>
-  blockStack: { keyword: string; line: number }[]
+  blockStack: { keyword: string; line: number; guaranteedEntry: boolean }[]
   includeResolver?: IncludeResolver
   includeStack: string[]
   /** インクルード先タブ ID のスタック（同一タブへの別キー経由の循環検出） */
@@ -262,17 +263,40 @@ function clearFallthroughDead(ctx: AnalysisContext): void {
   }
 }
 
-function markMacroTerminator(ctx: AnalysisContext, atTopLevel: boolean): void {
-  if (atTopLevel) {
-    ctx.fileUnreachable = true
-    return
+/**
+ * 到達不能判定で安全に真と断定できる条件だけを扱う。
+ * 変数や複合式は条件付き代入などの経路を追跡できないため、常に未確定とする。
+ */
+function evalGuaranteedLiteralCondition(tokens: Token[]): boolean | undefined {
+  if (tokens.length === 1) {
+    const token = tokens[0]
+    if (token?.kind === 'number') {
+      const value = Number(token.text)
+      return Number.isFinite(value) ? value !== 0 : undefined
+    }
+    if (token?.kind === 'string') return unquoteString(token.text) !== ''
+    return undefined
   }
+  if (
+    tokens.length === 2 &&
+    tokens[0]?.kind === 'identifier' &&
+    tokens[0].text.toLowerCase() === 'not'
+  ) {
+    const inner = evalGuaranteedLiteralCondition(tokens.slice(1))
+    return inner === undefined ? undefined : !inner
+  }
+  return undefined
+}
+
+/** 現在位置までの全ブロックが必ず実行される場合だけ、終端効果を外側へ伝播する。 */
+function isConditionalTerminatorContext(ctx: AnalysisContext): boolean {
+  return ctx.blockStack.some((block) => !block.guaranteedEntry)
+}
+
+/** ブロック内のみ到達不能（外側へは波及しない） */
+function markBlockOnlyTerminator(ctx: AnalysisContext): void {
   const depth = ctx.blockUnreachableStack.length
-  if (depth > 0) {
-    ctx.blockUnreachableStack[depth - 1] = true
-  } else {
-    ctx.fileUnreachable = true
-  }
+  if (depth > 0) ctx.blockUnreachableStack[depth - 1] = true
 }
 
 /** if ブロックの別分岐（elseif / else）に入るとき、直前分岐の end / exit / goto / return 状態をリセット */
@@ -282,6 +306,71 @@ function startNewIfBranch(ctx: AnalysisContext): void {
     ctx.blockUnreachableStack[depth - 1] = false
     ctx.fallthroughDeadStack[depth - 1] = false
   }
+}
+
+function markEndEffect(
+  ctx: AnalysisContext,
+  loopOpts: LineLoopOpts,
+): LineLoopResult | undefined {
+  if (isConditionalTerminatorContext(ctx)) {
+    markBlockOnlyTerminator(ctx)
+    return undefined
+  }
+  ctx.fileUnreachable = true
+  if (loopOpts.stopOnExit) return { exit: true, terminator: 'end' }
+  return undefined
+}
+
+function markExitEffect(
+  ctx: AnalysisContext,
+  loopOpts: LineLoopOpts,
+): LineLoopResult | undefined {
+  if (ctx.suppressDiagnostics && ctx.blockStack.length > 0) {
+    markBlockOnlyTerminator(ctx)
+    return undefined
+  }
+  if (ctx.suppressDiagnostics) {
+    if (loopOpts.stopOnExit) return { exit: true, terminator: 'exit' }
+    return undefined
+  }
+  if (isConditionalTerminatorContext(ctx)) {
+    markBlockOnlyTerminator(ctx)
+    return undefined
+  }
+  ctx.fileUnreachable = true
+  if (loopOpts.stopOnExit) return { exit: true, terminator: 'exit' }
+  return undefined
+}
+
+function markFallthroughEffect(ctx: AnalysisContext): void {
+  if (isConditionalTerminatorContext(ctx)) {
+    const depth = ctx.fallthroughDeadStack.length
+    if (depth > 0) ctx.fallthroughDeadStack[depth - 1] = true
+    return
+  }
+  markFallthroughDead(ctx)
+}
+
+function applyIfTerminatorTail(
+  ctx: AnalysisContext,
+  tokens: Token[],
+  lineOffset: number,
+  tailStart: number,
+  condEnd: number,
+  loopOpts: LineLoopOpts,
+): LineLoopResult | undefined {
+  const tailCmdTok = tokens[tailStart]
+  const tailCmd = tailCmdTok?.kind === 'identifier' ? tailCmdTok.text.toLowerCase() : ''
+  if (!['end', 'exit', 'goto', 'return'].includes(tailCmd)) return undefined
+
+  const condition = evalGuaranteedLiteralCondition(tokens.slice(lineOffset + 1, condEnd))
+  if (condition !== true) return undefined
+
+  let result: LineLoopResult | undefined
+  if (tailCmd === 'end') result = markEndEffect(ctx, loopOpts)
+  else if (tailCmd === 'exit') result = markExitEffect(ctx, loopOpts)
+  else markFallthroughEffect(ctx)
+  return result
 }
 
 function warnDeadCode(ctx: AnalysisContext, lineNum: number): void {
@@ -855,39 +944,59 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
     }
 
     if (cmd === 'end') {
-      ctx.fileUnreachable = true
-      if (loopOpts.stopOnExit) return { exit: true, terminator: 'end' }
+      const stop = markEndEffect(ctx, loopOpts)
+      if (stop) return stop
     } else if (cmd === 'exit') {
-      const exitsOnlyIncludeBlock = ctx.suppressDiagnostics && ctx.blockStack.length > 0
-      markMacroTerminator(ctx, !exitsOnlyIncludeBlock)
-      if (loopOpts.stopOnExit && !exitsOnlyIncludeBlock) {
-        return { exit: true, terminator: 'exit' }
-      }
+      const stop = markExitEffect(ctx, loopOpts)
+      if (stop) return stop
     }
+
+    const lineOffset = stmtOffset(tokens)
 
     if (
       (cmd === 'elseif' || cmd === 'else') &&
       ctx.blockStack[ctx.blockStack.length - 1]?.keyword === 'if'
     ) {
       startNewIfBranch(ctx)
+      const currentIf = ctx.blockStack[ctx.blockStack.length - 1]
+      if (currentIf) currentIf.guaranteedEntry = false
     }
 
     for (const [open, close] of BLOCK_PAIRS) {
       if (cmd === open) {
-        if (open === 'if' && !hasThenKeyword(tokens, stmtOffset(tokens))) {
-          continue
+        if (open === 'if') {
+          if (!hasThenKeyword(tokens, stmtOffset(tokens))) continue
+          if (findIfThenTailStart(tokens, lineOffset) || findSingleLineIfTailStart(tokens, lineOffset) !== null) {
+            continue
+          }
         }
         enterBlockScope(ctx)
-        ctx.blockStack.push({ keyword: open, line: lineNum })
+        let guaranteedEntry = open === 'do' || open === 'until'
+        if (open === 'if' || open === 'while') {
+          const thenIdx = tokens.findIndex(
+            (token, index) =>
+              index > lineOffset && token.kind === 'identifier' && token.text.toLowerCase() === 'then',
+          )
+          const condEnd = open === 'if' && thenIdx >= 0 ? thenIdx : tokens.length
+          guaranteedEntry =
+            evalGuaranteedLiteralCondition(tokens.slice(lineOffset + 1, condEnd)) === true
+        }
+        ctx.blockStack.push({ keyword: open, line: lineNum, guaranteedEntry })
       }
       if (cmd === close) {
         closeBlock(ctx, open, lineNum, first.column, first.text)
       }
     }
 
-    const lineOffset = stmtOffset(tokens)
+    const thenForm = cmd === 'if' ? findIfThenTailStart(tokens, lineOffset) : null
+    if (thenForm) {
+      const stop = applyIfTerminatorTail(ctx, tokens, lineOffset, thenForm.tailStart, thenForm.condEnd, loopOpts)
+      if (stop) return stop
+    }
     const singleLineIfTail = cmd === 'if' ? findSingleLineIfTailStart(tokens, lineOffset) : null
     if (singleLineIfTail !== null) {
+      const stop = applyIfTerminatorTail(ctx, tokens, lineOffset, singleLineIfTail, singleLineIfTail, loopOpts)
+      if (stop) return stop
       const tailCmdTok = tokens[singleLineIfTail]
       const tailCmd = tailCmdTok?.kind === 'identifier' ? tailCmdTok.text.toLowerCase() : ''
       if (tailCmd === 'goto' || tailCmd === 'call') {
@@ -909,7 +1018,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
     }
 
     if (cmd === 'goto' || cmd === 'return') {
-      markFallthroughDead(ctx)
+      markFallthroughEffect(ctx)
     }
 
     const assignIdx = findAssignmentIndex(tokens, tokens[0]?.kind === 'label' ? 1 : 0)

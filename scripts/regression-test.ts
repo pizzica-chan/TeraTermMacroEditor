@@ -148,6 +148,93 @@ assert(
   endAnalysis.diagnostics,
 )
 
+const endInConditionalIf = analyzeTTL(`if result = 0 then\nend\nendif\naaa = 0`)
+assert(
+  !endInConditionalIf.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
+  'end inside conditional if does not mark code after endif unreachable',
+  endInConditionalIf.diagnostics,
+)
+
+const exitInConditionalIf = analyzeTTL(`if result = 0 then\nexit\nendif\naaa = 0`)
+assert(
+  !exitInConditionalIf.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
+  'exit inside conditional if does not mark code after endif unreachable',
+  exitInConditionalIf.diagnostics,
+)
+
+const exitInWhileStopsMain = analyzeTTL(`while 1\nexit\nendwhile\nsend 'after'`)
+assert(
+  exitInWhileStopsMain.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
+  'exit inside guaranteed while marks following main code unreachable',
+  exitInWhileStopsMain.diagnostics,
+)
+
+const exitInConditionalWhile = analyzeTTL(`while result = 0\nexit\nendwhile\nsend 'after'`)
+assert(
+  !exitInConditionalWhile.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
+  'exit inside conditional while does not mark following code unreachable',
+  exitInConditionalWhile.diagnostics,
+)
+
+const gotoInConditionalIf = analyzeTTL(`if result = 0 then\ngoto target\nendif\naaa = 0\n:target\nend`)
+assert(
+  !gotoInConditionalIf.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
+  'goto inside conditional if does not mark code after endif unreachable',
+  gotoInConditionalIf.diagnostics,
+)
+
+const definiteEndInIf = analyzeTTL(`if 1 then\nend\nendif\naaa = 0`)
+assert(
+  definiteEndInIf.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
+  'end inside statically true if marks code after endif unreachable',
+  definiteEndInIf.diagnostics,
+)
+
+const singleLineIfEnd = analyzeTTL(`if result = 0 then end\naaa = 0`)
+assert(
+  !singleLineIfEnd.diagnostics.some((diag) => diag.line === 2 && diag.message.includes('到達しません')),
+  'single-line if with unknown condition end does not mark following code unreachable',
+  singleLineIfEnd.diagnostics,
+)
+
+const singleLineIfGoto = analyzeTTL(`if result = 0 goto target\naaa = 0\n:target\nend`)
+assert(
+  !singleLineIfGoto.diagnostics.some((diag) => diag.line === 2 && diag.message.includes('到達しません')),
+  'single-line if goto with unknown condition does not mark following code unreachable',
+  singleLineIfGoto.diagnostics,
+)
+
+const conditionallyAssignedConstant = analyzeTTL(
+  `x = 0\nif result = 0 then\nx = 1\nendif\nif x = 1 then\nend\nendif\naaa = 0`,
+)
+assert(
+  !conditionallyAssignedConstant.diagnostics.some(
+    (diag) => diag.line === 8 && diag.message.includes('到達しません'),
+  ),
+  'conditionally assigned value does not make a later end definite',
+  conditionallyAssignedConstant.diagnostics,
+)
+
+const unsupportedCompoundCondition = analyzeTTL(`if 1 + 0 = 0 then\nend\nendif\naaa = 0`)
+assert(
+  !unsupportedCompoundCondition.diagnostics.some(
+    (diag) => diag.line === 4 && diag.message.includes('到達しません'),
+  ),
+  'unsupported compound condition is not treated as definitely true',
+  unsupportedCompoundCondition.diagnostics,
+)
+
+const nestedDefiniteEnd = analyzeTTL(
+  `if 1 then\nif result = 0 then\nendif\nend\nendif\naaa = 0`,
+)
+assert(
+  nestedDefiniteEnd.diagnostics.some(
+    (diag) => diag.line === 6 && diag.message.includes('到達しません'),
+  ),
+  'nested conditional does not discard an outer guaranteed branch',
+  nestedDefiniteEnd.diagnostics,
+)
+
 const unknownIf = evaluateTTL(`msg = 'hello'\nif msg = 1\nsend 'wrong'\nendif\nsend 'after'`)
 assert(
   unknownIf.sendEntries.map((entry) => entry.payload).join(',') === 'after',
