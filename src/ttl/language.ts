@@ -4,11 +4,13 @@ import { isCommand, isKeyword, isSystemVariable } from './commands'
 
 type State = {
   inBlockComment: boolean
+  /** 直前トークンが goto / call なら参照ラベル :name をハイライト */
+  afterGotoCall: boolean
 }
 
 const ttlLanguage = StreamLanguage.define<State>({
   name: 'ttl',
-  startState: () => ({ inBlockComment: false }),
+  startState: () => ({ inBlockComment: false, afterGotoCall: false }),
 
   token(stream, state) {
     if (state.inBlockComment) {
@@ -43,9 +45,10 @@ const ttlLanguage = StreamLanguage.define<State>({
       return 'comment'
     }
 
-    // Label
-    if (stream.sol() && stream.match(':')) {
+    // Label definition (line start) or goto/call :label reference
+    if (stream.match(':')) {
       stream.eatWhile(/[\w]/)
+      state.afterGotoCall = false
       return 'labelName'
     }
 
@@ -59,8 +62,15 @@ const ttlLanguage = StreamLanguage.define<State>({
       const word = stream.current()
       const lower = word.toLowerCase()
 
-      if (isKeyword(lower)) return 'keyword'
-      if (isCommand(lower)) return 'className'
+      if (isKeyword(lower)) {
+        state.afterGotoCall = false
+        return 'keyword'
+      }
+      if (isCommand(lower)) {
+        state.afterGotoCall = lower === 'goto' || lower === 'call'
+        return 'className'
+      }
+      state.afterGotoCall = false
       if (isSystemVariable(lower)) return 'typeName'
       if (lower === 'then') return 'keyword'
 

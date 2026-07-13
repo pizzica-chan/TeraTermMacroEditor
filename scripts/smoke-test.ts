@@ -102,12 +102,11 @@ assert(sampleAnalysis.diagnostics.filter((d) => d.severity === 'error').length =
 assert(sampleEval.sendEntries.length >= 2, 'sample send entries', sampleEval.sendEntries.length)
 
 console.log('\n=== 8. subroutine (call/goto/return) ===')
-const callMultiArg = `call mysub 'a' 'b'`
-const callMultiAnalysis = analyzeTTL(callMultiArg + `\n:mysub\nreturn`)
+const callExtraArgs = analyzeTTL(`call mysub 'a' 'b'\n:mysub\nreturn`)
 assert(
-  !callMultiAnalysis.diagnostics.some((d) => d.message.includes('引数が多すぎます')),
-  'call allows multiple subroutine args',
-  callMultiAnalysis.diagnostics,
+  callExtraArgs.diagnostics.some((d) => d.message.includes('引数が多すぎます')),
+  'call extra args rejected (official spec)',
+  callExtraArgs.diagnostics,
 )
 
 const undefinedLabel = analyzeTTL(`goto missing\n:defined`)
@@ -152,33 +151,60 @@ assert(
   returnDead.diagnostics,
 )
 
-const tooManyCallArgs = analyzeTTL(`call sub 1 2 3 4 5 6 7 8 9 10\n:sub\nreturn`)
+const returnNoCall = analyzeTTL(`return\nend`)
 assert(
-  tooManyCallArgs.diagnostics.some((d) => d.message.includes('最大 9 個')),
-  'call rejects more than 9 subroutine args',
-  tooManyCallArgs.diagnostics,
+  returnNoCall.diagnostics.some((d) => d.message.includes('call がありません')),
+  'return without call warns',
+  returnNoCall.diagnostics,
 )
 
-const callParamEval = evaluateTTL(`call mysub 'hello'\n:mysub\nsend param1\nreturn`)
-assert(
-  callParamEval.sendEntries[0]?.payload === 'hello',
-  'evaluator binds call args to param1',
-  callParamEval.sendEntries[0]?.payload,
-)
-
-const gotoSkipEval = evaluateTTL(`goto sub\nsend skipped\n:sub\nsend 'ok'\nend`)
+const gotoSkipEval = evaluateTTL(`goto sub\nsend skipped\n:sub send 'ok'\nend`)
 assert(
   gotoSkipEval.sendEntries.length === 1 && gotoSkipEval.sendEntries[0]?.payload === 'ok',
-  'evaluator goto skips fallthrough send',
+  'evaluator goto skips fallthrough; same-line label cmd runs',
   gotoSkipEval.sendEntries,
 )
 
-const callReturnEval = evaluateTTL(`msg = 'hi'\ncall sub\nsend msg\n:sub\nreturn`)
+const callReturnEval = evaluateTTL(`msg = 'hi'\ncall sub\ngoto main_end\n:sub\nreturn\n:main_end\nsend msg`)
 assert(
   callReturnEval.sendEntries.some((e) => e.payload === 'hi'),
   'evaluator return resumes after call',
   callReturnEval.sendEntries,
 )
+
+const nestedCall = evaluateTTL(
+  `call outer\ngoto fin\n:outer\ncall inner\ngoto outer_end\n:inner\nsend 'inner'\nreturn\n:outer_end\nreturn\n:fin\nsend 'fin'\nend`,
+)
+assert(
+  nestedCall.sendEntries.map((e) => e.payload).join(',') === 'inner,fin',
+  'nested call/return order',
+  nestedCall.sendEntries,
+)
+
+const singleLineIfGoto = evaluateTTL(`x = 1\nif x = 1 goto target\nsend 'miss'\n:target\nsend 'hit'\nend`)
+assert(
+  singleLineIfGoto.sendEntries.length === 1 && singleLineIfGoto.sendEntries[0]?.payload === 'hit',
+  'single-line if goto',
+  singleLineIfGoto.sendEntries,
+)
+
+const undefinedGotoEval = evaluateTTL(`goto missing\nsend 'x'\nend`)
+assert(
+  undefinedGotoEval.sendEntries.length === 0,
+  'undefined goto stops evaluation',
+  undefinedGotoEval.sendEntries,
+)
+
+console.log('\n=== 9. CLI macro arguments ===')
+const cliEval = evaluateTTL(`send param1\nsend param2\nsend paramcnt`, {
+  macroArgv: ['script.ttl', 'user1', 'user2'],
+})
+assert(cliEval.sendEntries[0]?.payload === 'script.ttl', 'param1 = argv[0]', cliEval.sendEntries[0]?.payload)
+assert(cliEval.sendEntries[1]?.payload === 'user1', 'param2 = argv[1]', cliEval.sendEntries[1]?.payload)
+assert(cliEval.sendEntries[2]?.payload === '3', 'paramcnt = argv.length', cliEval.sendEntries[2]?.payload)
+
+const paramsArray = evaluateTTL(`send params[2]`, { macroArgv: ['a.ttl', 'first', 'second'] })
+assert(paramsArray.sendEntries[0]?.payload === 'first', 'params[2] is second argv element', paramsArray.sendEntries[0]?.payload)
 
 console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`)
 process.exit(failed > 0 ? 1 : 0)

@@ -17,14 +17,6 @@ function assert(cond: boolean, label: string, detail?: unknown) {
   }
 }
 
-function diagSummary(source: string) {
-  return analyzeTTL(source).diagnostics.map((d) => `${d.severity}@L${d.line}:${d.message}`)
-}
-
-function sendPayloads(source: string) {
-  return evaluateTTL(source).sendEntries.map((e) => e.payload)
-}
-
 console.log('=== A. サンプルマクロ（サブルーチンなし） ===')
 const sample = `timeout = 30
 hostname = '192.168.1.1'
@@ -84,7 +76,7 @@ assert(evaluateTTL(labelOnly).sendEntries[0]?.payload === 'main', 'label-only ma
 
 console.log('\n=== F. サブルーチンと既存コードの共存 ===')
 const mixed = `host = '10.0.0.1'\ncall connect_host\ngoto main_end\n:connect_host\nsend host\nreturn\n:main_end\nsend 'done'`
-const mixedSends = sendPayloads(mixed)
+const mixedSends = evaluateTTL(mixed).sendEntries.map((e) => e.payload)
 assert(mixedSends.length === 2, 'mixed: 2 sends', mixedSends)
 assert(mixedSends[0] === '10.0.0.1' && mixedSends[1] === 'done', 'mixed: call/return order')
 
@@ -98,12 +90,12 @@ assert(
   'mixed: code at end label reachable',
 )
 
-console.log('\n=== G. param システム変数の誤バインドなし ===')
-const noCallParam = `send param1\nend`
-const noCallEval = evaluateTTL(noCallParam)
+console.log('\n=== G. param システム変数（CLI 未指定時） ===')
+const noCliParam = evaluateTTL(`send param1\nend`)
 assert(
-  noCallEval.sendEntries[0]?.payload === '' || noCallEval.sendEntries[0]?.unresolved,
-  'param1 without call stays empty/unresolved',
+  noCliParam.sendEntries[0]?.payload === '',
+  'param1 without CLI argv is empty',
+  noCliParam.sendEntries[0]?.payload,
 )
 
 console.log('\n=== H. 配列・未定義変数（解析） ===')

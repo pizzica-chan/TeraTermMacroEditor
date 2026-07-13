@@ -142,8 +142,8 @@ const GROUPMATCH_META: SystemVariableMeta = {
 }
 
 const PARAM_META: SystemVariableMeta = {
-  description: 'サブルーチン呼び出し時の引数',
-  setBy: 'call（第2引数以降）またはマクロ実行時のコマンドライン引数',
+  description: 'マクロ起動時のコマンドライン引数',
+  setBy: 'マクロ実行時（コマンドライン引数）',
   defaultHint: '空文字（引数なし）',
 }
 
@@ -174,8 +174,8 @@ export const SYSTEM_VARIABLE_META: Record<string, SystemVariableMeta> = {
     defaultHint: '空文字（未受信）',
   },
   paramcnt: {
-    description: 'サブルーチン呼び出し時の引数個数',
-    setBy: 'call（サブルーチン引数）またはマクロ実行時のコマンドライン引数',
+    description: 'マクロ起動時のコマンドライン引数個数',
+    setBy: 'マクロ実行時（マクロファイル名を含む）',
     defaultHint: '0（引数なし）',
   },
   params: {

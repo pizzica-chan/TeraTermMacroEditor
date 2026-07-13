@@ -69,8 +69,7 @@ export const COMMAND_ARG_SPECS: Record<string, CommandArgSpec> = {
   // ── 制御 ──
   for: { min: 3, max: 3 },
   goto: { min: 1, max: 1 },
-  /** 第1引数=ラベル、以降=サブルーチン引数（可変長） */
-  call: { min: 1, max: null },
+  call: { min: 1, max: 1 },
   include: { min: 1, max: 1 },
   execcmnd: { min: 1, max: 1 },
   pause: { min: 1, max: 1 },

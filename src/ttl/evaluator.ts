@@ -14,11 +14,12 @@ import {
   type StaticValueContext,
 } from './staticCommandEval'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
-import { collectLabelLineMap, formatLabelRef, labelNameFromToken, normalizeLabelName } from './labels'
+import { collectLabelLineMap, formatLabelRef, normalizeLabelName } from './labels'
 import {
-  extractCallLabelAndParams,
   findLabelLineIndex,
-  MAX_SUBROUTINE_PARAMS,
+  findSingleLineIfTailStart,
+  MAX_CALL_DEPTH,
+  resolveJumpLabelName,
 } from './subroutine'
 
 export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
@@ -219,18 +220,29 @@ function cloneEnv(env: Env): Env {
   return next
 }
 
-function initEnv(): Env {
+function initEnv(macroArgv?: string[]): Env {
   const env: Env = new Map()
-  for (const name of ['timeout', 'mtimeout', 'result', 'paramcnt']) {
+  for (const name of ['timeout', 'mtimeout', 'result']) {
     env.set(name, { kind: 'int', value: 0, origin: 'system-default' })
   }
   for (const name of ['inputstr', 'matchstr']) {
     env.set(name, { kind: 'str', value: '', origin: 'system-default' })
   }
-  for (let i = 1; i <= MAX_SUBROUTINE_PARAMS; i++) {
-    env.set(`param${i}`, { kind: 'str', value: '', origin: 'system-default' })
-  }
+  applyMacroArgv(env, macroArgv ?? [])
   return env
+}
+
+/** Tera Term: paramcnt / params[] / param1〜9 はマクロ起動時のコマンドライン引数 */
+function applyMacroArgv(env: Env, argv: string[]): void {
+  env.set('paramcnt', { kind: 'int', value: argv.length, origin: 'system-default' })
+  const elements = new Map<number, RuntimeScalar>()
+  for (let i = 0; i < argv.length; i++) {
+    elements.set(i + 1, { kind: 'str', value: argv[i]!, origin: 'system-default' })
+  }
+  env.set('params', { kind: 'array', size: Math.max(argv.length, 1), elements })
+  for (let i = 1; i <= 9; i++) {
+    env.set(`param${i}`, { kind: 'str', value: argv[i - 1] ?? '', origin: 'system-default' })
+  }
 }
 
 function isRuntimeOrigin(origin?: ValueOrigin): boolean {
@@ -853,39 +865,42 @@ interface EvalOptions {
 
 interface StmtResult {
   nextIdx: number
+  /** 指定時は nextIdx+1 ではなくこの行へジャンプ（0-based） */
+  jumpTo?: number
   stopAll?: boolean
   stopInclude?: boolean
   /** ブロック内の end/exit（マクロ全体は継続） */
   stopBlock?: boolean
+  /** ステップ上限・call 深度上限などで打ち切り */
+  truncated?: boolean
 }
 
-function bindCallParams(env: Env, paramTokens: Token[]): void {
-  const capped = paramTokens.slice(0, MAX_SUBROUTINE_PARAMS)
-  setScalar(env, 'paramcnt', { kind: 'int', value: capped.length, origin: 'system-default' })
-  for (let i = 0; i < MAX_SUBROUTINE_PARAMS; i++) {
-    const key = `param${i + 1}`
-    if (i < capped.length) {
-      const tok = capped[i]!
-      let scalar = evalTokenValue(tok, env)
-      if (!scalar) {
-        const intVal = evalIntExpr([tok], 0, env)
-        if (intVal !== undefined) scalar = { kind: 'int', value: intVal }
-      }
-      if (scalar?.kind === 'str') {
-        setScalar(env, key, prepareAssignedScalar(scalar))
-      } else if (scalar?.kind === 'int') {
-        setScalar(env, key, {
-          kind: 'str',
-          value: String(scalar.value),
-          origin: scalar.origin ?? 'literal',
-        })
-      } else {
-        setScalar(env, key, { kind: 'str', value: '', hint: '（実行時）', hasUnresolvedParts: true })
-      }
-    } else {
-      setScalar(env, key, { kind: 'str', value: '', origin: 'system-default' })
+function resolveEnvString(env: Env, name: string): string | undefined {
+  const v = env.get(name)
+  return v?.kind === 'str' && v.value ? v.value : undefined
+}
+
+function processGotoCall(
+  env: Env,
+  lines: string[],
+  lineIdx: number,
+  tokens: Token[],
+  offset: number,
+  opts: EvalOptions,
+): StmtResult {
+  const cmd = tokens[offset]?.kind === 'identifier' ? tokens[offset]!.text.toLowerCase() : ''
+  const labelName = resolveJumpLabelName(tokens[offset + 1], (n) => resolveEnvString(env, n))
+  if (!labelName) return { nextIdx: lineIdx }
+  const targetIdx = findLabelLineIndex(lines, labelName)
+  if (targetIdx < 0) return { nextIdx: lineIdx, stopAll: true }
+
+  if (cmd === 'call') {
+    if (opts.callStack.length >= MAX_CALL_DEPTH) {
+      return { nextIdx: lineIdx, stopAll: true, truncated: true }
     }
+    opts.callStack.push({ returnIdx: lineIdx })
   }
+  return { nextIdx: lineIdx, jumpTo: targetIdx }
 }
 
 function processIncludedContent(env: Env, content: string, opts: EvalOptions): StmtResult {
@@ -896,10 +911,16 @@ function processIncludedContent(env: Env, content: string, opts: EvalOptions): S
       ...opts,
       inInclude: true,
       inBlock: false,
+      callStack: [],
     })
     if (result.stopAll) return result
     if (result.stopInclude) break
-    i = result.nextIdx + 1
+    if (result.jumpTo !== undefined) {
+      i = result.jumpTo
+    } else {
+      i = result.nextIdx + 1
+    }
+    continue
   }
   return { nextIdx: Math.max(0, lines.length - 1) }
 }
@@ -928,7 +949,11 @@ function processBlock(
     if (captureLineEnv && afterLine) afterLine.set(lineNum, cloneEnv(env))
     if (result.stopAll) return true
     if (result.stopBlock || result.stopInclude) return false
-    i = result.nextIdx > i ? result.nextIdx + 1 : i + 1
+    if (result.jumpTo !== undefined) {
+      i = result.jumpTo
+    } else {
+      i = result.nextIdx > i ? result.nextIdx + 1 : i + 1
+    }
   }
   return false
 }
@@ -1028,25 +1053,17 @@ function processStatement(
   }
 
   if (cmd === 'goto' || cmd === 'call') {
-    const labelName = labelNameFromToken(tokens[offset + 1])
-    if (!labelName) return { nextIdx: lineIdx }
-    const targetIdx = findLabelLineIndex(lines, labelName)
-    if (targetIdx < 0) return { nextIdx: lineIdx }
-
-    if (cmd === 'call') {
-      const { params } = extractCallLabelAndParams(tokens, offset)
-      bindCallParams(env, params)
-      opts.callStack.push({ returnIdx: lineIdx })
-    }
-    return { nextIdx: targetIdx }
+    return processGotoCall(env, lines, lineIdx, tokens, offset, opts)
   }
 
   if (cmd === 'return') {
+    if (opts.inInclude && !opts.inBlock) {
+      return { nextIdx: lineIdx, stopInclude: true }
+    }
     const frame = opts.callStack.pop()
     if (frame) {
-      return { nextIdx: frame.returnIdx }
+      return { nextIdx: lineIdx, jumpTo: frame.returnIdx + 1 }
     }
-    if (opts.inInclude && !opts.inBlock) return { nextIdx: lineIdx, stopInclude: true }
     if (opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
     return { nextIdx: lineIdx, stopAll: true }
   }
@@ -1093,6 +1110,20 @@ function processStatement(
 
   for (const [open, close] of Object.entries(BLOCK_PAIRS)) {
     if (cmd === 'if') {
+      const tailStart = findSingleLineIfTailStart(tokens, offset)
+      if (tailStart !== null) {
+        const cond = evalBoolExpr(tokens.slice(offset + 1, tailStart), env)
+        if (cond === true) {
+          const tailCmd = tokens[tailStart]?.kind === 'identifier' ? tokens[tailStart]!.text.toLowerCase() : ''
+          if (tailCmd === 'goto' || tailCmd === 'call') {
+            return processGotoCall(env, lines, lineIdx, tokens, tailStart, opts)
+          }
+          if (tailCmd === 'send' || tailCmd === 'sendln') {
+            recordSend(opts, lineNum, tailCmd, tokens, tailStart + 1, env)
+          }
+        }
+        return { nextIdx: lineIdx }
+      }
       return processIfChain(env, lines, lineIdx, beforeLine, afterLine, opts)
     }
     if (cmd === open && open !== 'for') {
@@ -1110,6 +1141,8 @@ function processStatement(
 
 export interface EvaluateOptions {
   includeResolver?: IncludeResolver
+  /** マクロ起動時のコマンドライン引数（先頭要素はマクロファイルパス。paramcnt に含む） */
+  macroArgv?: string[]
 }
 
 export interface EvaluationResult {
@@ -1118,6 +1151,8 @@ export interface EvaluationResult {
   /** 各行の実行直後の環境 */
   afterLine: Map<number, Env>
   sendEntries: SendEntry[]
+  /** ステップ上限等で評価が打ち切られた */
+  truncated?: boolean
   getHoverAt(line: number, column: number): HoverAtResult | null
 }
 
@@ -1126,7 +1161,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   const beforeLine = new Map<number, Env>()
   const afterLine = new Map<number, Env>()
   const sendEntries: SendEntry[] = []
-  const env = initEnv()
+  const env = initEnv(options?.macroArgv)
   const labels = collectLabelLineMap(lines)
   const evalOpts: EvalOptions = {
     includeResolver: options?.includeResolver,
@@ -1137,22 +1172,32 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   }
 
   let lineIdx = 0
-  const maxSteps = Math.max(lines.length * 4, 64)
+  const maxSteps = Math.max(lines.length * 8, 128)
   let steps = 0
+  let truncated = false
   while (lineIdx < lines.length) {
-    if (++steps > maxSteps) break
+    if (++steps > maxSteps) {
+      truncated = true
+      break
+    }
     const lineNum = lineIdx + 1
     beforeLine.set(lineNum, cloneEnv(env))
     const result = processStatement(env, lines, lineIdx, beforeLine, afterLine, evalOpts)
     afterLine.set(lineNum, cloneEnv(env))
+    if (result.truncated) truncated = true
     if (result.stopAll) break
-    lineIdx = result.nextIdx + 1
+    if (result.jumpTo !== undefined) {
+      lineIdx = result.jumpTo
+    } else {
+      lineIdx = result.nextIdx + 1
+    }
   }
 
   return {
     beforeLine,
     afterLine,
     sendEntries,
+    truncated: truncated || undefined,
     getHoverAt(line: number, column: number): HoverAtResult | null {
       const rawLine = lines[line - 1]
       if (!rawLine) return null
