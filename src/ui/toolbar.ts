@@ -75,6 +75,13 @@ export function createToolbar(container: HTMLElement, editor: EditorInstance, ac
   })
 
   document.addEventListener('keydown', (e) => {
+    if (
+      document.querySelector('.ttl-dialog-overlay, .goto-line-overlay') ||
+      (e.target instanceof Element && e.target.closest('[role="dialog"]'))
+    ) {
+      return
+    }
+
     if (e.key === 'F5' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault()
       if (e.shiftKey) {

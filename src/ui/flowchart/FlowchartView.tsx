@@ -5,34 +5,33 @@ import {
   BackgroundVariant,
   Controls,
   MarkerType,
-  MiniMap,
+  Panel,
   Position,
   ReactFlow,
   type Edge,
   type Node,
+  type NodeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type {
   FlowchartEdge,
   FlowchartModel,
-  FlowchartNode,
-  FlowchartNodeKind,
 } from '../../ttl/flowchart'
+import { FlowNode, type FlowNodeData } from './FlowNode'
+import { FlowchartOverview } from './FlowchartOverview'
+import { matchesFlowchartActiveLocation } from './flowchartUtils'
 
 export interface FlowchartViewProps {
   model: FlowchartModel | null
   activeLocation?: string
   dark: boolean
+  visible: boolean
   onGotoLocation: (location: string) => void
-}
-
-interface FlowNodeData extends Record<string, unknown> {
-  label: string
-  model: FlowchartNode
 }
 
 const NODE_WIDTH = 210
 const NODE_HEIGHT = 68
+const nodeTypes = { flow: FlowNode } satisfies NodeTypes
 
 function edgeColor(kind: FlowchartEdge['kind']): string {
   if (kind === 'true' || kind === 'include' || kind === 'call') return 'var(--flow-edge-positive)'
@@ -41,7 +40,7 @@ function edgeColor(kind: FlowchartEdge['kind']): string {
   return 'var(--flow-edge-default)'
 }
 
-function layoutModel(model: FlowchartModel, activeLocation?: string): {
+function layoutModel(model: FlowchartModel): {
   nodes: Node<FlowNodeData>[]
   edges: Edge[]
 } {
@@ -56,31 +55,32 @@ function layoutModel(model: FlowchartModel, activeLocation?: string): {
     marginy: 24,
   })
 
+  const nodeIds = new Set(model.nodes.map((node) => node.id))
   for (const node of model.nodes) {
     graph.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT })
   }
-  for (const edge of model.edges) graph.setEdge(edge.source, edge.target)
+  for (const edge of model.edges) {
+    if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) {
+      graph.setEdge(edge.source, edge.target)
+    }
+  }
   dagre.layout(graph)
 
-  const nodes: Node<FlowNodeData>[] = model.nodes.map((node) => {
-    const point = graph.node(node.id) as { x: number; y: number }
-    const activeMatch = /^(.*):L(\d+)$/.exec(activeLocation ?? '')
-    const activePrefix = activeMatch?.[1]?.replace(/\\/g, '/').toLowerCase()
-    const sourceName = node.sourceName.replace(/\\/g, '/').toLowerCase()
-    const activeLine = Number(activeMatch?.[2] ?? 0)
-    const isActive =
-      activeLine >= node.line &&
-      activeLine <= node.endLine &&
-      (activePrefix === node.sourceId.toLowerCase() ||
-        activePrefix === sourceName ||
-        sourceName.endsWith(`/${activePrefix}`) ||
-        activePrefix?.endsWith(`/${sourceName}`))
+  const nodes: Node<FlowNodeData>[] = model.nodes.map((node, index) => {
+    const point = graph.node(node.id) as { x?: number; y?: number } | undefined
+    const centerX: number = Number.isFinite(point?.x) ? point!.x! : index * (NODE_WIDTH + 40)
+    const centerY: number = Number.isFinite(point?.y) ? point!.y! : index * (NODE_HEIGHT + 48)
     return {
       id: node.id,
-      position: { x: point.x - NODE_WIDTH / 2, y: point.y - NODE_HEIGHT / 2 },
+      type: 'flow',
+      position: { x: centerX - NODE_WIDTH / 2, y: centerY - NODE_HEIGHT / 2 },
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+      initialWidth: NODE_WIDTH,
+      initialHeight: NODE_HEIGHT,
       data: { label: node.label, model: node },
-      className: `flowchart-node flowchart-node-${node.kind}${isActive ? ' flowchart-node-active' : ''}`,
-      style: { width: NODE_WIDTH, minHeight: NODE_HEIGHT },
+      className: `flowchart-node flowchart-node-${node.kind}`,
+      style: { width: NODE_WIDTH, height: NODE_HEIGHT },
       sourcePosition: Position.Bottom,
       targetPosition: Position.Top,
     }
@@ -102,66 +102,41 @@ function layoutModel(model: FlowchartModel, activeLocation?: string): {
   return { nodes, edges }
 }
 
-function minimapNodeColor(kind: FlowchartNodeKind, dark: boolean): string {
-  const colors: Record<FlowchartNodeKind, string> = dark
-    ? {
-        entry: '#5a9fd4',
-        exit: '#e07070',
-        process: '#707070',
-        assignment: '#909090',
-        decision: '#b08cff',
-        loop: '#b08cff',
-        io: '#45b8c4',
-        dialog: '#45b8c4',
-        jump: '#6a9fd8',
-        include: '#d4b05c',
-        terminal: '#e07070',
-        warning: '#e07070',
-      }
-    : {
-        entry: '#4a7ab8',
-        exit: '#c44a4a',
-        process: '#9a9690',
-        assignment: '#7a7670',
-        decision: '#8a6ab0',
-        loop: '#8a6ab0',
-        io: '#3d8f7a',
-        dialog: '#3d8f7a',
-        jump: '#4a7ab8',
-        include: '#9a7d28',
-        terminal: '#c44a4a',
-        warning: '#c44a4a',
-      }
-  return colors[kind]
-}
-
-function minimapTheme(dark: boolean) {
-  return dark
-    ? {
-        bgColor: '#2a2a2a',
-        maskColor: 'rgba(0, 0, 0, 0.55)',
-        maskStrokeColor: '#858585',
-        nodeStrokeColor: '#1e1e1e',
-      }
-    : {
-        bgColor: '#e8e6e2',
-        maskColor: 'rgba(228, 226, 222, 0.72)',
-        maskStrokeColor: '#6b6864',
-        nodeStrokeColor: '#b8b4ad',
-      }
+function applyActiveHighlight(
+  nodes: Node<FlowNodeData>[],
+  activeLocation?: string,
+): Node<FlowNodeData>[] {
+  return nodes.map((node) => {
+    const modelNode = node.data.model
+    const isActive = activeLocation ? matchesFlowchartActiveLocation(modelNode, activeLocation) : false
+    const baseClass = `flowchart-node flowchart-node-${modelNode.kind}`
+    return {
+      ...node,
+      className: `${baseClass}${isActive ? ' flowchart-node-active' : ''}`,
+    }
+  })
 }
 
 export function FlowchartView({
   model,
   activeLocation,
   dark,
+  visible,
   onGotoLocation,
 }: FlowchartViewProps) {
-  const layout = useMemo(
-    () => (model ? layoutModel(model, activeLocation) : { nodes: [], edges: [] }),
-    [model, activeLocation],
+  const baseLayout = useMemo(
+    () => (model ? layoutModel(model) : { nodes: [], edges: [] }),
+    [model],
   )
-  const miniMapTheme = useMemo(() => minimapTheme(dark), [dark])
+  const nodes = useMemo(
+    () => applyActiveHighlight(baseLayout.nodes, activeLocation),
+    [baseLayout.nodes, activeLocation],
+  )
+  const layout = useMemo(() => ({ nodes, edges: baseLayout.edges }), [nodes, baseLayout.edges])
+
+  if (!visible) {
+    return <div className="flowchart-empty">フロータブを開くと表示されます</div>
+  }
 
   if (!model || model.nodes.length === 0) {
     return <div className="flowchart-empty">表示できる処理がありません</div>
@@ -169,8 +144,10 @@ export function FlowchartView({
 
   return (
     <ReactFlow
+      key={model.rootSourceId}
       nodes={layout.nodes}
       edges={layout.edges}
+      nodeTypes={nodeTypes}
       colorMode={dark ? 'dark' : 'light'}
       fitView
       fitViewOptions={{ padding: 0.18, maxZoom: 1.1 }}
@@ -180,22 +157,19 @@ export function FlowchartView({
       nodesConnectable={false}
       elementsSelectable
       onNodeClick={(_, node) => onGotoLocation((node.data as FlowNodeData).model.location)}
+      onNodesChange={() => {}}
+      onEdgesChange={() => {}}
       proOptions={{ hideAttribution: true }}
     >
       <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
-      <MiniMap
-        pannable
-        zoomable
-        style={{ width: 84, height: 56 }}
-        bgColor={miniMapTheme.bgColor}
-        maskColor={miniMapTheme.maskColor}
-        maskStrokeColor={miniMapTheme.maskStrokeColor}
-        maskStrokeWidth={1}
-        nodeBorderRadius={3}
-        nodeStrokeWidth={1}
-        nodeStrokeColor={miniMapTheme.nodeStrokeColor}
-        nodeColor={(node) => minimapNodeColor((node.data as FlowNodeData).model.kind, dark)}
-      />
+      <Panel position="bottom-right" className="flowchart-overview-panel">
+        <FlowchartOverview
+          nodes={baseLayout.nodes}
+          dark={dark}
+          nodeWidth={NODE_WIDTH}
+          nodeHeight={NODE_HEIGHT}
+        />
+      </Panel>
       <Controls showInteractive={false} />
     </ReactFlow>
   )

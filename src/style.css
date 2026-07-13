@@ -349,6 +349,8 @@ body {
 }
 
 .side-panel-body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   overflow-y: auto;
   min-height: 0;
@@ -358,6 +360,7 @@ body {
 .send-list[hidden],
 .dryrun-list[hidden],
 .flowchart-host[hidden],
+.flowchart-warnings[hidden],
 .include-section[hidden],
 .diagnostics-section[hidden] {
   display: none !important;
@@ -368,6 +371,22 @@ body {
   height: 100%;
   min-height: 360px;
   background: var(--bg-primary);
+  flex: 1 1 auto;
+}
+
+.flowchart-warnings {
+  flex: 0 0 auto;
+  max-height: 96px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg-secondary));
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.flowchart-warning-item + .flowchart-warning-item {
+  margin-top: 4px;
 }
 
 .flowchart-empty {
@@ -443,6 +462,31 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 4px;
   overflow: hidden;
+}
+
+.flowchart-overview-panel {
+  margin: 0 8px 44px 0 !important;
+}
+
+.flowchart-overview {
+  display: block;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: crosshair;
+}
+
+.flowchart-handle {
+  width: 8px !important;
+  height: 8px !important;
+  opacity: 0;
+  border: none;
+  background: transparent !important;
+}
+
+.flowchart-node-label {
+  width: 100%;
+  white-space: pre-line;
+  text-align: center;
 }
 
 .flowchart-host .react-flow__controls {

@@ -219,6 +219,7 @@ function createIncludeChildContext(
 
 interface LineLoopResult {
   exit: boolean
+  terminator?: 'end' | 'exit'
 }
 
 interface LineLoopOpts {
@@ -697,7 +698,7 @@ function analyzeResolvedInclude(
   notLinkedMessage: string,
   rawArg?: string,
   effectiveRaw?: string,
-): void {
+): boolean {
   if (ctx.includeStack.includes(bindingKey)) {
     pushDiagnostic(ctx, {
       line: lineNum,
@@ -705,7 +706,7 @@ function analyzeResolvedInclude(
       message: `循環 include が検出されました: L${lineNum}`,
       severity: 'error',
     })
-    return
+    return false
   }
   const linkedTabId = content ? ctx.includeResolver!.getLinkedTabId(bindingKey, rawArg, effectiveRaw) : null
   if (linkedTabId && ctx.includeTabStack.includes(linkedTabId)) {
@@ -715,7 +716,7 @@ function analyzeResolvedInclude(
       message: `循環 include が検出されました（同一タブの再参照）: L${lineNum}`,
       severity: 'error',
     })
-    return
+    return false
   }
   if (!content) {
     if (!ctx.suppressDiagnostics) {
@@ -726,7 +727,7 @@ function analyzeResolvedInclude(
         severity: 'info',
       })
     }
-    return
+    return false
   }
 
   ctx.includeStack.push(bindingKey)
@@ -739,16 +740,17 @@ function analyzeResolvedInclude(
     mergeExternalVarMaps(exchange.externallyDeclared, snapshotParentScopeVars(ctx.varMap))
   }
   const childCtx = createIncludeChildContext(ctx, content, childResolver)
-  analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
+  const childResult = analyzeLines(stripComments(content), childCtx, { stopOnExit: true })
   ctx.includeStack.pop()
   if (linkedTabId) ctx.includeTabStack.pop()
+  return childResult.terminator === 'end'
 }
 
 function pushDiagnostic(ctx: AnalysisContext, diag: Diagnostic): void {
   if (!ctx.suppressDiagnostics) ctx.diagnostics.push(diag)
 }
 
-function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoopOpts): LineLoopResult {
+function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopOpts): LineLoopResult {
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const lineNum = lineIdx + 1
     const line = lines[lineIdx]!
@@ -805,7 +807,9 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
           const bindingKey = normalizeIncludePath(path)
           const content = ctx.includeResolver.resolve(path)
           const notLinkedMessage = `include '${path}' がタブにリンクされていないため、内容は解析に含まれません`
-          analyzeResolvedInclude(ctx, lineNum, first, bindingKey, content, notLinkedMessage)
+          if (analyzeResolvedInclude(ctx, lineNum, first, bindingKey, content, notLinkedMessage)) {
+            ctx.fileUnreachable = true
+          }
         } else {
           const rawArg = extractIncludeArgText(tokens, 0)
           const argLabel = rawArg || '（引数）'
@@ -825,7 +829,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
                 effectiveRaw,
               }
               const content = ctx.includeResolver.resolveDynamic(rawArg, resolveCtx)
-              analyzeResolvedInclude(
+              if (analyzeResolvedInclude(
                 ctx,
                 lineNum,
                 first,
@@ -834,20 +838,31 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
                 notLinkedMessage,
                 rawArg,
                 effectiveRaw,
-              )
+              )) {
+                ctx.fileUnreachable = true
+              }
             }
           } else {
             const bindingKey = includeDynamicBindingKey(rawArg)
             const content = ctx.includeResolver.resolveDynamic(rawArg)
-            analyzeResolvedInclude(ctx, lineNum, first, bindingKey, content, notLinkedMessage, rawArg)
+            if (analyzeResolvedInclude(ctx, lineNum, first, bindingKey, content, notLinkedMessage, rawArg)) {
+              ctx.fileUnreachable = true
+            }
           }
         }
       }
       continue
     }
 
-    if (cmd === 'exit' || cmd === 'end') {
-      markMacroTerminator(ctx, ctx.blockStack.length === 0)
+    if (cmd === 'end') {
+      ctx.fileUnreachable = true
+      if (loopOpts.stopOnExit) return { exit: true, terminator: 'end' }
+    } else if (cmd === 'exit') {
+      const exitsOnlyIncludeBlock = ctx.suppressDiagnostics && ctx.blockStack.length > 0
+      markMacroTerminator(ctx, !exitsOnlyIncludeBlock)
+      if (loopOpts.stopOnExit && !exitsOnlyIncludeBlock) {
+        return { exit: true, terminator: 'exit' }
+      }
     }
 
     if (

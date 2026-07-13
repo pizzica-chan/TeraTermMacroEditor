@@ -305,8 +305,8 @@ function refreshIncludePanel(text?: string) {
       editor.gotoLine(line)
     },
     onOpenLinkedTab(tabId) {
-      const keepDryRun = dryRunActive || dryRunRunPromise !== null
-      tabManager.switchTab(tabId, keepDryRun ? { keepDryRun: true } : undefined)
+      if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
+      tabManager.switchTab(tabId)
     },
   })
 
@@ -329,11 +329,15 @@ const tabManager = new TabManager(
     editor.clearExecutionLine()
   },
 )
-tabManager.setKeepDryRunOnUserSwitch(() => dryRunActive || dryRunRunPromise !== null)
+tabManager.setKeepDryRunOnUserSwitch(() => {
+  if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
+  return false
+})
 tabManager.setOnTabClosed((closedTabId) => {
   const related = isDryRunRelatedTab(closedTabId)
   if (closedTabId === dryRunOriginTabId) dryRunOriginTabId = null
   if ((dryRunActive || dryRunRunPromise !== null) && related) stopDryRun()
+  schedulePersistWorkspaceSession()
 })
 
 let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -365,13 +369,20 @@ function updateCursorPosition() {
   const col = pos - line.from + 1
   const statusEl = document.querySelector('#status-position')
   if (statusEl) statusEl.textContent = `Ln ${line.number}, Col ${col}`
+  if (!isDryRunInProgress()) {
+    const tab = tabManager.activeTab
+    sidePanel.setFlowchartActiveLocation(tab ? `${tab.id}:L${line.number}` : undefined)
+  }
 }
 
 editor.view.dom.addEventListener('keyup', updateCursorPosition)
 editor.view.dom.addEventListener('click', updateCursorPosition)
 
 function handleNewTab() {
-  if (!tabManager.canAddTab()) return
+  if (!tabManager.canAddTab()) {
+    alert(`タブは最大 ${MAX_TABS} 個まで開けます。`)
+    return
+  }
   if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
   tabManager.addTab({ fileName: '未保存', docSettings: createDefaultDocumentSettings(), activate: true })
 }
@@ -391,8 +402,17 @@ async function openFile(
   fileHandle: FileSystemFileHandle | null,
   options?: { ifAlreadyOpen?: 'switch' | 'skip' },
 ) {
-  const existing = tabManager.findByFileName(fileName)
-  if (existing && existing.fileHandle === fileHandle) {
+  let existing: EditorTab | undefined
+  if (fileHandle) {
+    for (const tab of tabManager.allTabs) {
+      if (!tab.fileHandle) continue
+      if (tab.fileHandle === fileHandle || (await tab.fileHandle.isSameEntry(fileHandle))) {
+        existing = tab
+        break
+      }
+    }
+  }
+  if (existing) {
     if (options?.ifAlreadyOpen === 'skip') return
     tabManager.switchTab(existing.id, dryRunKeepOptions())
     return
@@ -652,7 +672,10 @@ function findTabForLocationPrefix(prefix: string, contextTab: EditorTab | null):
     if (fromLinked) return fromLinked
   }
 
-  return tabManager.findByFileName(prefix) ?? tabManager.findByFileName(normalized) ?? null
+  const matches = tabManager.allTabs.filter(
+    (tab) => tab.fileName === prefix || tab.fileName === normalized,
+  )
+  return matches.length === 1 ? matches[0]! : null
 }
 
 function dryRunLocationMatchesActiveTab(location: string | undefined): boolean {
@@ -669,7 +692,7 @@ function dryRunLocationMatchesActiveTab(location: string | undefined): boolean {
   return targetTab?.id === tab.id
 }
 
-function gotoTtlLocation(location: string, contextTab: EditorTab | null): void {
+function gotoTtlLocation(location: string, contextTab: EditorTab | null): boolean {
   const keepDryRun = dryRunKeepOptions()
   const mainMatch = /^L(\d+)$/.exec(location)
   if (mainMatch) {
@@ -678,17 +701,19 @@ function gotoTtlLocation(location: string, contextTab: EditorTab | null): void {
     }
     editor.gotoLine(Number(mainMatch[1]))
     refreshDryRunHighlight()
-    return
+    return true
   }
   const prefixed = /^(.*):L(\d+)$/.exec(location)
-  if (!prefixed) return
+  if (!prefixed) return false
   const [, prefix, lineStr] = prefixed
   const targetTab = findTabForLocationPrefix(prefix!, contextTab)
   if (targetTab) {
     tabManager.switchTab(targetTab.id, keepDryRun)
     editor.gotoLine(Number(lineStr))
     refreshDryRunHighlight()
+    return true
   }
+  return false
 }
 
 function gotoSendLocation(location: string): void {
@@ -700,7 +725,9 @@ function gotoDryRunLocation(location: string): void {
 }
 
 function gotoFlowchartLocation(location: string): void {
-  gotoTtlLocation(location, tabManager.activeTab)
+  if (!gotoTtlLocation(location, tabManager.activeTab)) {
+    setStatusMessage('フローチャートの参照先タブを特定できません')
+  }
 }
 
 function refreshDryRunHighlight(): void {
@@ -739,6 +766,7 @@ function stopDryRun(): void {
   editor.clearExecutionLine()
   editor.setDryRunLocked(false)
   runAnalysisNow(editor.getValue())
+  updateCursorPosition()
 }
 
 async function startDryRun(): Promise<void> {
@@ -793,6 +821,7 @@ async function startDryRun(): Promise<void> {
       editor.clearExecutionLine()
       editor.setDryRunLocked(false)
       runAnalysisNow(editor.getValue())
+      updateCursorPosition()
     }
   }
 }
@@ -889,7 +918,7 @@ function setupFileDrop() {
           break
         }
         const bytes = await readFileAsBytes(file)
-        await openFile(bytes, file.name, null, { ifAlreadyOpen: 'skip' })
+        await openFile(bytes, file.name, null)
       }
     },
     true,

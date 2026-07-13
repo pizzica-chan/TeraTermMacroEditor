@@ -868,8 +868,7 @@ function tryEvalCondition(line: string, lineIdx: number, env: Env, cmd: string):
     const thenIdx = tokens.findIndex(
       (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
     )
-    if (thenIdx < 0) return undefined
-    condEnd = thenIdx
+    if (thenIdx >= 0) condEnd = thenIdx
   } else if (cmd !== 'while' && cmd !== 'until') {
     return undefined
   }
@@ -897,11 +896,9 @@ function processIfChain(
       if (!executed) {
         const bodyStart = cursor + 1
         const bodyEnd = endIdx - 1
-        if (
-          bodyStart <= bodyEnd &&
-          processBlock(env, lines, bodyStart, bodyEnd, beforeLine, afterLine, opts)
-        ) {
-          return { nextIdx: endIdx, stopAll: true }
+        if (bodyStart <= bodyEnd) {
+          const run = processBlock(env, lines, bodyStart, bodyEnd, beforeLine, afterLine, opts)
+          if (run !== 'complete') return blockRunToStmtResult(run, endIdx)
         }
       }
       break
@@ -913,12 +910,9 @@ function processIfChain(
       const bodyStart = cursor + 1
       const bodyEnd = nextSibling - 1
 
-      if (condResult !== false && bodyStart <= bodyEnd) {
-        if (
-          processBlock(env, lines, bodyStart, bodyEnd, beforeLine, afterLine, opts)
-        ) {
-          return { nextIdx: endIdx, stopAll: true }
-        }
+      if (condResult === true && bodyStart <= bodyEnd) {
+        const run = processBlock(env, lines, bodyStart, bodyEnd, beforeLine, afterLine, opts)
+        if (run !== 'complete') return blockRunToStmtResult(run, endIdx)
         executed = true
         break
       }
@@ -957,11 +951,12 @@ interface EvalOptions {
   includeStack: string[]
   includeTabStack: string[]
   inInclude?: boolean
-  /** if/while/for 等のブロック内（end/exit はブロック脱出のみ） */
+  /** if/while/for 等のブロック内 */
   inBlock?: boolean
   locationPrefix?: string
   sendEntries?: SendEntry[]
   loopFrame?: { variable: string; value: number; index: number; total: number }
+  loopControl?: { breakRequested: boolean; continueRequested: boolean }
   callStack: CallFrame[]
 }
 
@@ -971,10 +966,19 @@ interface StmtResult {
   jumpTo?: number
   stopAll?: boolean
   stopInclude?: boolean
-  /** ブロック内の end/exit（マクロ全体は継続） */
+  /** 現在のブロックだけを終了 */
   stopBlock?: boolean
   /** ステップ上限・call 深度上限などで打ち切り */
   truncated?: boolean
+}
+
+type BlockRunResult = 'complete' | 'stopAll' | 'stopInclude' | 'stopBlock'
+
+function blockRunToStmtResult(run: BlockRunResult, nextIdx: number): StmtResult {
+  if (run === 'stopAll') return { nextIdx, stopAll: true }
+  if (run === 'stopInclude') return { nextIdx, stopInclude: true }
+  if (run === 'stopBlock') return { nextIdx, stopBlock: true }
+  return { nextIdx }
 }
 
 function resolveEnvString(env: Env, name: string): string | undefined {
@@ -1007,14 +1011,15 @@ function processGotoCall(
 
 function processIncludedContent(env: Env, content: string, opts: EvalOptions): StmtResult {
   const lines = stripComments(content)
+  const includeOpts: EvalOptions = {
+    ...opts,
+    inInclude: true,
+    inBlock: false,
+    callStack: [],
+  }
   let i = 0
   while (i < lines.length) {
-    const result = processStatement(env, lines, i, null, null, {
-      ...opts,
-      inInclude: true,
-      inBlock: false,
-      callStack: [],
-    })
+    const result = processStatement(env, lines, i, null, null, includeOpts)
     if (result.stopAll) return result
     if (result.stopInclude) break
     if (result.jumpTo !== undefined) {
@@ -1041,7 +1046,7 @@ function processBlock(
   beforeLine: Map<number, Env> | null,
   afterLine: Map<number, Env> | null,
   opts: EvalOptions,
-): boolean {
+): BlockRunResult {
   const captureLineEnv = shouldCaptureLineEnv(opts, beforeLine)
   let i = startIdx
   while (i <= endIdx) {
@@ -1049,15 +1054,16 @@ function processBlock(
     if (captureLineEnv && beforeLine) beforeLine.set(lineNum, cloneEnv(env))
     const result = processStatement(env, lines, i, beforeLine, afterLine, { ...opts, inBlock: true })
     if (captureLineEnv && afterLine) afterLine.set(lineNum, cloneEnv(env))
-    if (result.stopAll) return true
-    if (result.stopBlock || result.stopInclude) return false
+    if (result.stopAll) return 'stopAll'
+    if (result.stopInclude) return 'stopInclude'
+    if (result.stopBlock) return 'stopBlock'
     if (result.jumpTo !== undefined) {
       i = result.jumpTo
     } else {
       i = result.nextIdx > i ? result.nextIdx + 1 : i + 1
     }
   }
-  return false
+  return 'complete'
 }
 
 function processSingleLineIfTail(
@@ -1072,6 +1078,12 @@ function processSingleLineIfTail(
   const tailCmd = tokens[tailStart]?.kind === 'identifier' ? tokens[tailStart]!.text.toLowerCase() : ''
   if (tailCmd === 'goto' || tailCmd === 'call') {
     return processGotoCall(env, lines, lineIdx, tokens, tailStart, opts)
+  }
+  if (tailCmd === 'break' || tailCmd === 'continue') {
+    if (!opts.loopControl) return { nextIdx: lineIdx, stopAll: true }
+    if (tailCmd === 'break') opts.loopControl.breakRequested = true
+    else opts.loopControl.continueRequested = true
+    return { nextIdx: lineIdx, stopBlock: true }
   }
   if (applyWaitReceiveEffects(env, tokens, tailStart, tailCmd)) {
     return { nextIdx: lineIdx }
@@ -1103,6 +1115,13 @@ function processStatement(
   if (first.kind !== 'identifier') return { nextIdx: lineIdx }
 
   const cmd = first.text.toLowerCase()
+
+  if (cmd === 'break' || cmd === 'continue') {
+    if (!opts.loopControl) return { nextIdx: lineIdx, stopAll: true }
+    if (cmd === 'break') opts.loopControl.breakRequested = true
+    else opts.loopControl.continueRequested = true
+    return { nextIdx: lineIdx, stopBlock: true }
+  }
 
   if (cmd === 'include') {
     const arg = tokens[offset + 1]
@@ -1165,14 +1184,12 @@ function processStatement(
   }
 
   if (cmd === 'exit') {
-    if (opts.inInclude && !opts.inBlock) return { nextIdx: lineIdx, stopInclude: true }
-    if (opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
+    if (opts.inInclude && opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
+    if (opts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
     return { nextIdx: lineIdx, stopAll: true }
   }
 
   if (cmd === 'end') {
-    if (opts.inInclude && !opts.inBlock) return { nextIdx: lineIdx, stopInclude: true }
-    if (opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
     return { nextIdx: lineIdx, stopAll: true }
   }
 
@@ -1181,12 +1198,12 @@ function processStatement(
   }
 
   if (cmd === 'return') {
-    if (opts.inInclude && !opts.inBlock) {
-      return { nextIdx: lineIdx, stopInclude: true }
-    }
     const frame = opts.callStack.pop()
     if (frame) {
       return { nextIdx: lineIdx, jumpTo: frame.returnIdx + 1 }
+    }
+    if (opts.inInclude && !opts.inBlock) {
+      return { nextIdx: lineIdx, stopInclude: true }
     }
     if (opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
     return { nextIdx: lineIdx, stopAll: true }
@@ -1211,25 +1228,80 @@ function processStatement(
         iteration++
         setScalar(env, loopVar, { kind: 'int', value: v })
         const loopFrame = { variable: loopVar, value: v, index: iteration, total }
-        if (
-          processBlock(env, lines, lineIdx + 1, bodyEnd - 1, beforeLine, afterLine, {
-            ...opts,
-            loopFrame,
-          })
-        ) {
-          return { nextIdx: bodyEnd, stopAll: true }
-        }
+        const loopControl = { breakRequested: false, continueRequested: false }
+        const run = processBlock(env, lines, lineIdx + 1, bodyEnd - 1, beforeLine, afterLine, {
+          ...opts,
+          loopFrame,
+          loopControl,
+        })
+        if (run === 'stopAll' || run === 'stopInclude') return blockRunToStmtResult(run, bodyEnd)
+        if (run === 'stopBlock' || loopControl.breakRequested) break
+        if (loopControl.continueRequested) continue
       }
     } else if (start !== undefined && end !== undefined) {
       setScalar(env, loopVar, { kind: 'int', value: start })
       env.set(loopVar.toLowerCase(), { kind: 'range', start, end, label: loopVar })
-      if (processBlock(env, lines, lineIdx + 1, bodyEnd - 1, beforeLine, afterLine, opts)) {
-        return { nextIdx: bodyEnd, stopAll: true }
-      }
-    } else if (processBlock(env, lines, lineIdx + 1, bodyEnd - 1, beforeLine, afterLine, opts)) {
-      return { nextIdx: bodyEnd, stopAll: true }
+      const run = processBlock(env, lines, lineIdx + 1, bodyEnd - 1, beforeLine, afterLine, opts)
+      if (run !== 'complete') return blockRunToStmtResult(run, bodyEnd)
+    } else {
+      const run = processBlock(env, lines, lineIdx + 1, bodyEnd - 1, beforeLine, afterLine, opts)
+      if (run !== 'complete') return blockRunToStmtResult(run, bodyEnd)
     }
     return { nextIdx: bodyEnd }
+  }
+
+  if (cmd === 'while') {
+    const endIdx = findBlockEnd(lines, lineIdx, 'while', 'endwhile')
+    let iterations = 0
+    while (iterations++ < MAX_LOOP_ITERATIONS) {
+      if (tryEvalCondition(line, lineIdx, env, 'while') !== true) break
+      const loopControl = { breakRequested: false, continueRequested: false }
+      const run = processBlock(env, lines, lineIdx + 1, endIdx - 1, beforeLine, afterLine, {
+        ...opts,
+        loopControl,
+      })
+      if (run === 'stopAll' || run === 'stopInclude') return blockRunToStmtResult(run, endIdx)
+      if (run === 'stopBlock' || loopControl.breakRequested) break
+    }
+    return { nextIdx: endIdx }
+  }
+
+  if (cmd === 'until') {
+    const endIdx = findBlockEnd(lines, lineIdx, 'until', 'enduntil')
+    let iterations = 0
+    while (iterations++ < MAX_LOOP_ITERATIONS) {
+      const loopControl = { breakRequested: false, continueRequested: false }
+      const run = processBlock(env, lines, lineIdx + 1, endIdx - 1, beforeLine, afterLine, {
+        ...opts,
+        loopControl,
+      })
+      if (run === 'stopAll' || run === 'stopInclude') return blockRunToStmtResult(run, endIdx)
+      if (run === 'stopBlock' || loopControl.breakRequested) break
+      if (tryEvalCondition(line, lineIdx, env, 'until') === true) break
+    }
+    return { nextIdx: endIdx }
+  }
+
+  if (cmd === 'do') {
+    const endIdx = findBlockEnd(lines, lineIdx, 'do', 'loop')
+    const loopTokens = tokenizeLine(lines[endIdx]!, endIdx + 1)
+    const loopOffset = loopTokens[0]?.kind === 'label' ? 1 : 0
+    const whileIndex = loopTokens.findIndex(
+      (token, index) =>
+        index > loopOffset && token.kind === 'identifier' && token.text.toLowerCase() === 'while',
+    )
+    let iterations = 0
+    while (iterations++ < MAX_LOOP_ITERATIONS) {
+      const run = processBlock(env, lines, lineIdx + 1, endIdx - 1, beforeLine, afterLine, {
+        ...opts,
+        loopControl: undefined,
+      })
+      if (run === 'stopAll' || run === 'stopInclude') return blockRunToStmtResult(run, endIdx)
+      if (run === 'stopBlock') break
+      if (whileIndex < 0) continue
+      if (evalBoolExpr(loopTokens.slice(whileIndex + 1), env) !== true) break
+    }
+    return { nextIdx: endIdx }
   }
 
   for (const [open, close] of Object.entries(BLOCK_PAIRS)) {
@@ -1252,11 +1324,10 @@ function processStatement(
       }
       return processIfChain(env, lines, lineIdx, beforeLine, afterLine, opts)
     }
-    if (cmd === open && open !== 'for') {
+    if (cmd === open && !['for', 'while', 'until', 'do'].includes(open)) {
       const endIdx = findBlockEnd(lines, lineIdx, open, close)
-      if (processBlock(env, lines, lineIdx + 1, endIdx - 1, beforeLine, afterLine, opts)) {
-        return { nextIdx: endIdx, stopAll: true }
-      }
+      const run = processBlock(env, lines, lineIdx + 1, endIdx - 1, beforeLine, afterLine, opts)
+      if (run !== 'complete') return blockRunToStmtResult(run, endIdx)
       return { nextIdx: endIdx }
     }
   }

@@ -295,6 +295,19 @@ function removeOutgoing(edges: FlowchartEdge[], source: string): void {
   }
 }
 
+function removeEdge(
+  edges: FlowchartEdge[],
+  source: string,
+  target: string | undefined,
+  kind: FlowchartEdgeKind,
+): void {
+  if (!target) return
+  for (let index = edges.length - 1; index >= 0; index--) {
+    const edge = edges[index]!
+    if (edge.source === source && edge.target === target && edge.kind === kind) edges.splice(index, 1)
+  }
+}
+
 /** 表示情報を通信・送受信・制御フローに絞り、省略ノードの前後を直結する */
 function compactForDisplay(model: FlowchartModel, showAssignments = false): FlowchartModel {
   const nodes = [...model.nodes]
@@ -427,6 +440,11 @@ function buildFileGraph(
       effectiveEnd = parent.end
     }
   }
+  const innermostBlock = (statementIndex: number): { start: number; end: number } | undefined =>
+    [...loopRanges, ...ifRanges]
+      .filter((range) => range.start < statementIndex && statementIndex < range.end)
+      .sort((a, b) => b.start - a.start)[0]
+  const isIncludedFile = globalExitId !== undefined
 
   const callRecords: Array<{ targetLine: number; successor: string }> = []
 
@@ -451,13 +469,20 @@ function buildFileGraph(
 
     if (statement.cmd === 'return') {
       removeOutgoing(edges, nodeId)
-      addEdge(edges, nodeId, exitId, 'return', 'return')
+      const block = isIncludedFile ? innermostBlock(index) : undefined
+      const fallback = block ? nodeAfterStatement(block.end) : isIncludedFile ? exitId : effectiveGlobalExitId
+      addEdge(edges, nodeId, fallback, 'return', 'return')
       continue
     }
 
     if (statement.cmd === 'end' || statement.cmd === 'exit') {
       removeOutgoing(edges, nodeId)
-      addEdge(edges, nodeId, statement.cmd === 'end' ? effectiveGlobalExitId : exitId, 'flow', statement.cmd)
+      if (statement.cmd === 'end' || !isIncludedFile) {
+        addEdge(edges, nodeId, effectiveGlobalExitId, 'flow', statement.cmd)
+      } else {
+        const block = innermostBlock(index)
+        addEdge(edges, nodeId, block ? nodeAfterStatement(block.end) : exitId, 'flow', statement.cmd)
+      }
       continue
     }
 
@@ -481,7 +506,7 @@ function buildFileGraph(
             ? tailCmd === 'break'
               ? nodeAfterStatement(loop.end)
               : nodeForStatement(loop.start)
-            : nodeAfterStatement(index),
+            : effectiveGlobalExitId,
           tailCmd === 'continue' ? 'loop' : 'false',
           tailCmd,
         )
@@ -511,7 +536,7 @@ function buildFileGraph(
         }
         const bodyLast = nodeForStatement(nextHeaderIndex - 1)
         if (bodyLast && bodyLast !== headerNode) {
-          removeOutgoing(edges, bodyLast)
+          removeEdge(edges, bodyLast, nodeForStatement(nextHeaderIndex), 'flow')
           addEdge(edges, bodyLast, after, 'flow')
         }
       }
@@ -566,12 +591,15 @@ function buildFileGraph(
       const loop = [...loopRanges]
         .reverse()
         .find((range) => range.cmd !== 'do' && range.start < index && index < range.end)
-      if (!loop) continue
       removeOutgoing(edges, nodeId)
       addEdge(
         edges,
         nodeId,
-        statement.cmd === 'break' ? nodeAfterStatement(loop.end) : nodeForStatement(loop.start),
+        loop
+          ? statement.cmd === 'break'
+            ? nodeAfterStatement(loop.end)
+            : nodeForStatement(loop.start)
+          : effectiveGlobalExitId,
         statement.cmd === 'break' ? 'false' : 'loop',
         statement.cmd,
       )

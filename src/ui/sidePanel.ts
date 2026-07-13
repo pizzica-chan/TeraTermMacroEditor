@@ -14,6 +14,7 @@ export function createSidePanel(
   update: (data: { analysis: AnalysisResult; sendEntries: SendEntry[] }) => void
   updateDryRun: (state: DryRunState | null) => void
   updateFlowchart: (model: FlowchartModel | null) => void
+  setFlowchartActiveLocation: (location: string | undefined) => void
   setFlowchartTheme: (dark: boolean) => void
   showTab: (tab: SidePanelTab) => void
   onGotoLine: (handler: (line: number) => void) => void
@@ -87,7 +88,12 @@ export function createSidePanel(
   flowchartHost.id = 'flowchart-host'
   flowchartHost.hidden = true
 
-  body.append(variableList, sendList, dryRunList, flowchartHost)
+  const flowchartWarnings = document.createElement('div')
+  flowchartWarnings.className = 'flowchart-warnings'
+  flowchartWarnings.id = 'flowchart-warnings'
+  flowchartWarnings.hidden = true
+
+  body.append(variableList, sendList, dryRunList, flowchartHost, flowchartWarnings)
 
   const diagSection = document.createElement('div')
   diagSection.className = 'diagnostics-section'
@@ -146,6 +152,18 @@ export function createSidePanel(
     dryRunCopyBtn.disabled = !isDryRunCopyAvailable(dryRunState)
   }
 
+  function renderFlowchartWarnings() {
+    if (activeTab !== 'flowchart' || !flowchartModel?.warnings.length) {
+      flowchartWarnings.hidden = true
+      flowchartWarnings.innerHTML = ''
+      return
+    }
+    flowchartWarnings.hidden = false
+    flowchartWarnings.innerHTML = flowchartModel.warnings
+      .map((warning) => `<div class="flowchart-warning-item">${escapeHtml(warning)}</div>`)
+      .join('')
+  }
+
   function setTab(tab: SidePanelTab) {
     activeTab = tab
     for (const btn of tabs.querySelectorAll<HTMLButtonElement>('.side-panel-tab')) {
@@ -159,6 +177,7 @@ export function createSidePanel(
     dryRunCopyBtn.hidden = tab !== 'dryrun'
     dryRunClearBtn.hidden = tab !== 'dryrun'
     flowchartOptions.hidden = tab !== 'flowchart'
+    flowchart.setVisible(tab === 'flowchart')
     diagSection.hidden = tab === 'flowchart'
     container.querySelector<HTMLElement>('.include-section')?.toggleAttribute('hidden', tab === 'flowchart')
     const title = container.querySelector('#side-panel-title')!
@@ -175,10 +194,11 @@ export function createSidePanel(
       updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
     } else if (tab === 'flowchart') {
       updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
-      requestAnimationFrame(() => flowchart.refresh())
+      renderFlowchartWarnings()
     } else {
       updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
     }
+    renderFlowchartWarnings()
   }
 
   tabs.addEventListener('click', (e) => {
@@ -513,7 +533,11 @@ export function createSidePanel(
       flowchart.update(model)
       if (activeTab === 'flowchart') {
         updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+        renderFlowchartWarnings()
       }
+    },
+    setFlowchartActiveLocation(location) {
+      flowchart.setActiveLocation(location)
     },
     setFlowchartTheme(dark) {
       flowchart.setTheme(dark)

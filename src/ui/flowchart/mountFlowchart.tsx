@@ -6,7 +6,7 @@ export interface FlowchartMount {
   update(model: FlowchartModel | null): void
   setActiveLocation(location: string | undefined): void
   setTheme(dark: boolean): void
-  refresh(): void
+  setVisible(visible: boolean): void
   destroy(): void
 }
 
@@ -21,15 +21,15 @@ export function mountFlowchart(
   let model: FlowchartModel | null = null
   let activeLocation: string | undefined
   let dark = options.dark
-  let revision = 0
+  let visible = false
 
   const render = () => {
     root.render(
       <FlowchartView
-        key={revision}
         model={model}
         activeLocation={activeLocation}
         dark={dark}
+        visible={visible}
         onGotoLocation={options.onGotoLocation}
       />,
     )
@@ -39,21 +39,21 @@ export function mountFlowchart(
   return {
     update(nextModel) {
       model = nextModel
-      revision++
-      render()
+      if (visible) render()
     },
     setActiveLocation(location) {
       if (activeLocation === location) return
       activeLocation = location
-      render()
+      if (visible) render()
     },
     setTheme(nextDark) {
       if (dark === nextDark) return
       dark = nextDark
       render()
     },
-    refresh() {
-      revision++
+    setVisible(nextVisible) {
+      if (visible === nextVisible) return
+      visible = nextVisible
       render()
     },
     destroy() {

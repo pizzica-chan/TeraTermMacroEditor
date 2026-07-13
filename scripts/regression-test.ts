@@ -1,7 +1,7 @@
 /**
  * サブルーチン対応前後で変わってはいけない挙動の回帰テスト
  */
-import { analyzeTTL } from '../src/ttl/analyzer'
+import { analyzeTTL, type IncludeResolver } from '../src/ttl/analyzer'
 import { evaluateTTL } from '../src/ttl/evaluator'
 
 let passed = 0
@@ -108,6 +108,97 @@ const undef = analyzeTTL(`send unknown_var`)
 assert(
   undef.diagnostics.some((d) => d.message.includes('未定義')),
   'undefined var still warned',
+)
+
+console.log('\n=== I. evaluator 制御フロー整合 ===')
+const whileFalse = evaluateTTL(`while 0\nsend 'wrong'\nendwhile\nend`)
+assert(whileFalse.sendEntries.length === 0, 'while false skips body', whileFalse.sendEntries)
+
+const whileRepeat = evaluateTTL(`i = 0\nwhile i < 3\ni = i + 1\nsend i\nendwhile\nend`)
+assert(
+  whileRepeat.sendEntries.map((entry) => entry.payload).join(',') === '1,2,3',
+  'while repeats while condition is true',
+  whileRepeat.sendEntries,
+)
+
+const untilRepeat = evaluateTTL(`i = 0\nuntil i = 2\ni = i + 1\nsend i\nenduntil\nend`)
+assert(
+  untilRepeat.sendEntries.map((entry) => entry.payload).join(',') === '1,2',
+  'until runs body before condition',
+  untilRepeat.sendEntries,
+)
+
+const exitStopsMain = evaluateTTL(`while 1\nsend 'in'\nexit\nendwhile\nsend 'after'\nend`)
+assert(
+  exitStopsMain.sendEntries.map((entry) => entry.payload).join(',') === 'in',
+  'exit in main loop stops macro',
+  exitStopsMain.sendEntries,
+)
+
+const endStopsMain = evaluateTTL(`while 1\nsend 'in'\nend\nendwhile\nsend 'after'`)
+assert(
+  endStopsMain.sendEntries.map((entry) => entry.payload).join(',') === 'in',
+  'end in block stops macro',
+  endStopsMain.sendEntries,
+)
+const endAnalysis = analyzeTTL(`while 1\nsend 'in'\nend\nendwhile\nsend 'after'`)
+assert(
+  endAnalysis.diagnostics.some((diag) => diag.line === 5 && diag.message.includes('到達しません')),
+  'end in block marks following main code unreachable',
+  endAnalysis.diagnostics,
+)
+
+const unknownIf = evaluateTTL(`msg = 'hello'\nif msg = 1\nsend 'wrong'\nendif\nsend 'after'`)
+assert(
+  unknownIf.sendEntries.map((entry) => entry.payload).join(',') === 'after',
+  'unknown condition does not execute branch',
+  unknownIf.sendEntries,
+)
+
+console.log('\n=== J. include内endの伝播 ===')
+const includeResolver: IncludeResolver = {
+  resolve: (path) => (path === 'sub.ttl' ? `send 'inc'\nend` : null),
+  resolveDynamic: () => null,
+  getLinkedTabId: () => null,
+  resolverForLinkedTab: () => null,
+}
+const includeSource = `include 'sub.ttl'\nsend 'after'\nend`
+const includeEval = evaluateTTL(includeSource, { includeResolver })
+assert(
+  includeEval.sendEntries.map((entry) => entry.payload).join(',') === 'inc',
+  'include end stops parent evaluation',
+  includeEval.sendEntries,
+)
+const includeAnalysis = analyzeTTL(includeSource, { includeResolver })
+assert(
+  includeAnalysis.diagnostics.some((diag) => diag.line === 2 && diag.message.includes('到達しません')),
+  'include end marks parent continuation unreachable',
+  includeAnalysis.diagnostics,
+)
+
+const blockEndResolver: IncludeResolver = {
+  ...includeResolver,
+  resolve: (path) => (path === 'sub.ttl' ? `while 1\nend\nendwhile` : null),
+}
+const blockEndAnalysis = analyzeTTL(includeSource, { includeResolver: blockEndResolver })
+assert(
+  blockEndAnalysis.diagnostics.some((diag) => diag.line === 2 && diag.message.includes('到達しません')),
+  'include block end marks parent continuation unreachable',
+  blockEndAnalysis.diagnostics,
+)
+
+const includeCallResolver: IncludeResolver = {
+  ...includeResolver,
+  resolve: (path) =>
+    path === 'sub.ttl'
+      ? `call sub\ngoto done\n:sub\nsend 'called'\nreturn\n:done\nsend 'child-done'`
+      : null,
+}
+const includeCallEval = evaluateTTL(includeSource, { includeResolver: includeCallResolver })
+assert(
+  includeCallEval.sendEntries.map((entry) => entry.payload).join(',') === 'called,child-done,after',
+  'call and return inside include resume correctly',
+  includeCallEval.sendEntries,
 )
 
 console.log(`\n=== REGRESSION RESULT: ${passed} passed, ${failed} failed ===`)

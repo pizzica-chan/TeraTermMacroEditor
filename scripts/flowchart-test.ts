@@ -1,5 +1,9 @@
 import type { IncludeResolver } from '../src/ttl/analyzer'
 import { buildFlowchart, type FlowchartModel } from '../src/ttl/flowchart'
+import {
+  matchesFlowchartActiveLocation,
+  reachableNodeIds,
+} from '../src/ui/flowchart/flowchartUtils'
 
 let passed = 0
 let failed = 0
@@ -376,6 +380,134 @@ console.log('\n=== 15. optional assignment nodes ===')
   assert(!withAssignments.nodes.some((node) => node.kind === 'process'), 'strconcat processing stays hidden')
   const assignmentNode = withAssignments.nodes.find((node) => node.kind === 'assignment')
   assert(assignmentNode?.label.includes('a = 1'), 'assignment label is preserved', assignmentNode?.label)
+}
+
+console.log('\n=== 16. graph integrity ===')
+{
+  const model = buildFlowchart(
+    `call sub\nif x\nsend 'yes'\nelse\nsend 'no'\nendif\nsend 'after'\n:sub\nreturn\nend`,
+    { sourceId: 'main', sourceName: 'main.ttl' },
+  )
+  const nodeIds = new Set(model.nodes.map((node) => node.id))
+  const orphanEdges = model.edges.filter(
+    (edge) => !nodeIds.has(edge.source) || !nodeIds.has(edge.target),
+  )
+  assert(orphanEdges.length === 0, 'all edges reference existing nodes', orphanEdges)
+  assert(new Set(model.nodes.map((node) => node.id)).size === model.nodes.length, 'node IDs are unique')
+  assert(model.nodes.every((node) => node.location.includes(':L')), 'every node has a source location')
+  assert(model.warnings.every((warning) => warning.includes(':L')), 'warnings reference line numbers')
+}
+
+console.log('\n=== 17. reachability from entry ===')
+{
+  const model = buildFlowchart(
+    `send 'start'\nif x\nsend 'yes'\nelse\nsend 'no'\nendif\ngoto target\nsend 'skip'\n:target\nend`,
+    { sourceId: 'main', sourceName: 'main.ttl' },
+  )
+  const reachable = reachableNodeIds(model.nodes, model.edges)
+  const unreachable = model.nodes.filter((node) => !reachable.has(node.id))
+  assert(unreachable.every((node) => node.kind === 'jump' || node.label.includes('skip')), 'only dead code stays unreachable', unreachable)
+  assert(reachable.has(model.nodes.find((node) => node.kind === 'entry')!.id), 'entry is reachable')
+  assert(reachable.has(model.nodes.find((node) => node.kind === 'exit')!.id), 'exit is reachable')
+}
+
+console.log('\n=== 18. active location matching ===')
+{
+  const node = {
+    line: 3,
+    endLine: 5,
+    sourceId: 'tab-1',
+    sourceName: 'main.ttl',
+    id: 'n',
+    location: 'tab-1:L3',
+    kind: 'io' as const,
+    label: 'send',
+  }
+  assert(matchesFlowchartActiveLocation(node, 'tab-1:L4'), 'matches tab id and line')
+  assert(matchesFlowchartActiveLocation(node, 'main.ttl:L4'), 'matches file name and line')
+  assert(!matchesFlowchartActiveLocation(node, 'tab-1:L6'), 'rejects line outside range')
+  assert(!matchesFlowchartActiveLocation(node, 'other:L4'), 'rejects other source')
+}
+
+console.log('\n=== 19. branch terminators keep their control edges ===')
+{
+  const model = buildFlowchart(
+    `if x\ngoto target\nelse\nsend 'else'\nendif\nsend 'after'\n:target\nend`,
+    { sourceId: 'main', sourceName: 'main.ttl' },
+  )
+  const gotoNode = model.nodes.find((node) => node.line === 2)
+  const targetNode = model.nodes.find((node) => node.line === 7)
+  const afterNode = model.nodes.find((node) => node.line === 6)
+  assert(
+    model.edges.some(
+      (edge) => edge.source === gotoNode?.id && edge.target === targetNode?.id && edge.kind === 'jump',
+    ),
+    'goto at branch end keeps jump edge',
+    model.edges,
+  )
+  assert(
+    !model.edges.some((edge) => edge.source === gotoNode?.id && edge.target === afterNode?.id),
+    'goto at branch end does not fall through',
+    model.edges,
+  )
+}
+
+console.log('\n=== 20. invalid do loop controls stop execution ===')
+{
+  for (const command of ['break', 'continue']) {
+    const model = buildFlowchart(`do\nsend 'body'\n${command}\nloop\nsend 'after'`, {
+      sourceId: 'main',
+      sourceName: 'main.ttl',
+    })
+    const commandNode = model.nodes.find((node) => node.line === 3)
+    const rootExit = model.nodes.find((node) => node.id === 'main-exit')
+    assert(
+      model.edges.some((edge) => edge.source === commandNode?.id && edge.target === rootExit?.id),
+      `${command} in do stops at root exit`,
+      model.edges,
+    )
+  }
+}
+
+console.log('\n=== 21. include terminator semantics ===')
+{
+  const childResolver: IncludeResolver = {
+    resolve: () => null,
+    resolveDynamic: () => null,
+    getLinkedTabId: () => undefined,
+    resolverForLinkedTab: () => null,
+  }
+  const buildWithChild = (child: string) => {
+    const rootResolver: IncludeResolver = {
+      resolve: () => child,
+      resolveDynamic: () => null,
+      getLinkedTabId: () => 'child',
+      resolverForLinkedTab: () => childResolver,
+    }
+    return buildFlowchart(`include 'child.ttl'\nsend 'parent'`, {
+      sourceId: 'main',
+      sourceName: 'main.ttl',
+      includeResolver: rootResolver,
+    })
+  }
+
+  const exitInLoop = buildWithChild(`while 1\nsend 'loop'\nexit\nendwhile\nsend 'child-after'`)
+  const childExit = exitInLoop.nodes.find((node) => node.sourceId === 'child' && node.line === 3)
+  const childAfter = exitInLoop.nodes.find((node) => node.sourceId === 'child' && node.line === 5)
+  assert(
+    exitInLoop.edges.some((edge) => edge.source === childExit?.id && edge.target === childAfter?.id),
+    'exit in include block resumes after block',
+    exitInLoop.edges,
+  )
+
+  const returnInIf = buildWithChild(`if 1\nreturn\nendif\nsend 'child-after'`)
+  const childReturn = returnInIf.nodes.find((node) => node.sourceId === 'child' && node.line === 2)
+  const returnAfter = returnInIf.nodes.find((node) => node.sourceId === 'child' && node.line === 4)
+  assert(
+    returnInIf.edges.some((edge) => edge.source === childReturn?.id && edge.target === returnAfter?.id),
+    'return in include block resumes after block',
+    returnInIf.edges,
+  )
 }
 
 console.log(`\n=== FLOWCHART RESULT: ${passed} passed, ${failed} failed ===`)
