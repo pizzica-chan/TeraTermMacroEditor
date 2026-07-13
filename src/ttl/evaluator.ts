@@ -14,7 +14,12 @@ import {
   type StaticValueContext,
 } from './staticCommandEval'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
-import { collectLabelLineMap, formatLabelRef, normalizeLabelName } from './labels'
+import { collectLabelLineMap, formatLabelRef, labelNameFromToken, normalizeLabelName } from './labels'
+import {
+  extractCallLabelAndParams,
+  findLabelLineIndex,
+  MAX_SUBROUTINE_PARAMS,
+} from './subroutine'
 
 export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
 
@@ -221,6 +226,9 @@ function initEnv(): Env {
   }
   for (const name of ['inputstr', 'matchstr']) {
     env.set(name, { kind: 'str', value: '', origin: 'system-default' })
+  }
+  for (let i = 1; i <= MAX_SUBROUTINE_PARAMS; i++) {
+    env.set(`param${i}`, { kind: 'str', value: '', origin: 'system-default' })
   }
   return env
 }
@@ -826,6 +834,10 @@ function findBlockEnd(lines: string[], startIdx: number, open: string, close: st
   return lines.length - 1
 }
 
+interface CallFrame {
+  returnIdx: number
+}
+
 interface EvalOptions {
   includeResolver?: IncludeResolver
   includeStack: string[]
@@ -836,6 +848,7 @@ interface EvalOptions {
   locationPrefix?: string
   sendEntries?: SendEntry[]
   loopFrame?: { variable: string; value: number; index: number; total: number }
+  callStack: CallFrame[]
 }
 
 interface StmtResult {
@@ -844,6 +857,35 @@ interface StmtResult {
   stopInclude?: boolean
   /** ブロック内の end/exit（マクロ全体は継続） */
   stopBlock?: boolean
+}
+
+function bindCallParams(env: Env, paramTokens: Token[]): void {
+  const capped = paramTokens.slice(0, MAX_SUBROUTINE_PARAMS)
+  setScalar(env, 'paramcnt', { kind: 'int', value: capped.length, origin: 'system-default' })
+  for (let i = 0; i < MAX_SUBROUTINE_PARAMS; i++) {
+    const key = `param${i + 1}`
+    if (i < capped.length) {
+      const tok = capped[i]!
+      let scalar = evalTokenValue(tok, env)
+      if (!scalar) {
+        const intVal = evalIntExpr([tok], 0, env)
+        if (intVal !== undefined) scalar = { kind: 'int', value: intVal }
+      }
+      if (scalar?.kind === 'str') {
+        setScalar(env, key, prepareAssignedScalar(scalar))
+      } else if (scalar?.kind === 'int') {
+        setScalar(env, key, {
+          kind: 'str',
+          value: String(scalar.value),
+          origin: scalar.origin ?? 'literal',
+        })
+      } else {
+        setScalar(env, key, { kind: 'str', value: '', hint: '（実行時）', hasUnresolvedParts: true })
+      }
+    } else {
+      setScalar(env, key, { kind: 'str', value: '', origin: 'system-default' })
+    }
+  }
 }
 
 function processIncludedContent(env: Env, content: string, opts: EvalOptions): StmtResult {
@@ -985,6 +1027,30 @@ function processStatement(
     return { nextIdx: lineIdx, stopAll: true }
   }
 
+  if (cmd === 'goto' || cmd === 'call') {
+    const labelName = labelNameFromToken(tokens[offset + 1])
+    if (!labelName) return { nextIdx: lineIdx }
+    const targetIdx = findLabelLineIndex(lines, labelName)
+    if (targetIdx < 0) return { nextIdx: lineIdx }
+
+    if (cmd === 'call') {
+      const { params } = extractCallLabelAndParams(tokens, offset)
+      bindCallParams(env, params)
+      opts.callStack.push({ returnIdx: lineIdx })
+    }
+    return { nextIdx: targetIdx }
+  }
+
+  if (cmd === 'return') {
+    const frame = opts.callStack.pop()
+    if (frame) {
+      return { nextIdx: frame.returnIdx }
+    }
+    if (opts.inInclude && !opts.inBlock) return { nextIdx: lineIdx, stopInclude: true }
+    if (opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
+    return { nextIdx: lineIdx, stopAll: true }
+  }
+
   if (cmd === 'send' || cmd === 'sendln') {
     recordSend(opts, lineNum, cmd, tokens, offset + 1, env)
     return { nextIdx: lineIdx }
@@ -1067,6 +1133,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
     includeStack: [],
     includeTabStack: [],
     sendEntries,
+    callStack: [],
   }
 
   let lineIdx = 0

@@ -152,5 +152,33 @@ assert(
   returnDead.diagnostics,
 )
 
+const tooManyCallArgs = analyzeTTL(`call sub 1 2 3 4 5 6 7 8 9 10\n:sub\nreturn`)
+assert(
+  tooManyCallArgs.diagnostics.some((d) => d.message.includes('最大 9 個')),
+  'call rejects more than 9 subroutine args',
+  tooManyCallArgs.diagnostics,
+)
+
+const callParamEval = evaluateTTL(`call mysub 'hello'\n:mysub\nsend param1\nreturn`)
+assert(
+  callParamEval.sendEntries[0]?.payload === 'hello',
+  'evaluator binds call args to param1',
+  callParamEval.sendEntries[0]?.payload,
+)
+
+const gotoSkipEval = evaluateTTL(`goto sub\nsend skipped\n:sub\nsend 'ok'\nend`)
+assert(
+  gotoSkipEval.sendEntries.length === 1 && gotoSkipEval.sendEntries[0]?.payload === 'ok',
+  'evaluator goto skips fallthrough send',
+  gotoSkipEval.sendEntries,
+)
+
+const callReturnEval = evaluateTTL(`msg = 'hi'\ncall sub\nsend msg\n:sub\nreturn`)
+assert(
+  callReturnEval.sendEntries.some((e) => e.payload === 'hi'),
+  'evaluator return resumes after call',
+  callReturnEval.sendEntries,
+)
+
 console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`)
 process.exit(failed > 0 ? 1 : 0)

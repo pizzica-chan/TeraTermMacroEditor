@@ -39,6 +39,13 @@ import {
   labelNameFromToken,
   normalizeLabelName,
 } from './labels'
+import {
+  collectCallSites,
+  extractCallLabelAndParams,
+  MAX_SUBROUTINE_PARAMS,
+  mergeStaticCallParams,
+  type CallSiteInfo,
+} from './subroutine'
 
 export type VarType = 'integer' | 'string' | 'array' | 'unknown'
 
@@ -150,6 +157,7 @@ interface AnalysisContext {
   /** goto / return 以降のフォールスルー到達不能（ラベル行でリセット） */
   fallthroughDeadStack: boolean[]
   topLevelFallthroughDead: boolean
+  callSitesByLabel: Map<string, CallSiteInfo[]>
   includeExchange?: IncludeCrossTabVarCollector
 }
 
@@ -206,6 +214,7 @@ function createIncludeChildContext(
     blockUnreachableStack: [],
     fallthroughDeadStack: [],
     topLevelFallthroughDead: false,
+    callSitesByLabel: new Map(),
   }
 }
 
@@ -574,6 +583,42 @@ function checkGotoCallLabelRef(
   }
 }
 
+function applySubroutineParamContext(
+  ctx: AnalysisContext,
+  labelName: string,
+): void {
+  const sites = ctx.callSitesByLabel.get(labelName.toLowerCase()) ?? []
+  for (let i = 0; i < MAX_SUBROUTINE_PARAMS; i++) {
+    const paramKey = `param${i + 1}`
+    const info = ctx.varMap.get(paramKey)
+    if (!info) continue
+    const merged = mergeStaticCallParams(sites, i)
+    info.constantString = merged
+    if (merged !== undefined && info.type === 'unknown') {
+      info.type = 'string'
+    }
+  }
+  const cntInfo = ctx.varMap.get('paramcnt')
+  if (cntInfo && sites.length > 0) {
+    const counts = sites.map((s) => s.staticParams.length)
+    const allSame = counts.every((c) => c === counts[0])
+    if (allSame) {
+      cntInfo.constantValue = counts[0]
+    } else {
+      cntInfo.constantValue = undefined
+    }
+  }
+}
+
+function clearSubroutineParamContext(ctx: AnalysisContext): void {
+  for (let i = 1; i <= MAX_SUBROUTINE_PARAMS; i++) {
+    const info = ctx.varMap.get(`param${i}`)
+    if (info) info.constantString = undefined
+  }
+  const cntInfo = ctx.varMap.get('paramcnt')
+  if (cntInfo) cntInfo.constantValue = undefined
+}
+
 function closeBlock(ctx: AnalysisContext, open: string, lineNum: number, column: number, closeName: string): void {
   let matchIdx = -1
   for (let i = ctx.blockStack.length - 1; i >= 0; i--) {
@@ -759,6 +804,7 @@ function pushDiagnostic(ctx: AnalysisContext, diag: Diagnostic): void {
 }
 
 function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoopOpts): LineLoopResult {
+  ctx.callSitesByLabel = collectCallSites(lines, (name) => ctx.varMap.get(name)?.constantString)
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const lineNum = lineIdx + 1
     const line = lines[lineIdx]!
@@ -787,6 +833,8 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
     if (tokens[0]?.kind === 'label') {
       const labelName = tokens[0].text.toLowerCase()
       clearFallthroughDead(ctx)
+      clearSubroutineParamContext(ctx)
+      applySubroutineParamContext(ctx, labelName)
       if (ctx.labels.has(labelName)) {
         pushDiagnostic(ctx, {
           line: lineNum,
@@ -892,6 +940,18 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
 
     if (cmd === 'goto' || cmd === 'call') {
       checkGotoCallLabelRef(ctx, getGotoCallTargetToken(tokens, lineOffset), lineNum)
+      if (cmd === 'call') {
+        const { params } = extractCallLabelAndParams(tokens, lineOffset)
+        if (params.length > MAX_SUBROUTINE_PARAMS) {
+          const extra = tokens[lineOffset + 1 + params.length]
+          pushDiagnostic(ctx, {
+            line: lineNum,
+            column: extra?.column ?? first.column,
+            message: `call のサブルーチン引数は最大 ${MAX_SUBROUTINE_PARAMS} 個までです（${params.length} 個指定）`,
+            severity: 'error',
+          })
+        }
+      }
     }
 
     if (cmd === 'goto' || cmd === 'return') {
@@ -1148,6 +1208,7 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     blockUnreachableStack: [],
     fallthroughDeadStack: [],
     topLevelFallthroughDead: false,
+    callSitesByLabel: new Map(),
     includeExchange: options?.includeExchange,
   }
 
@@ -1168,6 +1229,18 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
       isSystem: true,
       isUsed: false,
       arrayDeclared: sysType === 'array' ? true : undefined,
+    })
+  }
+
+  for (let i = 1; i <= MAX_SUBROUTINE_PARAMS; i++) {
+    const name = `param${i}`
+    ctx.varMap.set(name.toLowerCase(), {
+      name,
+      type: 'string',
+      declaredAt: 0,
+      usedAt: [],
+      isSystem: true,
+      isUsed: false,
     })
   }
 
