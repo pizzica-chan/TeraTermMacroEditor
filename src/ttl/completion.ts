@@ -12,7 +12,8 @@ import {
 } from './commands'
 import { analyzeTTL } from './analyzer'
 import { getCachedAnalysis, getIncludeCrossTabContext, getIncludeResolver } from './analysisContext'
-import { stripComments, tokenizeLine } from './tokenize'
+import { collectLabelNames } from './labels'
+import { tokenizeLine } from './tokenize'
 
 const KEYWORDS = new Set([...CONTROL_KEYWORDS, ...LOGICAL_OPERATORS, 'then'])
 
@@ -72,8 +73,11 @@ function getLineCompletionMode(line: string, lineNum: number, col: number): Line
   const cursorIdx = cursorToken ? tokens.indexOf(cursorToken) : tokens.length
 
   const prevToken = [...tokens].filter((t) => t.column + t.text.length <= col).pop()
-  if (prevToken?.kind === 'identifier' && ['goto', 'call'].includes(prevToken.text.toLowerCase())) {
-    return 'label'
+  const stmtCmd = tokens[stmt]?.kind === 'identifier' ? tokens[stmt].text.toLowerCase() : ''
+  if (stmtCmd === 'goto' || stmtCmd === 'call') {
+    if (cursorIdx === stmt + 1 || prevToken?.text.toLowerCase() === stmtCmd) {
+      return 'label'
+    }
   }
 
   const hasAssign = tokens.some((t) => t.kind === 'operator' && (t.text === '=' || t.text === ':='))
@@ -88,12 +92,7 @@ function getLineCompletionMode(line: string, lineNum: number, col: number): Line
 }
 
 function collectLabels(source: string): string[] {
-  const labels = new Set<string>()
-  for (const line of stripComments(source)) {
-    const m = line.match(/^\s*:(\w+)/)
-    if (m) labels.add(m[1]!)
-  }
-  return [...labels].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+  return [...collectLabelNames(source)].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
 }
 
 function collectUserVariables(source: string): Completion[] {

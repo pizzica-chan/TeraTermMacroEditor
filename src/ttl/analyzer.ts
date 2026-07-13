@@ -31,6 +31,14 @@ import {
   findNonAsciiOutsideLiterals,
   type Token,
 } from './tokenize'
+import {
+  collectLabelNames,
+  formatLabelRef,
+  getGotoCallTargetToken,
+  isGotoCallLabelRef,
+  labelNameFromToken,
+  normalizeLabelName,
+} from './labels'
 
 export type VarType = 'integer' | 'string' | 'array' | 'unknown'
 
@@ -139,6 +147,9 @@ interface AnalysisContext {
   fileUnreachable: boolean
   /** ブロック内の end / exit 以降（endif 等でスコープ復帰） */
   blockUnreachableStack: boolean[]
+  /** goto / return 以降のフォールスルー到達不能（ラベル行でリセット） */
+  fallthroughDeadStack: boolean[]
+  topLevelFallthroughDead: boolean
   includeExchange?: IncludeCrossTabVarCollector
 }
 
@@ -184,7 +195,7 @@ function createIncludeChildContext(
     diagnostics: parent.diagnostics,
     varMap: parent.varMap,
     labels: new Set(),
-    knownLabels: collectLabels(stripComments(content)),
+    knownLabels: collectLabelNames(content),
     blockStack: [],
     includeResolver: childResolver,
     includeStack: parent.includeStack,
@@ -193,6 +204,8 @@ function createIncludeChildContext(
     forLoopBlocks: createForLoopBlockList(content),
     fileUnreachable: false,
     blockUnreachableStack: [],
+    fallthroughDeadStack: [],
+    topLevelFallthroughDead: false,
   }
 }
 
@@ -207,15 +220,37 @@ interface LineLoopOpts {
 function isLineUnreachable(ctx: AnalysisContext): boolean {
   const blockUnreachable =
     ctx.blockUnreachableStack[ctx.blockUnreachableStack.length - 1] ?? false
-  return ctx.fileUnreachable || blockUnreachable
+  const fallthroughDead =
+    ctx.topLevelFallthroughDead ||
+    (ctx.fallthroughDeadStack[ctx.fallthroughDeadStack.length - 1] ?? false)
+  return ctx.fileUnreachable || blockUnreachable || fallthroughDead
 }
 
 function enterBlockScope(ctx: AnalysisContext): void {
   ctx.blockUnreachableStack.push(false)
+  ctx.fallthroughDeadStack.push(false)
 }
 
 function leaveBlockScope(ctx: AnalysisContext): void {
   ctx.blockUnreachableStack.pop()
+  ctx.fallthroughDeadStack.pop()
+}
+
+function markFallthroughDead(ctx: AnalysisContext): void {
+  const depth = ctx.fallthroughDeadStack.length
+  if (depth > 0) {
+    ctx.fallthroughDeadStack[depth - 1] = true
+  } else {
+    ctx.topLevelFallthroughDead = true
+  }
+}
+
+function clearFallthroughDead(ctx: AnalysisContext): void {
+  ctx.topLevelFallthroughDead = false
+  const depth = ctx.fallthroughDeadStack.length
+  if (depth > 0) {
+    ctx.fallthroughDeadStack[depth - 1] = false
+  }
 }
 
 function markMacroTerminator(ctx: AnalysisContext, atTopLevel: boolean): void {
@@ -231,19 +266,34 @@ function markMacroTerminator(ctx: AnalysisContext, atTopLevel: boolean): void {
   }
 }
 
-/** if ブロックの別分岐（elseif / else）に入るとき、直前分岐の end / exit 状態をリセット */
+/** if ブロックの別分岐（elseif / else）に入るとき、直前分岐の end / exit / goto / return 状態をリセット */
 function startNewIfBranch(ctx: AnalysisContext): void {
   const depth = ctx.blockUnreachableStack.length
   if (depth > 0) {
     ctx.blockUnreachableStack[depth - 1] = false
+    ctx.fallthroughDeadStack[depth - 1] = false
   }
 }
 
 function warnDeadCode(ctx: AnalysisContext, lineNum: number): void {
   if (ctx.suppressDiagnostics) return
-  const message = ctx.fileUnreachable
-    ? 'この行には到達しません（end / exit によりマクロの実行が終了した後のコードです）'
-    : 'この行には到達しません（ブロック内の end / exit より後のコードです）'
+  const blockUnreachable =
+    ctx.blockUnreachableStack[ctx.blockUnreachableStack.length - 1] ?? false
+  const fallthroughDead =
+    ctx.topLevelFallthroughDead ||
+    (ctx.fallthroughDeadStack[ctx.fallthroughDeadStack.length - 1] ?? false)
+
+  let message: string
+  if (ctx.fileUnreachable) {
+    message = 'この行には到達しません（end / exit によりマクロの実行が終了した後のコードです）'
+  } else if (blockUnreachable) {
+    message = 'この行には到達しません（ブロック内の end / exit より後のコードです）'
+  } else if (fallthroughDead) {
+    message = 'この行には到達しません（goto / return によりフォールスルーしません）'
+  } else {
+    return
+  }
+
   pushDiagnostic(ctx, {
     line: lineNum,
     column: 0,
@@ -506,24 +556,22 @@ function findSingleLineIfTailStart(tokens: Token[], offset: number): number | nu
   return null
 }
 
-function isGotoCallLabelRef(tokens: Token[], index: number): boolean {
-  if (index <= 0) return false
-  const prev = tokens[index - 1]
-  return (
-    prev?.kind === 'identifier' &&
-    (prev.text.toLowerCase() === 'goto' || prev.text.toLowerCase() === 'call')
-  )
-}
-
-function collectLabels(lines: string[]): Set<string> {
-  const labels = new Set<string>()
-  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-    const tokens = tokenizeLine(lines[lineIdx]!, lineIdx + 1)
-    if (tokens[0]?.kind === 'label') {
-      labels.add(tokens[0].text.toLowerCase())
-    }
+function checkGotoCallLabelRef(
+  ctx: AnalysisContext,
+  target: Token | undefined,
+  lineNum: number,
+): void {
+  const name = labelNameFromToken(target)
+  if (!name) return
+  const labelRef = normalizeLabelName(name)
+  if (!ctx.knownLabels.has(labelRef)) {
+    pushDiagnostic(ctx, {
+      line: lineNum,
+      column: target!.column,
+      message: `ラベル '${formatLabelRef(name)}' が定義されていません`,
+      severity: 'warning',
+    })
   }
-  return labels
 }
 
 function closeBlock(ctx: AnalysisContext, open: string, lineNum: number, column: number, closeName: string): void {
@@ -738,6 +786,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
 
     if (tokens[0]?.kind === 'label') {
       const labelName = tokens[0].text.toLowerCase()
+      clearFallthroughDead(ctx)
       if (ctx.labels.has(labelName)) {
         pushDiagnostic(ctx, {
           line: lineNum,
@@ -836,35 +885,17 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, _loopOpts: LineLoop
     if (singleLineIfTail !== null) {
       const tailCmdTok = tokens[singleLineIfTail]
       const tailCmd = tailCmdTok?.kind === 'identifier' ? tailCmdTok.text.toLowerCase() : ''
-      if ((tailCmd === 'goto' || tailCmd === 'call') && tokens[singleLineIfTail + 1]?.kind === 'identifier') {
-        const target = tokens[singleLineIfTail + 1]!
-        const labelRef = target.text.replace(/^:/, '').toLowerCase()
-        if (!ctx.knownLabels.has(labelRef)) {
-          pushDiagnostic(ctx, {
-            line: lineNum,
-            column: target.column,
-            message: `ラベル ':${target.text.replace(/^:/, '')}' が定義されていません`,
-            severity: 'warning',
-          })
-        }
+      if (tailCmd === 'goto' || tailCmd === 'call') {
+        checkGotoCallLabelRef(ctx, getGotoCallTargetToken(tokens, singleLineIfTail), lineNum)
       }
     }
 
     if (cmd === 'goto' || cmd === 'call') {
-      const target = tokens[1]
-      if (target?.kind === 'label' || (target?.kind === 'identifier' && target.text.startsWith(':'))) {
-        // ok
-      } else if (target?.kind === 'identifier') {
-        const labelRef = target.text.replace(/^:/, '').toLowerCase()
-        if (!ctx.knownLabels.has(labelRef)) {
-          pushDiagnostic(ctx, {
-            line: lineNum,
-            column: target.column,
-            message: `ラベル ':${target.text.replace(/^:/, '')}' が定義されていません`,
-            severity: 'warning',
-          })
-        }
-      }
+      checkGotoCallLabelRef(ctx, getGotoCallTargetToken(tokens, lineOffset), lineNum)
+    }
+
+    if (cmd === 'goto' || cmd === 'return') {
+      markFallthroughDead(ctx)
     }
 
     const assignIdx = findAssignmentIndex(tokens, tokens[0]?.kind === 'label' ? 1 : 0)
@@ -1106,7 +1137,7 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     diagnostics: [],
     varMap: new Map(),
     labels: new Set(),
-    knownLabels: collectLabels(lines),
+    knownLabels: collectLabelNames(lines),
     blockStack: [],
     includeResolver: options?.includeResolver,
     includeStack: [],
@@ -1115,6 +1146,8 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     forLoopBlocks: createForLoopBlockList(source),
     fileUnreachable: false,
     blockUnreachableStack: [],
+    fallthroughDeadStack: [],
+    topLevelFallthroughDead: false,
     includeExchange: options?.includeExchange,
   }
 

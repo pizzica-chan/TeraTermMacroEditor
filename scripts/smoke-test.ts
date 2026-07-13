@@ -101,5 +101,56 @@ const sampleEval = evaluateTTL(sample)
 assert(sampleAnalysis.diagnostics.filter((d) => d.severity === 'error').length === 0, 'sample no errors', sampleAnalysis.diagnostics)
 assert(sampleEval.sendEntries.length >= 2, 'sample send entries', sampleEval.sendEntries.length)
 
+console.log('\n=== 8. subroutine (call/goto/return) ===')
+const callMultiArg = `call mysub 'a' 'b'`
+const callMultiAnalysis = analyzeTTL(callMultiArg + `\n:mysub\nreturn`)
+assert(
+  !callMultiAnalysis.diagnostics.some((d) => d.message.includes('引数が多すぎます')),
+  'call allows multiple subroutine args',
+  callMultiAnalysis.diagnostics,
+)
+
+const undefinedLabel = analyzeTTL(`goto missing\n:defined`)
+assert(
+  undefinedLabel.diagnostics.some((d) => d.message.includes("':missing'") && d.message.includes('定義されていません')),
+  'undefined goto label warning',
+  undefinedLabel.diagnostics,
+)
+
+const colonLabelCall = analyzeTTL(`call :mysub\n:mysub\nreturn`)
+assert(
+  !colonLabelCall.diagnostics.some((d) => d.message.includes('定義されていません')),
+  'call :label resolves label token',
+  colonLabelCall.diagnostics,
+)
+
+const gotoDead = analyzeTTL(`goto sub\nunreachable\n:sub\nreturn`)
+assert(
+  gotoDead.diagnostics.some((d) => d.line === 2 && d.message.includes('フォールスルー')),
+  'goto marks fallthrough dead code',
+  gotoDead.diagnostics,
+)
+
+const labelEntry = analyzeTTL(`goto sub\n:sub\nreachable\nreturn`)
+assert(
+  !labelEntry.diagnostics.some((d) => d.line === 3 && d.message.includes('到達しません')),
+  'label entry resets fallthrough dead',
+  labelEntry.diagnostics,
+)
+
+const callFallthrough = analyzeTTL(`call sub\nstill_reachable\n:sub\nreturn`)
+assert(
+  !callFallthrough.diagnostics.some((d) => d.line === 2 && d.message.includes('到達しません')),
+  'call does not mark fallthrough dead',
+  callFallthrough.diagnostics,
+)
+
+const returnDead = analyzeTTL(`:sub\nreturn\ndead\nend`)
+assert(
+  returnDead.diagnostics.some((d) => d.line === 3 && d.message.includes('フォールスルー')),
+  'return marks fallthrough dead code',
+  returnDead.diagnostics,
+)
+
 console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`)
 process.exit(failed > 0 ? 1 : 0)

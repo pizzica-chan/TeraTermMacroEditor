@@ -14,6 +14,7 @@ import {
   type StaticValueContext,
 } from './staticCommandEval'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
+import { collectLabelLineMap, formatLabelRef, normalizeLabelName } from './labels'
 
 export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
 
@@ -1060,7 +1061,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   const afterLine = new Map<number, Env>()
   const sendEntries: SendEntry[] = []
   const env = initEnv()
-  const labels = collectLabelDefinitions(lines)
+  const labels = collectLabelLineMap(lines)
   const evalOpts: EvalOptions = {
     includeResolver: options?.includeResolver,
     includeStack: [],
@@ -1112,26 +1113,15 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   }
 }
 
-function collectLabelDefinitions(lines: string[]): Map<string, number> {
-  const labels = new Map<string, number>()
-  for (let i = 0; i < lines.length; i++) {
-    const tokens = tokenizeLine(lines[i]!, i + 1)
-    if (tokens[0]?.kind === 'label') {
-      labels.set(tokens[0].text.toLowerCase(), i + 1)
-    }
-  }
-  return labels
-}
-
 function resolveLabelHover(
   name: string,
   labels: Map<string, number>,
   context: 'definition' | 'goto' | 'call',
   currentLine: number,
 ): HoverInfo {
-  const key = name.toLowerCase()
+  const key = normalizeLabelName(name)
   const definedAt = labels.get(key)
-  const labelName = `:${name}`
+  const labelName = formatLabelRef(name)
 
   if (context === 'definition') {
     return {
