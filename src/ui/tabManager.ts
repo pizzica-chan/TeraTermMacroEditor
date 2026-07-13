@@ -38,16 +38,33 @@ export class TabManager {
   private activeId: string | null = null
   private editor: EditorInstance
   private tabListEl: HTMLElement
-  private onActiveTabChange: (tab: EditorTab) => void
+  private onActiveTabChange: (tab: EditorTab, options?: { keepDryRun?: boolean }) => void
+  private onBeforeTabLeave?: () => void
+  private keepDryRunOnUserSwitch?: () => boolean
+  private onTabClosed?: (closedTabId: string) => void
 
   constructor(
     editor: EditorInstance,
     tabListContainer: HTMLElement,
-    onActiveTabChange: (tab: EditorTab) => void,
+    onActiveTabChange: (tab: EditorTab, options?: { keepDryRun?: boolean }) => void,
+    onBeforeTabLeave?: () => void,
   ) {
     this.editor = editor
     this.tabListEl = tabListContainer
     this.onActiveTabChange = onActiveTabChange
+    this.onBeforeTabLeave = onBeforeTabLeave
+  }
+
+  setKeepDryRunOnUserSwitch(fn: () => boolean): void {
+    this.keepDryRunOnUserSwitch = fn
+  }
+
+  setOnTabClosed(fn: (closedTabId: string) => void): void {
+    this.onTabClosed = fn
+  }
+
+  private userSwitchOptions(): { keepDryRun: true } | undefined {
+    return this.keepDryRunOnUserSwitch?.() ? { keepDryRun: true } : undefined
   }
 
   get count(): number {
@@ -113,7 +130,7 @@ export class TabManager {
       })
 
       el.append(title, closeBtn)
-      el.addEventListener('click', () => this.switchTab(tab.id))
+      el.addEventListener('click', () => this.switchTab(tab.id, this.userSwitchOptions()))
       this.tabListEl.appendChild(el)
     }
   }
@@ -133,6 +150,7 @@ export class TabManager {
       return null
     }
 
+    this.onBeforeTabLeave?.()
     this.saveCurrentState()
 
     const editorState = options.editorState ?? this.editor.createState('')
@@ -160,22 +178,23 @@ export class TabManager {
     return tab
   }
 
-  switchTab(id: string): void {
+  switchTab(id: string, options?: { keepDryRun?: boolean }): void {
     if (this.activeId === id) return
     const tab = this.tabs.find((t) => t.id === id)
     if (!tab) return
 
+    this.onBeforeTabLeave?.()
     this.saveCurrentState()
     this.activeId = id
     this.editor.setState(tab.editorState)
     this.editor.focus()
-    this.onActiveTabChange(tab)
+    this.onActiveTabChange(tab, options)
     this.renderTabs()
   }
 
   switchToIndex(index: number): void {
     const tab = this.tabs[index]
-    if (tab) this.switchTab(tab.id)
+    if (tab) this.switchTab(tab.id, this.userSwitchOptions())
   }
 
   switchRelativeTab(delta: number): void {
@@ -183,14 +202,10 @@ export class TabManager {
     const currentIdx = this.tabs.findIndex((t) => t.id === this.activeId)
     if (currentIdx < 0) return
     const nextIdx = (currentIdx + delta + this.tabs.length) % this.tabs.length
-    this.switchTab(this.tabs[nextIdx]!.id)
+    this.switchTab(this.tabs[nextIdx]!.id, this.userSwitchOptions())
   }
 
   closeTab(id: string): boolean {
-    if (this.activeId === id) {
-      this.saveCurrentState()
-    }
-
     const tab = this.tabs.find((t) => t.id === id)
     if (!tab) return false
 
@@ -204,8 +219,14 @@ export class TabManager {
       }
     }
 
+    if (this.activeId === id) {
+      this.onBeforeTabLeave?.()
+      this.saveCurrentState()
+    }
+
     const idx = this.tabs.findIndex((t) => t.id === id)
     this.tabs.splice(idx, 1)
+    this.onTabClosed?.(id)
     this.clearBindingsToTab(id)
 
     if (this.activeId === id) {

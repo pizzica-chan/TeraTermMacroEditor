@@ -10,6 +10,7 @@ import { ttlLinter } from '../ttl/linter'
 import { valueTooltipExtension } from '../ttl/valueTooltip'
 import { ttlAutocompletion } from '../ttl/completion'
 import { includeDecorationExtension, applyIncludeDecorations, type IncludeDecorationInfo } from './includeDecorations'
+import { executionDecorationExtension, applyExecutionLine, clearExecutionLine } from './executionDecorations'
 import { includeGraphRevisionExtension, bumpIncludeGraphRevision, bumpAnalysisCacheRevision } from '../ttl/analysisContext'
 
 const SAMPLE_MACRO = `; Tera Term マクロ サンプル
@@ -61,9 +62,13 @@ export interface EditorInstance {
   setIncludeDecorations: (info: IncludeDecorationInfo | null) => void
   notifyIncludeGraphChanged: () => void
   notifyAnalysisCacheChanged: () => void
+  setExecutionLine: (line: number | null, waiting?: boolean) => void
+  clearExecutionLine: () => void
+  setDryRunLocked: (locked: boolean) => void
 }
 
 const themeCompartment = new Compartment()
+const editableCompartment = new Compartment()
 
 function hasCompletionPrefix(state: EditorState, pos: number): boolean {
   const line = state.doc.lineAt(pos)
@@ -91,6 +96,7 @@ function buildExtensions(onDocChange: (text: string) => void): Extension[] {
     ttlLinter,
     valueTooltipExtension,
     includeDecorationExtension,
+    executionDecorationExtension,
     includeGraphRevisionExtension,
     ttlAutocompletion,
     themeCompartment.of(darkTheme),
@@ -130,6 +136,7 @@ function buildExtensions(onDocChange: (text: string) => void): Extension[] {
         return false
       },
     }),
+    editableCompartment.of(EditorView.editable.of(true)),
   ]
 }
 
@@ -215,6 +222,17 @@ export function createEditor(parent: HTMLElement, initialText = SAMPLE_MACRO): E
     },
     notifyAnalysisCacheChanged() {
       bumpAnalysisCacheRevision(view)
+    },
+    setExecutionLine(line: number | null, waiting = false) {
+      applyExecutionLine(view, line, waiting)
+    },
+    clearExecutionLine() {
+      clearExecutionLine(view)
+    },
+    setDryRunLocked(locked: boolean) {
+      view.dispatch({
+        effects: editableCompartment.reconfigure(EditorView.editable.of(!locked)),
+      })
     },
   }
 }

@@ -1123,3 +1123,205 @@ body {
   font-weight: 600;
   pointer-events: none;
 }
+
+/* Dry run toolbar */
+.toolbar-dryrun-btn {
+  font-size: 12px;
+}
+
+.toolbar-dryrun-btn.danger {
+  color: var(--error);
+}
+
+.toolbar-dryrun-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Dry run execution line */
+.cm-execution-line {
+  background-color: rgba(55, 148, 255, 0.18) !important;
+}
+
+.cm-execution-line.cm-execution-waiting {
+  background-color: rgba(204, 167, 0, 0.22) !important;
+}
+
+/* Dry run log panel */
+.dryrun-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 100%;
+}
+
+.dryrun-item {
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  font-size: 12px;
+}
+
+.dryrun-item-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.dryrun-location {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  color: var(--text-secondary);
+}
+
+.dryrun-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.dryrun-kind-send .dryrun-kind {
+  color: var(--info);
+}
+
+.dryrun-kind-dialog .dryrun-kind {
+  color: var(--warning);
+}
+
+.dryrun-kind-error .dryrun-kind {
+  color: var(--error);
+}
+
+.dryrun-message {
+  word-break: break-word;
+}
+
+.dryrun-payload {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  white-space: pre-wrap;
+}
+
+.dryrun-detail {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.dryrun-goto {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* TTL dialog (dry run) */
+.ttl-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.ttl-dialog {
+  width: min(420px, 92vw);
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.ttl-dialog-title {
+  margin-bottom: 10px;
+  font-size: 15px;
+}
+
+.ttl-dialog-message {
+  margin-bottom: 10px;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.ttl-dialog-hint {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ttl-dialog-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.ttl-dialog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.ttl-dialog-list-item {
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ttl-dialog-list-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.ttl-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ttl-dialog-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ttl-dialog-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ttl-dialog-btn:hover {
+  background: var(--bg-tertiary);
+}
+
+.ttl-dialog-btn.primary:hover {
+  background: var(--accent-hover);
+}

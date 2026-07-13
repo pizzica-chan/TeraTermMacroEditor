@@ -38,6 +38,24 @@ export function findSingleLineIfTailStart(tokens: Token[], offset: number): numb
   return null
 }
 
+/** 1行形式 if cond then cmd の条件終端とコマンド開始位置 */
+export function findIfThenTailStart(
+  tokens: Token[],
+  offset: number,
+): { condEnd: number; tailStart: number } | null {
+  const thenIdx = tokens.findIndex(
+    (t, i) => i > offset && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
+  )
+  if (thenIdx < 0) return null
+  for (let i = thenIdx + 1; i < tokens.length; i++) {
+    const tok = tokens[i]
+    if (tok?.kind === 'identifier' && TTL_COMMANDS.has(tok.text.toLowerCase())) {
+      return { condEnd: thenIdx, tailStart: i }
+    }
+  }
+  return null
+}
+
 /** goto/call のジャンプ先ラベル名を解決（定数文字列変数のみ動的対応） */
 export function resolveJumpLabelName(
   token: Token | undefined,

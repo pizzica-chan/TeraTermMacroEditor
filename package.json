@@ -9,6 +9,7 @@
     "verify-dist-offline": "node scripts/verify-dist-offline.mjs",
     "test": "tsx scripts/smoke-test.ts",
     "test:regression": "tsx scripts/regression-test.ts",
+    "test:dry-run": "tsx scripts/dry-run-test.ts",
     "preview": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy"
   },

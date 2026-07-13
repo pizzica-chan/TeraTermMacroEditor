@@ -1,32 +1,44 @@
 import type { AnalysisResult, VariableInfo } from '../ttl/analyzer'
 import type { SendEntry } from '../ttl/evaluator'
+import type { DryRunEvent, DryRunState } from '../ttl/dryRun'
 import { buildSendPlainTextForCopy, countUnresolvedSendEntries } from '../ttl/sendText'
 
-export type SidePanelTab = 'variables' | 'sends'
+export type SidePanelTab = 'variables' | 'sends' | 'dryrun'
 
 export function createSidePanel(container: HTMLElement): {
   update: (data: { analysis: AnalysisResult; sendEntries: SendEntry[] }) => void
+  updateDryRun: (state: DryRunState | null) => void
+  showTab: (tab: SidePanelTab) => void
   onGotoLine: (handler: (line: number) => void) => void
+  onGotoDryRunLocation: (handler: (location: string) => void) => void
+  onGotoSendLocation: (handler: (location: string) => void) => void
+  onClearDryRun: (handler: () => void) => void
 } {
   let gotoHandler: ((line: number) => void) | null = null
-  let activeTab: SidePanelTab = 'variables'
+  let dryRunGotoHandler: ((location: string) => void) | null = null
+  let sendGotoHandler: ((location: string) => void) | null = null
+  let clearDryRunHandler: (() => void) | null = null
+  let activeTab: SidePanelTab = 'sends'
   let cached: { analysis: AnalysisResult; sendEntries: SendEntry[] } | null = null
+  let dryRunState: DryRunState | null = null
 
   container.innerHTML = ''
 
   const tabs = document.createElement('div')
   tabs.className = 'side-panel-tabs'
   tabs.innerHTML = `
-    <button type="button" class="side-panel-tab active" data-tab="variables">変数</button>
-    <button type="button" class="side-panel-tab" data-tab="sends">送信データ</button>
+    <button type="button" class="side-panel-tab active" data-tab="sends">送信データ</button>
+    <button type="button" class="side-panel-tab" data-tab="dryrun">ドライラン</button>
+    <button type="button" class="side-panel-tab" data-tab="variables">変数</button>
   `
 
   const header = document.createElement('div')
   header.className = 'panel-header'
   header.innerHTML = `
     <div class="panel-header-row">
-      <h2 id="side-panel-title">変数</h2>
-      <button type="button" id="send-copy-btn" class="panel-action-btn" hidden title="送信データをプレーンテキストでコピー（未解決部分はプレースホルダー付き）">コピー</button>
+      <h2 id="side-panel-title">送信データ</h2>
+      <button type="button" id="send-copy-btn" class="panel-action-btn" title="送信データをプレーンテキストでコピー（未解決部分はプレースホルダー付き）">コピー</button>
+      <button type="button" id="dryrun-clear-btn" class="panel-action-btn" hidden title="ドライランのログをクリア">クリア</button>
     </div>
     <div class="panel-stats" id="side-panel-stats"></div>
   `
@@ -37,19 +49,25 @@ export function createSidePanel(container: HTMLElement): {
   const variableList = document.createElement('div')
   variableList.className = 'variable-list'
   variableList.id = 'variable-list'
+  variableList.hidden = true
 
   const sendList = document.createElement('div')
   sendList.className = 'send-list'
   sendList.id = 'send-list'
-  sendList.hidden = true
 
-  body.append(variableList, sendList)
+  const dryRunList = document.createElement('div')
+  dryRunList.className = 'dryrun-list'
+  dryRunList.id = 'dryrun-list'
+  dryRunList.hidden = true
+
+  body.append(variableList, sendList, dryRunList)
 
   const diagSection = document.createElement('div')
   diagSection.className = 'diagnostics-section'
   diagSection.innerHTML = `<h2>診断</h2><div class="diagnostics-list" id="diagnostics-list"></div>`
 
   const sendCopyBtn = header.querySelector<HTMLButtonElement>('#send-copy-btn')!
+  const dryRunClearBtn = header.querySelector<HTMLButtonElement>('#dryrun-clear-btn')!
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
   container.append(tabs, header, body, diagSection)
@@ -61,9 +79,13 @@ export function createSidePanel(container: HTMLElement): {
     }
     variableList.hidden = tab !== 'variables'
     sendList.hidden = tab !== 'sends'
+    dryRunList.hidden = tab !== 'dryrun'
     sendCopyBtn.hidden = tab !== 'sends'
+    dryRunClearBtn.hidden = tab !== 'dryrun'
     const title = container.querySelector('#side-panel-title')!
-    title.textContent = tab === 'variables' ? '変数' : '送信データ'
+    title.textContent =
+      tab === 'variables' ? '変数' : tab === 'sends' ? '送信データ' : 'ドライラン'
+    if (tab === 'dryrun' && dryRunState) renderDryRun(dryRunState)
   }
 
   tabs.addEventListener('click', (e) => {
@@ -75,6 +97,26 @@ export function createSidePanel(container: HTMLElement): {
 
   function updateStats(analysis: AnalysisResult, sendEntries: SendEntry[]) {
     const statsEl = container.querySelector('#side-panel-stats')!
+    if (activeTab === 'dryrun') {
+      if (!dryRunState) {
+        statsEl.textContent = '未実行'
+        return
+      }
+      const statusLabel =
+        dryRunState.status === 'running'
+          ? '実行中'
+          : dryRunState.status === 'waiting-dialog'
+            ? '対話待ち'
+            : dryRunState.status === 'finished'
+              ? '完了'
+              : dryRunState.status === 'stopped'
+                ? '停止'
+                : dryRunState.status === 'error'
+                  ? 'エラー'
+                  : '待機'
+      statsEl.textContent = `${statusLabel} / L${dryRunState.currentLine || '-'} / ${dryRunState.events.length} 件`
+      return
+    }
     if (activeTab === 'variables') {
       const userVars = analysis.variables.filter((v) => !v.isSystem)
       const sysVars = analysis.variables.filter((v) => v.isSystem)
@@ -122,6 +164,55 @@ export function createSidePanel(container: HTMLElement): {
   sendCopyBtn.addEventListener('click', () => {
     void copyResolvedSendText()
   })
+
+  dryRunClearBtn.addEventListener('click', () => {
+    clearDryRunHandler?.()
+  })
+
+  function renderDryRun(state: DryRunState) {
+    updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+    if (state.events.length === 0) {
+      dryRunList.innerHTML = '<div class="empty-state">ログはまだありません</div>'
+      return
+    }
+    dryRunList.innerHTML = state.events.map(renderDryRunEvent).join('')
+    bindDryRunGotoHandlers()
+    const last = dryRunList.lastElementChild
+    last?.scrollIntoView({ block: 'nearest' })
+  }
+
+  function renderDryRunEvent(event: DryRunEvent): string {
+    const kindClass = `dryrun-kind-${event.kind}`
+    const gotoBtn =
+      event.line > 0
+        ? `<button type="button" class="dryrun-goto" data-location="${escapeAttr(event.location)}" title="行へ移動">⌖</button>`
+        : ''
+  const payload =
+      event.payload !== undefined
+        ? `<div class="dryrun-payload">${escapeHtml(event.payload)}${event.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>`
+        : ''
+    return `
+      <div class="dryrun-item ${kindClass}">
+        <div class="dryrun-item-header">
+          <span class="dryrun-location">${escapeHtml(event.location)}</span>
+          <span class="dryrun-kind">${escapeHtml(event.kind)}</span>
+          ${gotoBtn}
+        </div>
+        <div class="dryrun-message">${escapeHtml(event.message)}</div>
+        ${payload}
+        ${event.detail ? `<div class="dryrun-detail">${escapeHtml(event.detail)}</div>` : ''}
+      </div>
+    `
+  }
+
+  function bindDryRunGotoHandlers() {
+    for (const btn of dryRunList.querySelectorAll<HTMLButtonElement>('.dryrun-goto')) {
+      btn.addEventListener('click', () => {
+        const location = btn.dataset.location
+        if (dryRunGotoHandler && location) dryRunGotoHandler(location)
+      })
+    }
+  }
 
   function render(data: { analysis: AnalysisResult; sendEntries: SendEntry[] }) {
     const { analysis, sendEntries } = data
@@ -180,10 +271,9 @@ export function createSidePanel(container: HTMLElement): {
     const loopBadge = entry.loopInfo
       ? `<span class="badge send-loop" title="for ${escapeAttr(entry.loopInfo.variable)} ループ展開">${escapeHtml(entry.loopInfo.variable)}=${entry.loopInfo.value} (${entry.loopInfo.index}/${entry.loopInfo.total})</span>`
       : ''
-    const gotoLine = entry.line > 0 ? entry.line : parseLocalLine(entry.location)
     const gotoBtn =
-      gotoLine !== null && gotoLine > 0
-        ? `<button type="button" class="send-goto" data-line="${gotoLine}" title="行へ移動">⌖</button>`
+      entry.location
+        ? `<button type="button" class="send-goto" data-location="${escapeAttr(entry.location)}" title="行へ移動">⌖</button>`
         : ''
     const payloadTitle = entry.rawArgs ? ` title="${escapeAttr(entry.rawArgs)}"` : ''
 
@@ -234,8 +324,8 @@ export function createSidePanel(container: HTMLElement): {
   function bindSendGotoHandlers() {
     for (const btn of sendList.querySelectorAll<HTMLButtonElement>('.send-goto')) {
       btn.addEventListener('click', () => {
-        const line = Number(btn.dataset.line)
-        if (gotoHandler && Number.isFinite(line)) gotoHandler(line)
+        const location = btn.dataset.location
+        if (sendGotoHandler && location) sendGotoHandler(location)
       })
     }
   }
@@ -244,16 +334,29 @@ export function createSidePanel(container: HTMLElement): {
     onGotoLine(handler) {
       gotoHandler = handler
     },
+    onGotoDryRunLocation(handler) {
+      dryRunGotoHandler = handler
+    },
+    onGotoSendLocation(handler) {
+      sendGotoHandler = handler
+    },
+    onClearDryRun(handler) {
+      clearDryRunHandler = handler
+    },
+    showTab(tab) {
+      setTab(tab)
+      if (cached) render(cached)
+    },
     update({ analysis, sendEntries }) {
       cached = { analysis, sendEntries }
       render(cached)
     },
+    updateDryRun(state) {
+      dryRunState = state
+      if (activeTab === 'dryrun') renderDryRun(state ?? { status: 'idle', currentLine: 0, events: [] })
+      else if (state) updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+    },
   }
-}
-
-function parseLocalLine(location: string): number | null {
-  const m = /L(\d+)$/.exec(location)
-  return m ? Number(m[1]) : null
 }
 
 function escapeHtml(text: string): string {

@@ -13,6 +13,8 @@ export interface ToolbarActions {
   onGotoLine?: () => void
   onSwitchTab?: (index: number) => void
   onSwitchTabRelative?: (delta: number) => void
+  onDryRunStart?: () => void
+  onDryRunStop?: () => void
 }
 
 let suppressSelectChange = false
@@ -28,6 +30,9 @@ export function createToolbar(container: HTMLElement, editor: EditorInstance, ac
       <div class="toolbar-divider"></div>
       <button id="btn-undo" title="元に戻す (Ctrl+Z)">↶ 戻す</button>
       <button id="btn-redo" title="やり直し (Ctrl+Y)">↷ やり直し</button>
+      <div class="toolbar-divider"></div>
+      <button id="btn-dryrun-start" class="toolbar-dryrun-btn" title="ドライラン開始 (F5)">▶ ドライラン</button>
+      <button id="btn-dryrun-stop" class="toolbar-dryrun-btn danger" title="ドライラン停止 (Shift+F5)" disabled>■ 停止</button>
     </div>
     <div class="toolbar-right">
       <label class="toolbar-select-label" title="文字コード">
@@ -55,6 +60,8 @@ export function createToolbar(container: HTMLElement, editor: EditorInstance, ac
   container.querySelector('#btn-save')!.addEventListener('click', actions.onSave)
   container.querySelector('#btn-undo')!.addEventListener('click', () => editor.undo())
   container.querySelector('#btn-redo')!.addEventListener('click', () => editor.redo())
+  container.querySelector('#btn-dryrun-start')!.addEventListener('click', () => actions.onDryRunStart?.())
+  container.querySelector('#btn-dryrun-stop')!.addEventListener('click', () => actions.onDryRunStop?.())
   container.querySelector('#btn-theme')!.addEventListener('click', actions.onThemeToggle)
 
   container.querySelector('#sel-encoding')!.addEventListener('change', (e) => {
@@ -68,6 +75,17 @@ export function createToolbar(container: HTMLElement, editor: EditorInstance, ac
   })
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'F5' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault()
+      if (e.shiftKey) {
+        actions.onDryRunStop?.()
+      } else {
+        const startBtn = document.querySelector<HTMLButtonElement>('#btn-dryrun-start')
+        if (!startBtn?.disabled) actions.onDryRunStart?.()
+      }
+      return
+    }
+
     if (e.ctrlKey || e.metaKey) {
       if (e.key === 'Tab') {
         e.preventDefault()
@@ -137,6 +155,13 @@ export function setNewlineSelect(newline: NewlineType): void {
   suppressSelectChange = true
   sel.value = newline
   suppressSelectChange = false
+}
+
+export function setDryRunToolbarState(running: boolean): void {
+  const startBtn = document.querySelector<HTMLButtonElement>('#btn-dryrun-start')
+  const stopBtn = document.querySelector<HTMLButtonElement>('#btn-dryrun-stop')
+  if (startBtn) startBtn.disabled = running
+  if (stopBtn) stopBtn.disabled = !running
 }
 
 export function setStatusMessage(message: string): void {

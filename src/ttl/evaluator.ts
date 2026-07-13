@@ -551,11 +551,12 @@ function processLine(env: Env, line: string, lineNum: number): void {
 
   if (assignIdx > offset) {
     const arrayName = isArrayAssignTarget(tokens, assignIdx)
-    const valueToken = tokens[assignIdx + 1]
-    let scalar = evalTokenValue(valueToken, env)
-    if (!scalar && valueToken) {
-      const intVal = evalIntExpr(tokens, assignIdx + 1, env)
-      if (intVal !== undefined) scalar = { kind: 'int', value: intVal }
+    let scalar: RuntimeScalar | undefined
+    const intVal = evalIntExpr(tokens, assignIdx + 1, env)
+    if (intVal !== undefined) {
+      scalar = { kind: 'int', value: intVal }
+    } else {
+      scalar = evalTokenValue(tokens[assignIdx + 1], env)
     }
 
     if (arrayName !== null && scalar) {
@@ -1155,6 +1156,18 @@ export interface EvaluationResult {
   truncated?: boolean
   getHoverAt(line: number, column: number): HoverAtResult | null
 }
+
+/** ドライラン等でマクロ実行環境を初期化する */
+export function createMacroEnvironment(macroArgv?: string[]): Map<string, RuntimeValue> {
+  return initEnv(macroArgv)
+}
+
+/** 実行環境の浅いコピー */
+export function cloneMacroEnvironment(env: Map<string, RuntimeValue>): Map<string, RuntimeValue> {
+  return cloneEnv(env)
+}
+
+export type MacroEnvironment = Map<string, RuntimeValue>
 
 export function evaluateTTL(source: string, options?: EvaluateOptions): EvaluationResult {
   const lines = stripComments(source)

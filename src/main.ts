@@ -7,6 +7,7 @@ import {
   setEncodingSelect,
   setNewlineSelect,
   setStatusMessage,
+  setDryRunToolbarState,
 } from './ui/toolbar'
 import { TabManager, MAX_TABS, type EditorTab } from './ui/tabManager'
 import { analyzeTTL, collectIncludeCrossTabVarContext, type IncludeResolver, type VariableInfo } from './ttl/analyzer'
@@ -16,6 +17,7 @@ import {
   migrateIncludeBindings,
   normalizeIncludePath,
   resolveIncludeBindingTabId,
+  resolveIncludePathBindingKey,
   resolveLoopIncludeBindingKey,
   type IncludeResolveContext,
 } from './ttl/includeRefs'
@@ -29,6 +31,8 @@ import { createDefaultDocumentSettings, loadAppSettings, saveAppSettings } from 
 import { loadWorkspaceSession, saveWorkspaceSession } from './storage/sessionState'
 import { showGotoLineDialog } from './ui/gotoLineDialog'
 import { setupSidePanelResize } from './ui/sidePanelResize'
+import { DryRunSession, isDryRunMainLocation, type DryRunState } from './ttl/dryRun'
+import { createBrowserDialogAdapter, cancelActiveTtlDialog } from './ui/ttlDialog'
 
 const appSettings = loadAppSettings()
 let isDark = appSettings.isDark
@@ -81,7 +85,8 @@ function getActiveTab(): EditorTab {
   return tab
 }
 
-function syncUiFromTab(tab: EditorTab): void {
+function syncUiFromTab(tab: EditorTab, options?: { keepDryRun?: boolean }): void {
+  if (!options?.keepDryRun && (dryRunActive || dryRunRunPromise !== null)) stopDryRun()
   setEncodingSelect(tab.docSettings.encoding)
   setNewlineSelect(tab.docSettings.newline)
   updateStatusBar(tab)
@@ -89,6 +94,7 @@ function syncUiFromTab(tab: EditorTab): void {
   runAnalysisNow(editor.getValue())
   updateCursorPosition()
   schedulePersistWorkspaceSession()
+  if (options?.keepDryRun) refreshDryRunHighlight()
 }
 
 function updateStatusBar(tab: EditorTab): void {
@@ -102,13 +108,43 @@ function resolveLinkedTabContent(linkedTabId: string | undefined): string | null
   return tabManager.getTabContent(linkedTab)
 }
 
-function createIncludeResolver(tab: EditorTab): IncludeResolver {
+interface DryRunSnapshot {
+  contents: Map<string, string>
+  bindings: Map<string, Record<string, string>>
+}
+
+/** ドライラン起点からリンク先タブの内容・バインディングを起動時点で固定する */
+function snapshotDryRunContext(originTab: EditorTab): DryRunSnapshot {
+  const contents = new Map<string, string>()
+  const bindings = new Map<string, Record<string, string>>()
+  const visit = (tab: EditorTab) => {
+    if (!contents.has(tab.id)) {
+      contents.set(tab.id, tabManager.getTabContent(tab))
+      bindings.set(tab.id, { ...tab.includeBindings })
+    }
+    for (const tabId of Object.values(bindings.get(tab.id)!)) {
+      const linked = tabManager.allTabs.find((t) => t.id === tabId)
+      if (linked) visit(linked)
+    }
+  }
+  visit(originTab)
+  return { contents, bindings }
+}
+
+function createIncludeResolver(tab: EditorTab, dryRunSnapshot?: DryRunSnapshot): IncludeResolver {
+  const readContent = (tabId: string): string | null => {
+    if (dryRunSnapshot) return dryRunSnapshot.contents.get(tabId) ?? null
+    return resolveLinkedTabContent(tabId)
+  }
+
+  const tabBindings = () => dryRunSnapshot?.bindings.get(tab.id) ?? tab.includeBindings
+
   const resolveTabId = (bindingKey: string, rawArg?: string, effectiveRaw?: string) =>
-    resolveIncludeBindingTabId(tab.includeBindings, bindingKey, rawArg, effectiveRaw)
+    resolveIncludeBindingTabId(tabBindings(), bindingKey, rawArg, effectiveRaw)
 
   const resolveByKey = (bindingKey: string, rawArg?: string, effectiveRaw?: string) => {
     const tabId = resolveTabId(bindingKey, rawArg, effectiveRaw)
-    return tabId ? resolveLinkedTabContent(tabId) : null
+    return tabId ? readContent(tabId) : null
   }
 
   return {
@@ -128,7 +164,7 @@ function createIncludeResolver(tab: EditorTab): IncludeResolver {
     resolverForLinkedTab(tabId: string) {
       if (tabId === tab.id) return null
       const linkedTab = tabManager.allTabs.find((t) => t.id === tabId)
-      return linkedTab ? createIncludeResolver(linkedTab) : null
+      return linkedTab ? createIncludeResolver(linkedTab, dryRunSnapshot) : null
     },
   }
 }
@@ -244,7 +280,8 @@ function refreshIncludePanel(text?: string) {
       editor.gotoLine(line)
     },
     onOpenLinkedTab(tabId) {
-      tabManager.switchTab(tabId)
+      const keepDryRun = dryRunActive || dryRunRunPromise !== null
+      tabManager.switchTab(tabId, keepDryRun ? { keepDryRun: true } : undefined)
     },
   })
 
@@ -263,7 +300,16 @@ const tabManager = new TabManager(
   editor,
   document.querySelector('#tab-list')!,
   syncUiFromTab,
+  () => {
+    editor.clearExecutionLine()
+  },
 )
+tabManager.setKeepDryRunOnUserSwitch(() => dryRunActive || dryRunRunPromise !== null)
+tabManager.setOnTabClosed((closedTabId) => {
+  const related = isDryRunRelatedTab(closedTabId)
+  if (closedTabId === dryRunOriginTabId) dryRunOriginTabId = null
+  if ((dryRunActive || dryRunRunPromise !== null) && related) stopDryRun()
+})
 
 let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -301,6 +347,7 @@ editor.view.dom.addEventListener('click', updateCursorPosition)
 
 function handleNewTab() {
   if (!tabManager.canAddTab()) return
+  if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
   tabManager.addTab({ fileName: '未保存', docSettings: createDefaultDocumentSettings(), activate: true })
 }
 
@@ -322,7 +369,7 @@ async function openFile(
   const existing = tabManager.findByFileName(fileName)
   if (existing && existing.fileHandle === fileHandle) {
     if (options?.ifAlreadyOpen === 'skip') return
-    tabManager.switchTab(existing.id)
+    tabManager.switchTab(existing.id, dryRunKeepOptions())
     return
   }
 
@@ -338,7 +385,7 @@ async function openFile(
     activate: true,
   })
 
-  if (tab) syncUiFromTab(tab)
+  if (tab) syncUiFromTab(tab, dryRunKeepOptions())
   else schedulePersistWorkspaceSession()
 }
 
@@ -409,7 +456,7 @@ async function handleSave() {
 
     tabManager.markTabSaved()
     tabManager.setActiveFileName(tab.fileName)
-    syncUiFromTab(tab)
+    syncUiFromTab(tab, dryRunKeepOptions())
     persistWorkspaceSession()
   } catch (err) {
     if (isUserCancelError(err)) return
@@ -472,6 +519,251 @@ function handleGotoLine() {
   })
 }
 
+let dryRunSession: DryRunSession | null = null
+let dryRunRunId = 0
+let dryRunActive = false
+let dryRunRunPromise: Promise<DryRunState> | null = null
+let dryRunClearedState: DryRunState | null = null
+let dryRunOriginTabId: string | null = null
+const dryRunDialogAdapter = createBrowserDialogAdapter()
+
+function isDryRunInProgress(): boolean {
+  return dryRunActive || dryRunRunPromise !== null
+}
+
+function dryRunKeepOptions(): { keepDryRun: true } | undefined {
+  return isDryRunInProgress() ? { keepDryRun: true } : undefined
+}
+
+function getDryRunOriginTab(): EditorTab | null {
+  if (!dryRunOriginTabId) return null
+  return tabManager.allTabs.find((t) => t.id === dryRunOriginTabId) ?? null
+}
+
+/** ドライラン起点から include バインディングを辿って到達できるタブ ID */
+function collectDryRunLinkedTabIds(originTab: EditorTab): Set<string> {
+  const linked = new Set<string>()
+  const queue: EditorTab[] = [originTab]
+  while (queue.length > 0) {
+    const tab = queue.pop()!
+    for (const tabId of Object.values(tab.includeBindings)) {
+      if (linked.has(tabId)) continue
+      linked.add(tabId)
+      const next = tabManager.allTabs.find((t) => t.id === tabId)
+      if (next) queue.push(next)
+    }
+  }
+  return linked
+}
+
+function isDryRunRelatedTab(closedTabId: string): boolean {
+  if (closedTabId === dryRunOriginTabId) return true
+  const origin = getDryRunOriginTab()
+  if (!origin) return false
+  return collectDryRunLinkedTabIds(origin).has(closedTabId)
+}
+
+function findTabForLocationPrefixInTab(prefix: string, tab: EditorTab): EditorTab | null {
+  const bindings = tab.includeBindings
+  const normalized = normalizeIncludePath(prefix)
+
+  const fromStatic = resolveIncludeBindingTabId(bindings, normalized, undefined, normalized)
+  if (fromStatic) {
+    return tabManager.allTabs.find((t) => t.id === fromStatic) ?? null
+  }
+
+  const loopSuffix = /^(.+)@([a-zA-Z_]\w*)=(-?\d+)$/.exec(prefix)
+  if (loopSuffix) {
+    const [, rawPart, , valueStr] = loopSuffix
+    const loopValue = Number(valueStr)
+    const dynamicKey = includeDynamicBindingKey(rawPart!)
+    const fromDynamic = resolveIncludeBindingTabId(bindings, dynamicKey, rawPart, rawPart)
+    if (fromDynamic) {
+      return tabManager.allTabs.find((t) => t.id === fromDynamic) ?? null
+    }
+    const pathKey = resolveIncludePathBindingKey(rawPart!)
+    if (pathKey) {
+      const fromPath = resolveIncludeBindingTabId(bindings, pathKey, rawPart, rawPart)
+      if (fromPath) {
+        return tabManager.allTabs.find((t) => t.id === fromPath) ?? null
+      }
+    }
+    for (const [key, tabId] of Object.entries(bindings)) {
+      if (key.startsWith('@loop:L') && key.endsWith(`:${loopValue}`)) {
+        return tabManager.allTabs.find((t) => t.id === tabId) ?? null
+      }
+    }
+  } else {
+    const dynamicKey = includeDynamicBindingKey(prefix)
+    const fromDynamic = resolveIncludeBindingTabId(bindings, dynamicKey, prefix, prefix)
+    if (fromDynamic) {
+      return tabManager.allTabs.find((t) => t.id === fromDynamic) ?? null
+    }
+    const pathKey = resolveIncludePathBindingKey(prefix)
+    if (pathKey) {
+      const fromPath = resolveIncludeBindingTabId(bindings, pathKey, prefix, prefix)
+      if (fromPath) {
+        return tabManager.allTabs.find((t) => t.id === fromPath) ?? null
+      }
+    }
+  }
+
+  return null
+}
+
+function findTabForLocationPrefix(prefix: string, contextTab: EditorTab | null): EditorTab | null {
+  if (!contextTab) return null
+
+  const normalized = normalizeIncludePath(prefix)
+  const fromContext = findTabForLocationPrefixInTab(prefix, contextTab)
+  if (fromContext) return fromContext
+
+  for (const tabId of collectDryRunLinkedTabIds(contextTab)) {
+    const linkedTab = tabManager.allTabs.find((t) => t.id === tabId)
+    if (!linkedTab) continue
+    const fromLinked = findTabForLocationPrefixInTab(prefix, linkedTab)
+    if (fromLinked) return fromLinked
+  }
+
+  return tabManager.findByFileName(prefix) ?? tabManager.findByFileName(normalized) ?? null
+}
+
+function dryRunLocationMatchesActiveTab(location: string | undefined): boolean {
+  if (!location) return false
+  const tab = tabManager.activeTab
+  if (!tab) return false
+  if (isDryRunMainLocation(location)) {
+    return tab.id === dryRunOriginTabId
+  }
+  const prefixed = /^(.*):L\d+$/.exec(location)
+  if (!prefixed) return false
+  const contextTab = getDryRunOriginTab() ?? tab
+  const targetTab = findTabForLocationPrefix(prefixed[1]!, contextTab)
+  return targetTab?.id === tab.id
+}
+
+function gotoTtlLocation(location: string, contextTab: EditorTab | null): void {
+  const keepDryRun = dryRunKeepOptions()
+  const mainMatch = /^L(\d+)$/.exec(location)
+  if (mainMatch) {
+    if (contextTab && tabManager.activeTab?.id !== contextTab.id) {
+      tabManager.switchTab(contextTab.id, keepDryRun)
+    }
+    editor.gotoLine(Number(mainMatch[1]))
+    refreshDryRunHighlight()
+    return
+  }
+  const prefixed = /^(.*):L(\d+)$/.exec(location)
+  if (!prefixed) return
+  const [, prefix, lineStr] = prefixed
+  const targetTab = findTabForLocationPrefix(prefix!, contextTab)
+  if (targetTab) {
+    tabManager.switchTab(targetTab.id, keepDryRun)
+    editor.gotoLine(Number(lineStr))
+    refreshDryRunHighlight()
+  }
+}
+
+function gotoSendLocation(location: string): void {
+  gotoTtlLocation(location, tabManager.activeTab)
+}
+
+function gotoDryRunLocation(location: string): void {
+  gotoTtlLocation(location, getDryRunOriginTab() ?? tabManager.activeTab)
+}
+
+function refreshDryRunHighlight(): void {
+  const session = dryRunSession
+  if (session) applyDryRunExecutionHighlight(session.getState())
+}
+
+function applyDryRunExecutionHighlight(state: DryRunState): void {
+  if (state.status === 'waiting-dialog' || state.status === 'running') {
+    if (dryRunLocationMatchesActiveTab(state.currentLocation)) {
+      editor.setExecutionLine(state.currentLine, state.status === 'waiting-dialog')
+    } else {
+      editor.clearExecutionLine()
+    }
+    return
+  }
+  if (state.status === 'finished' || state.status === 'stopped' || state.status === 'error') {
+    editor.clearExecutionLine()
+  }
+}
+
+function stopDryRun(): void {
+  dryRunActive = false
+  dryRunRunPromise = null
+  const session = dryRunSession
+  if (session) {
+    session.stop()
+    sidePanel.updateDryRun(session.getState())
+    cancelActiveTtlDialog()
+    dryRunSession = null
+  } else {
+    cancelActiveTtlDialog()
+  }
+  dryRunRunId++
+  setDryRunToolbarState(false)
+  editor.clearExecutionLine()
+  editor.setDryRunLocked(false)
+}
+
+async function startDryRun(): Promise<void> {
+  if (dryRunActive || dryRunRunPromise) return
+  dryRunActive = true
+  const runId = ++dryRunRunId
+  const tab = tabManager.activeTab
+  const dryRunSnapshot = tab ? snapshotDryRunContext(tab) : undefined
+  const sourceSnapshot =
+    tab && dryRunSnapshot ? dryRunSnapshot.contents.get(tab.id) ?? editor.getValue() : editor.getValue()
+  const resolver =
+    tab && dryRunSnapshot
+      ? createIncludeResolver(tab, dryRunSnapshot)
+      : tab
+        ? createIncludeResolver(tab)
+        : undefined
+
+  dryRunOriginTabId = tab?.id ?? null
+  dryRunClearedState = null
+  setDryRunToolbarState(true)
+  editor.setDryRunLocked(true)
+  sidePanel.showTab('dryrun')
+  sidePanel.updateDryRun({ status: 'running', currentLine: 1, events: [] })
+
+  const session = new DryRunSession({
+    source: sourceSnapshot,
+    includeResolver: resolver,
+    dialogAdapter: dryRunDialogAdapter,
+    onStateChange(state) {
+      if (runId !== dryRunRunId) return
+      sidePanel.updateDryRun(state)
+      applyDryRunExecutionHighlight(state)
+      if (state.status === 'finished' || state.status === 'stopped' || state.status === 'error') {
+        setDryRunToolbarState(false)
+      }
+    },
+    async yieldEveryLine() {
+      await new Promise((r) => setTimeout(r, 0))
+    },
+  })
+
+  dryRunSession = session
+  dryRunRunPromise = session.run()
+  try {
+    await dryRunRunPromise
+  } finally {
+    if (runId === dryRunRunId) {
+      dryRunRunPromise = null
+      dryRunSession = null
+      dryRunActive = false
+      setDryRunToolbarState(false)
+      editor.clearExecutionLine()
+      editor.setDryRunLocked(false)
+    }
+  }
+}
+
 function handleCloseTab() {
   const tab = tabManager.activeTab
   if (tab && tabManager.closeTab(tab.id)) {
@@ -490,6 +782,20 @@ createToolbar(document.querySelector('#toolbar')!, editor, {
   onGotoLine: handleGotoLine,
   onSwitchTab: (index) => tabManager.switchToIndex(index),
   onSwitchTabRelative: (delta) => tabManager.switchRelativeTab(delta),
+  onDryRunStart: () => {
+    void startDryRun()
+  },
+  onDryRunStop: stopDryRun,
+})
+
+sidePanel.onGotoDryRunLocation(gotoDryRunLocation)
+sidePanel.onGotoSendLocation(gotoSendLocation)
+
+sidePanel.onClearDryRun(() => {
+  if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
+  dryRunOriginTabId = null
+  dryRunClearedState = { status: 'idle', currentLine: 0, events: [] }
+  sidePanel.updateDryRun(dryRunClearedState)
 })
 
 document.querySelector('#tab-add')!.addEventListener('click', handleNewTab)
