@@ -1,4 +1,4 @@
-import { createMockDialogAdapter, DryRunSession, isDryRunMainLocation, runDryRun, type DryRunDialogAdapter } from '../src/ttl/dryRun'
+import { buildDryRunPlainTextForCopy, createMockDialogAdapter, DryRunSession, isDryRunMainLocation, runDryRun, type DryRunDialogAdapter } from '../src/ttl/dryRun'
 import { SAMPLE_MACRO } from '../src/editor/createEditor'
 import type { IncludeResolver } from '../src/ttl/analyzer'
 
@@ -711,6 +711,75 @@ console.log('\n=== 44. yesnobox cancel sets result=0 ===')
   })
   const sends = eventsOfKind(state.events, 'send').map((e) => e.payload)
   assert(sends[0] === 'no', 'yesnobox cancel sets result=0', sends)
+}
+
+console.log('\n=== 45. gettime strconcat send shows runtime hint ===')
+{
+  const state = await runDryRun({
+    source: `gettime t "%Y"\nstrconcat t 'x'\nsendln t\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  assert(sends[0]?.payload?.includes('実行時') === true, 'gettime hint in dry run send payload', sends[0]?.payload)
+  assert(sends[0]?.detail?.includes('未解決') === true, 'gettime send marked unresolved', sends[0]?.detail)
+}
+
+console.log('\n=== 46. buildDryRunPlainTextForCopy ===')
+{
+  const state = await runDryRun({
+    source: `send 'hello'\nsendln 'world'\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const text = buildDryRunPlainTextForCopy(state)
+  assert(text.includes('# 状態: 完了'), 'copy text has status header', text.split('\n')[0])
+  assert(text.includes('[L1] send:'), 'copy text has send event', text)
+  assert(text.includes('hello'), 'copy text has payload', text)
+  assert(text.includes('world ↵'), 'copy text marks sendln newline', text)
+}
+
+console.log('\n=== 47. passwordbox send masked in copy ===')
+{
+  const state = await runDryRun({
+    source: `passwordbox 'pw?' 'pw'\nsend inputstr\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: 'secret' }]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  assert(sends[0]?.maskPayload === true, 'password send event masked', sends[0])
+  const text = buildDryRunPlainTextForCopy(state)
+  assert(!text.includes('secret'), 'copy text hides password payload', text)
+  assert(text.includes('send: （入力済み）'), 'copy text shows masked send message', text)
+}
+
+console.log('\n=== 48. copy text available with empty events ===')
+{
+  const state = await runDryRun({
+    source: `end`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const text = buildDryRunPlainTextForCopy(state)
+  assert(text.includes('# 状態: 完了'), 'finished macro without events still has copy header', text)
+}
+
+console.log('\n=== 49. password via strconcat masked ===')
+{
+  const state = await runDryRun({
+    source: `passwordbox 'pw?' 'pw'\nstrconcat buf inputstr\nsendln buf\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: 'secret' }]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  assert(sends[0]?.maskPayload === true, 'strconcat send masked', sends[0])
+  const text = buildDryRunPlainTextForCopy(state)
+  assert(!text.includes('secret'), 'copy hides strconcat password', text)
+}
+
+console.log('\n=== 50. password send via InputStr identifier ===')
+{
+  const state = await runDryRun({
+    source: `passwordbox 'pw?' 'pw'\nsend InputStr\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: 'secret' }]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  assert(sends[0]?.maskPayload === true, 'mixed-case inputstr send masked', sends[0])
 }
 
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)

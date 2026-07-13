@@ -1,6 +1,6 @@
 import type { AnalysisResult, VariableInfo } from '../ttl/analyzer'
 import type { SendEntry } from '../ttl/evaluator'
-import type { DryRunEvent, DryRunState } from '../ttl/dryRun'
+import { buildDryRunPlainTextForCopy, formatDryRunEventMessage, type DryRunEvent, type DryRunState } from '../ttl/dryRun'
 import { buildSendPlainTextForCopy, countUnresolvedSendEntries } from '../ttl/sendText'
 
 export type SidePanelTab = 'variables' | 'sends' | 'dryrun'
@@ -38,6 +38,7 @@ export function createSidePanel(container: HTMLElement): {
     <div class="panel-header-row">
       <h2 id="side-panel-title">送信データ</h2>
       <button type="button" id="send-copy-btn" class="panel-action-btn" title="送信データをプレーンテキストでコピー（未解決部分はプレースホルダー付き）">コピー</button>
+      <button type="button" id="dryrun-copy-btn" class="panel-action-btn" hidden title="ドライランのログをプレーンテキストでコピー">コピー</button>
       <button type="button" id="dryrun-clear-btn" class="panel-action-btn" hidden title="ドライランのログをクリア">クリア</button>
     </div>
     <div class="panel-stats" id="side-panel-stats"></div>
@@ -67,10 +68,27 @@ export function createSidePanel(container: HTMLElement): {
   diagSection.innerHTML = `<h2>診断</h2><div class="diagnostics-list" id="diagnostics-list"></div>`
 
   const sendCopyBtn = header.querySelector<HTMLButtonElement>('#send-copy-btn')!
+  const dryRunCopyBtn = header.querySelector<HTMLButtonElement>('#dryrun-copy-btn')!
   const dryRunClearBtn = header.querySelector<HTMLButtonElement>('#dryrun-clear-btn')!
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
   container.append(tabs, header, body, diagSection)
+
+  function isDryRunCopyAvailable(state: DryRunState | null): boolean {
+    if (!state) return false
+    return buildDryRunPlainTextForCopy(state).length > 0
+  }
+
+  function clearCopyFeedbackTimer() {
+    if (copyFeedbackTimer) {
+      clearTimeout(copyFeedbackTimer)
+      copyFeedbackTimer = null
+    }
+  }
+
+  function setDryRunCopyEnabled() {
+    dryRunCopyBtn.disabled = !isDryRunCopyAvailable(dryRunState)
+  }
 
   function setTab(tab: SidePanelTab) {
     activeTab = tab
@@ -81,11 +99,15 @@ export function createSidePanel(container: HTMLElement): {
     sendList.hidden = tab !== 'sends'
     dryRunList.hidden = tab !== 'dryrun'
     sendCopyBtn.hidden = tab !== 'sends'
+    dryRunCopyBtn.hidden = tab !== 'dryrun'
     dryRunClearBtn.hidden = tab !== 'dryrun'
     const title = container.querySelector('#side-panel-title')!
     title.textContent =
       tab === 'variables' ? '変数' : tab === 'sends' ? '送信データ' : 'ドライラン'
     if (tab === 'dryrun' && dryRunState) renderDryRun(dryRunState)
+    else if (tab === 'dryrun') {
+      updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+    }
   }
 
   tabs.addEventListener('click', (e) => {
@@ -100,6 +122,7 @@ export function createSidePanel(container: HTMLElement): {
     if (activeTab === 'dryrun') {
       if (!dryRunState) {
         statsEl.textContent = '未実行'
+        setDryRunCopyEnabled()
         return
       }
       const statusLabel =
@@ -115,6 +138,7 @@ export function createSidePanel(container: HTMLElement): {
                   ? 'エラー'
                   : '待機'
       statsEl.textContent = `${statusLabel} / L${dryRunState.currentLine || '-'} / ${dryRunState.events.length} 件`
+      setDryRunCopyEnabled()
       return
     }
     if (activeTab === 'variables') {
@@ -136,41 +160,71 @@ export function createSidePanel(container: HTMLElement): {
     }
   }
 
-  function showCopyFeedback(message: string) {
+  function showCopyFeedback(message: string, tab: SidePanelTab = activeTab) {
+    if (activeTab !== tab) return
     const statsEl = container.querySelector('#side-panel-stats')!
     statsEl.textContent = message
-    if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer)
+    clearCopyFeedbackTimer()
     copyFeedbackTimer = setTimeout(() => {
-      if (cached) updateStats(cached.analysis, cached.sendEntries)
+      if (activeTab === 'dryrun' && dryRunState) {
+        updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+      } else if (cached) {
+        updateStats(cached.analysis, cached.sendEntries)
+      }
     }, 2000)
   }
 
   async function copyResolvedSendText() {
     if (!cached) return
+    const tabAtClick: SidePanelTab = 'sends'
     const text = buildSendPlainTextForCopy(cached.sendEntries)
     if (!text && cached.sendEntries.length === 0) {
-      showCopyFeedback('コピーできる送信データがありません')
+      showCopyFeedback('コピーできる送信データがありません', tabAtClick)
       return
     }
     const ok = await copyToClipboard(text)
+    if (activeTab !== tabAtClick) return
     const unresolved = countUnresolvedSendEntries(cached.sendEntries)
     const msg =
       unresolved > 0
         ? `送信データをコピーしました（未解決 ${unresolved} 件を含む）`
         : '送信データをコピーしました'
-    showCopyFeedback(ok ? msg : 'コピーに失敗しました')
+    showCopyFeedback(ok ? msg : 'コピーに失敗しました', tabAtClick)
   }
 
   sendCopyBtn.addEventListener('click', () => {
     void copyResolvedSendText()
   })
 
+  async function copyDryRunText() {
+    const tabAtClick: SidePanelTab = 'dryrun'
+    if (!dryRunState) {
+      showCopyFeedback('コピーできるドライランのログがありません', tabAtClick)
+      return
+    }
+    const snapshot = dryRunState
+    const text = buildDryRunPlainTextForCopy(snapshot)
+    if (!text) {
+      showCopyFeedback('コピーできるドライランのログがありません', tabAtClick)
+      return
+    }
+    const ok = await copyToClipboard(text)
+    if (dryRunState !== snapshot || activeTab !== tabAtClick) return
+    showCopyFeedback(ok ? 'ドライランのログをコピーしました' : 'コピーに失敗しました', tabAtClick)
+  }
+
+  dryRunCopyBtn.addEventListener('click', () => {
+    void copyDryRunText()
+  })
+
   dryRunClearBtn.addEventListener('click', () => {
+    clearCopyFeedbackTimer()
     clearDryRunHandler?.()
   })
 
   function renderDryRun(state: DryRunState) {
     updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+    setDryRunCopyEnabled()
     if (state.events.length === 0) {
       dryRunList.innerHTML = '<div class="empty-state">ログはまだありません</div>'
       return
@@ -187,9 +241,11 @@ export function createSidePanel(container: HTMLElement): {
       event.line > 0
         ? `<button type="button" class="dryrun-goto" data-location="${escapeAttr(event.location)}" title="行へ移動">⌖</button>`
         : ''
+  const displayPayload =
+      !event.maskPayload && event.payload !== undefined ? event.payload : undefined
   const payload =
-      event.payload !== undefined
-        ? `<div class="dryrun-payload">${escapeHtml(event.payload)}${event.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>`
+      displayPayload !== undefined
+        ? `<div class="dryrun-payload">${escapeHtml(displayPayload)}${event.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>`
         : ''
     return `
       <div class="dryrun-item ${kindClass}">
@@ -198,7 +254,7 @@ export function createSidePanel(container: HTMLElement): {
           <span class="dryrun-kind">${escapeHtml(event.kind)}</span>
           ${gotoBtn}
         </div>
-        <div class="dryrun-message">${escapeHtml(event.message)}</div>
+        <div class="dryrun-message">${escapeHtml(formatDryRunEventMessage(event))}</div>
         ${payload}
         ${event.detail ? `<div class="dryrun-detail">${escapeHtml(event.detail)}</div>` : ''}
       </div>

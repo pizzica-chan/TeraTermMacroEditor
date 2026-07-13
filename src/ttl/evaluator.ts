@@ -33,6 +33,8 @@ export type RuntimeScalar =
       hint?: string
       /** 文字列結合に実行時未定のオペランドを含む */
       hasUnresolvedParts?: boolean
+      /** passwordbox 等の機密入力を含む */
+      sensitive?: boolean
     }
 
 export type RuntimeValue =
@@ -136,12 +138,16 @@ function appendScalarToPayload(
       unresolved.flag = true
       return
     }
+    if (scalar.value) {
+      parts.push(scalar.value)
+      return
+    }
     if (isRuntimeOrigin(scalar.origin)) {
       parts.push(scalar.hint ?? runtimeSegmentLabel(scalar.origin!))
       unresolved.flag = true
       return
     }
-    if (!scalar.value && scalar.hint) {
+    if (scalar.hint) {
       parts.push(scalar.hint)
       unresolved.flag = true
       return
@@ -150,12 +156,17 @@ function appendScalarToPayload(
     return
   }
   if (scalar.kind === 'int') {
+    if (scalar.hint) {
+      parts.push(scalar.hint)
+      unresolved.flag = true
+      return
+    }
     if (scalar.origin === 'dialog-result') {
       parts.push(runtimeSegmentLabel('dialog-result'))
       unresolved.flag = true
-    } else {
-      parts.push(String(scalar.value))
+      return
     }
+    parts.push(String(scalar.value))
   }
 }
 
@@ -298,7 +309,7 @@ function operandDisplayPart(v: RuntimeScalar): string | undefined {
   return undefined
 }
 
-function buildStringFromOperands(operands: RuntimeScalar[]): RuntimeScalar & { kind: 'str' } {
+export function buildStringFromOperands(operands: RuntimeScalar[]): RuntimeScalar & { kind: 'str' } {
   const value = operands
     .map((v) => (v.kind === 'str' ? v.value : v.kind === 'int' ? String(v.value) : ''))
     .join('')
@@ -313,6 +324,7 @@ function buildStringFromOperands(operands: RuntimeScalar[]): RuntimeScalar & { k
   }
 
   const hasUnresolvedParts = operands.some(isUnresolvedOperand)
+  const sensitive = operands.some((v) => v.kind === 'str' && v.sensitive)
 
   return {
     kind: 'str',
@@ -320,10 +332,11 @@ function buildStringFromOperands(operands: RuntimeScalar[]): RuntimeScalar & { k
     origin,
     hint: hintParts.length > 0 ? hintParts.join(' + ') : undefined,
     hasUnresolvedParts: hasUnresolvedParts ? true : undefined,
+    sensitive: sensitive || undefined,
   }
 }
 
-function prepareAssignedScalar(scalar: RuntimeScalar): RuntimeScalar {
+export function prepareAssignedScalar(scalar: RuntimeScalar): RuntimeScalar {
   if (scalar.kind === 'str' && scalar.origin && !scalar.hint && isRuntimeOrigin(scalar.origin)) {
     return { ...scalar, hint: runtimeSegmentLabel(scalar.origin) }
   }
@@ -630,10 +643,15 @@ function formatSendLocation(lineNum: number, prefix?: string): string {
   return prefix ? `${prefix}:L${lineNum}` : `L${lineNum}`
 }
 
-function collectSendPayload(tokens: Token[], start: number, env: Env): { payload: string; rawArgs: string; unresolved: boolean } {
+export function collectSendPayload(
+  tokens: Token[],
+  start: number,
+  env: Env,
+): { payload: string; rawArgs: string; unresolved: boolean; sensitive: boolean } {
   const parts: string[] = []
   const raw: string[] = []
   const unresolved = { flag: false }
+  let sensitive = false
 
   let i = start
   while (i < tokens.length) {
@@ -647,11 +665,12 @@ function collectSendPayload(tokens: Token[], start: number, env: Env): { payload
     const operand = evalSendOperand(tokens, i, env)
     if (!operand) break
     raw.push(...operand.rawParts)
+    if (operand.scalar?.kind === 'str' && operand.scalar.sensitive) sensitive = true
     appendScalarToPayload(operand.scalar, parts, unresolved, `〈未定義: ${operand.label}〉`)
     i = operand.next
   }
 
-  return { payload: parts.join(''), rawArgs: raw.join(' '), unresolved: unresolved.flag }
+  return { payload: parts.join(''), rawArgs: raw.join(' '), unresolved: unresolved.flag, sensitive }
 }
 
 function recordSend(

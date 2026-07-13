@@ -14,10 +14,12 @@ import {
 } from './staticCommandEval'
 import { RESERVED, stripComments, tokenizeLine, unquoteString, type Token } from './tokenize'
 import {
+  buildStringFromOperands,
+  collectSendPayload,
   createMacroEnvironment,
+  prepareAssignedScalar,
   type MacroEnvironment,
   type RuntimeScalar,
-  type ValueOrigin,
 } from './evaluator'
 import {
   findIfThenTailStart,
@@ -39,6 +41,8 @@ export interface DryRunEvent {
   payload?: string
   addsNewline?: boolean
   detail?: string
+  /** passwordbox 経由の inputstr など、表示・コピー時にマスクする */
+  maskPayload?: boolean
 }
 
 export type DryRunStatus = 'idle' | 'running' | 'waiting-dialog' | 'stopped' | 'finished' | 'error'
@@ -51,6 +55,55 @@ export interface DryRunState {
   events: DryRunEvent[]
   truncated?: boolean
   errorMessage?: string
+}
+
+const DRY_RUN_STATUS_LABELS: Record<DryRunStatus, string> = {
+  idle: '待機',
+  running: '実行中',
+  'waiting-dialog': '対話待ち',
+  stopped: '停止',
+  finished: '完了',
+  error: 'エラー',
+}
+
+/** ドライランイベントの表示用メッセージ（機密マスク適用） */
+export function formatDryRunEventMessage(event: DryRunEvent): string {
+  if (event.maskPayload && event.command) {
+    return `${event.command}: （入力済み）`
+  }
+  return event.message
+}
+
+/** ドライランイベントの表示用ペイロード（機密マスク適用） */
+export function formatDryRunEventPayload(event: DryRunEvent): string | undefined {
+  if (event.maskPayload) return undefined
+  if (event.payload === undefined) return undefined
+  const text = event.payload
+  return event.addsNewline ? `${text} ↵` : text
+}
+
+/** ドライランのログをプレーンテキストに整形（クリップボードコピー用） */
+export function buildDryRunPlainTextForCopy(state: DryRunState): string {
+  const lines: string[] = []
+  const status = DRY_RUN_STATUS_LABELS[state.status] ?? state.status
+  const location =
+    state.currentLine > 0 ? (state.currentLocation ?? `L${state.currentLine}`) : ''
+  lines.push(`# 状態: ${status}${location ? ` / ${location}` : ''}`)
+  if (state.errorMessage) lines.push(`# エラー: ${state.errorMessage}`)
+  if (state.truncated) lines.push('# ステップ上限で打ち切り')
+
+  if (state.events.length > 0) {
+    lines.push('')
+    for (const event of state.events) {
+      lines.push(`[${event.location}] ${event.kind}: ${formatDryRunEventMessage(event)}`)
+      const payload = formatDryRunEventPayload(event)
+      if (payload !== undefined) lines.push(payload)
+      if (event.detail) lines.push(event.detail)
+      lines.push('')
+    }
+  }
+
+  return lines.join('\n').trimEnd()
 }
 
 /** 親マクロ（ドライラン開始タブ）上の行か */
@@ -356,7 +409,18 @@ function applyStaticCommandEffects(cmd: string, tokens: Token[], offset: number,
   if (strResult) {
     const destTok = tokens[strResult.destIndex]
     if (destTok?.kind === 'identifier') {
-      setScalar(env, destTok.text, { kind: 'str', value: strResult.value, origin: 'literal' })
+      let sensitive: boolean | undefined
+      const srcTok = tokens[offset + 1]
+      if (srcTok?.kind === 'identifier') {
+        const src = env.get(srcTok.text.toLowerCase())
+        if (src?.kind === 'str' && src.sensitive) sensitive = true
+      }
+      setScalar(env, destTok.text, {
+        kind: 'str',
+        value: strResult.value,
+        origin: 'literal',
+        sensitive,
+      })
       return true
     }
   }
@@ -386,105 +450,6 @@ function isArrayAssignTarget(tokens: Token[], eqIdx: number): string | null {
     return name.text
   }
   return null
-}
-
-function prepareAssignedScalar(scalar: RuntimeScalar): RuntimeScalar {
-  if (scalar.kind === 'str') return { ...scalar, origin: scalar.origin ?? 'literal' }
-  return scalar
-}
-
-function buildStringFromOperands(operands: RuntimeScalar[]): RuntimeScalar {
-  let value = ''
-  let origin: ValueOrigin | undefined
-  let hasUnresolved = false
-  for (const op of operands) {
-    if (op.kind === 'str') {
-      value += op.value
-      if (op.hasUnresolvedParts) hasUnresolved = true
-      origin = origin ?? op.origin
-    } else if (op.kind === 'int') {
-      value += String(op.value)
-      origin = origin ?? op.origin
-    }
-  }
-  return { kind: 'str', value, origin, hasUnresolvedParts: hasUnresolved || undefined }
-}
-
-function appendScalarToPayload(
-  scalar: RuntimeScalar | undefined,
-  parts: string[],
-  unresolved: { flag: boolean },
-  fallbackLabel?: string,
-): void {
-  if (!scalar) {
-    unresolved.flag = true
-    parts.push(fallbackLabel ?? '〈未定義〉')
-    return
-  }
-  if (scalar.kind === 'str') {
-    parts.push(scalar.value || scalar.hint || '〈空〉')
-    if (scalar.hasUnresolvedParts || scalar.origin === 'user-input' || scalar.origin === 'match-received') {
-      unresolved.flag = true
-    }
-    return
-  }
-  if (scalar.kind === 'int') {
-    parts.push(String(scalar.value))
-    if (scalar.origin === 'dialog-result') unresolved.flag = true
-  }
-}
-
-function evalSendOperand(
-  tokens: Token[],
-  i: number,
-  env: Env,
-): { scalar?: RuntimeScalar; next: number; label: string } | null {
-  const tok = tokens[i]
-  if (!tok) return null
-  if (tok.text === '#' && tokens[i + 1]?.kind === 'number') {
-    const code = Number(tokens[i + 1]!.text)
-    return {
-      scalar: { kind: 'str', value: String.fromCharCode(code), origin: 'literal' },
-      next: i + 2,
-      label: `#${tokens[i + 1]!.text}`,
-    }
-  }
-  if (tok.kind === 'string' || tok.kind === 'number') {
-    return { scalar: evalTokenValue(tok, env), next: i + 1, label: tok.text }
-  }
-  if (tok.kind === 'identifier') {
-    if (tokens[i + 1]?.text === '[' && tokens[i + 2] && tokens[i + 3]?.text === ']') {
-      const indexTok = tokens[i + 2]!
-      return {
-        scalar: evalArrayElement(tok.text, indexTok, env),
-        next: i + 4,
-        label: `${tok.text}[${indexTok.text}]`,
-      }
-    }
-    return { scalar: evalTokenValue(tok, env), next: i + 1, label: tok.text }
-  }
-  return null
-}
-
-function collectSendPayload(tokens: Token[], start: number, env: Env): { payload: string; rawArgs: string; unresolved: boolean } {
-  const parts: string[] = []
-  const raw: string[] = []
-  const unresolved = { flag: false }
-  let i = start
-  while (i < tokens.length) {
-    const tok = tokens[i]
-    if (tok?.kind === 'operator' && tok.text === '+') {
-      raw.push(tok.text)
-      i++
-      continue
-    }
-    const operand = evalSendOperand(tokens, i, env)
-    if (!operand) break
-    raw.push(operand.label)
-    appendScalarToPayload(operand.scalar, parts, unresolved, `〈未定義: ${operand.label}〉`)
-    i = operand.next
-  }
-  return { payload: parts.join(''), rawArgs: raw.join(' '), unresolved: unresolved.flag }
 }
 
 function lineKeyword(line: string, lineIdx: number): string {
@@ -596,6 +561,29 @@ export class DryRunSession {
     this.opts.onStateChange?.(this.state)
   }
 
+  private pushSendEvent(
+    lineNum: number,
+    execOpts: { locationPrefix?: string },
+    cmd: 'send' | 'sendln',
+    tokens: Token[],
+    tokenStart: number,
+  ): void {
+    const { payload, rawArgs, unresolved, sensitive } = collectSendPayload(tokens, tokenStart, this.env)
+    const maskPayload = sensitive
+    const displayPayload = maskPayload ? '（入力済み）' : payload || '（空）'
+    this.pushEvent({
+      kind: 'send',
+      line: lineNum,
+      location: formatLocation(lineNum, execOpts.locationPrefix),
+      command: cmd,
+      message: `${cmd}: ${displayPayload}`,
+      payload,
+      addsNewline: cmd === 'sendln',
+      detail: rawArgs + (unresolved ? '（未解決を含む）' : ''),
+      maskPayload: maskPayload || undefined,
+    })
+  }
+
   private finishDialog(): void {
     if (!this.stopped) {
       this.patchState({ status: 'running', currentLine: this.state.currentLine })
@@ -670,16 +658,7 @@ export class DryRunSession {
         return this.processGotoCall(env, lines, lineIdx, tokens, tailStart, execOpts)
       }
       if (tailCmd === 'send' || tailCmd === 'sendln') {
-        const { payload } = collectSendPayload(tokens, tailStart + 1, env)
-        this.pushEvent({
-          kind: 'send',
-          line: lineNum,
-          location: formatLocation(lineNum, execOpts.locationPrefix),
-          command: tailCmd,
-          message: `${tailCmd}: ${payload || '（空）'}`,
-          payload,
-          addsNewline: tailCmd === 'sendln',
-        })
+        this.pushSendEvent(lineNum, execOpts, tailCmd, tokens, tailStart + 1)
       }
     }
     return { nextIdx: lineIdx }
@@ -940,7 +919,12 @@ export class DryRunSession {
         this.abortRun()
         return
       }
-      setScalar(env, 'inputstr', { kind: 'str', value: value ?? '', origin: 'user-input' })
+      setScalar(env, 'inputstr', {
+        kind: 'str',
+        value: value ?? '',
+        origin: 'user-input',
+        sensitive: password || undefined,
+      })
       this.pushEvent({
         kind: 'dialog',
         line: lineNum,
@@ -1399,17 +1383,7 @@ export class DryRunSession {
     }
 
     if (cmd === 'send' || cmd === 'sendln') {
-      const { payload, rawArgs, unresolved } = collectSendPayload(tokens, offset + 1, env)
-      this.pushEvent({
-        kind: 'send',
-        line: lineNum,
-        location: formatLocation(lineNum, execOpts.locationPrefix),
-        command: cmd,
-        message: `${cmd}: ${payload || '（空）'}`,
-        payload,
-        addsNewline: cmd === 'sendln',
-        detail: rawArgs + (unresolved ? '（未解決を含む）' : ''),
-      })
+      this.pushSendEvent(lineNum, execOpts, cmd, tokens, offset + 1)
       return { nextIdx: lineIdx }
     }
 
