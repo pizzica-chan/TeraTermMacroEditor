@@ -230,8 +230,10 @@ function runAnalysisImmediate(text: string): void {
   setAnalysisCache(text, result, evaluation)
   editor.notifyAnalysisCacheChanged()
 
-  sidePanel.update({ analysis: result, sendEntries: evaluation.sendEntries })
-  refreshIncludePanel(text)
+  if (!isDryRunInProgress()) {
+    sidePanel.update({ analysis: result, sendEntries: evaluation.sendEntries })
+    refreshIncludePanel(text)
+  }
 }
 
 function runAnalysis(text: string, immediate = false): void {
@@ -707,6 +709,7 @@ function stopDryRun(): void {
   setDryRunToolbarState(false)
   editor.clearExecutionLine()
   editor.setDryRunLocked(false)
+  runAnalysisNow(editor.getValue())
 }
 
 async function startDryRun(): Promise<void> {
@@ -760,6 +763,7 @@ async function startDryRun(): Promise<void> {
       setDryRunToolbarState(false)
       editor.clearExecutionLine()
       editor.setDryRunLocked(false)
+      runAnalysisNow(editor.getValue())
     }
   }
 }

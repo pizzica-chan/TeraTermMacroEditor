@@ -17,6 +17,7 @@ import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from
 import { collectLabelLineMap, formatLabelRef, normalizeLabelName } from './labels'
 import {
   findLabelLineIndex,
+  findIfThenTailStart,
   findSingleLineIfTailStart,
   MAX_CALL_DEPTH,
   resolveJumpLabelName,
@@ -241,7 +242,7 @@ export function parseWaitPatternAt(
     if (!operand) break
     if (operand.scalar?.kind === 'str') parts.push(operand.scalar.value)
     else if (operand.scalar?.kind === 'int') parts.push(String(operand.scalar.value))
-    else parts.push(operand.label)
+    else break
     i = operand.next
   }
   if (parts.length === 0) return null
@@ -651,19 +652,50 @@ function processLine(env: Env, line: string, lineNum: number): void {
 
   if (applyStaticCommandEffects(cmd, tokens, offset, env)) return
 
-  if (cmd === 'wait' || cmd === 'waitln' || cmd === 'waitregex' || cmd === 'wait4all') {
-    const patterns = collectWaitPatterns(tokens, offset + 1, env)
-    if (patterns.length === 0) return
-    const value = patterns[0]!
-    const origin =
-      tokens[offset + 1]?.kind === 'string' && value === unquoteString(tokens[offset + 1]!.text)
-        ? 'literal'
-        : 'match-received'
-    setScalar(env, 'matchstr', { kind: 'str', value, origin })
-    return
-  }
+  if (applyWaitReceiveEffects(env, tokens, offset, cmd)) return
 
   if (applyCommandOutputEffects(cmd, tokens, env)) return
+}
+
+const WAIT_RECEIVE_COMMANDS = new Set(['wait', 'waitln', 'waitregex', 'wait4all'])
+
+function applyWaitReceiveEffects(env: Env, tokens: Token[], offset: number, cmd: string): boolean {
+  if (cmd === 'recvln') {
+    setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+    setScalar(env, 'inputstr', { kind: 'str', value: '〈受信行〉', origin: 'match-received' })
+    return true
+  }
+  if (cmd === 'waitrecv') {
+    const parsed = parseWaitPatternAt(tokens, offset + 1, env)
+    const sub = parsed?.pattern ?? ''
+    setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+    setScalar(env, 'inputstr', {
+      kind: 'str',
+      value: sub || '〈受信行〉',
+      origin: 'match-received',
+    })
+    return true
+  }
+  if (!WAIT_RECEIVE_COMMANDS.has(cmd)) return false
+
+  const patterns = collectWaitPatterns(tokens, offset + 1, env)
+  let matchstrValue: string
+  if (patterns.length === 0) {
+    matchstrValue = '〈受信データ〉'
+  } else if (patterns[0] === '') {
+    matchstrValue = ''
+  } else {
+    matchstrValue = patterns[0]!
+  }
+  const origin =
+    patterns.length > 0 &&
+    tokens[offset + 1]?.kind === 'string' &&
+    patterns[0] === unquoteString(tokens[offset + 1]!.text)
+      ? 'literal'
+      : 'match-received'
+  setScalar(env, 'matchstr', { kind: 'str', value: matchstrValue, origin })
+  setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+  return true
 }
 
 function isArrayAssignTarget(tokens: Token[], eqIdx: number): string | null {
@@ -816,6 +848,12 @@ function evalBoolExpr(tokens: Token[], env: Env): boolean | undefined {
       }
     }
     return cmp
+  }
+
+  if (tokens.length === 1) {
+    const v = evalTokenValue(tokens[0], env)
+    if (v?.kind === 'int') return v.value !== 0
+    if (v?.kind === 'str') return v.value !== ''
   }
 
   return undefined
@@ -1022,6 +1060,28 @@ function processBlock(
   return false
 }
 
+function processSingleLineIfTail(
+  env: Env,
+  lines: string[],
+  lineIdx: number,
+  tokens: Token[],
+  tailStart: number,
+  lineNum: number,
+  opts: EvalOptions,
+): StmtResult {
+  const tailCmd = tokens[tailStart]?.kind === 'identifier' ? tokens[tailStart]!.text.toLowerCase() : ''
+  if (tailCmd === 'goto' || tailCmd === 'call') {
+    return processGotoCall(env, lines, lineIdx, tokens, tailStart, opts)
+  }
+  if (applyWaitReceiveEffects(env, tokens, tailStart, tailCmd)) {
+    return { nextIdx: lineIdx }
+  }
+  if (tailCmd === 'send' || tailCmd === 'sendln') {
+    recordSend(opts, lineNum, tailCmd, tokens, tailStart + 1, env)
+  }
+  return { nextIdx: lineIdx }
+}
+
 function processStatement(
   env: Env,
   lines: string[],
@@ -1174,17 +1234,19 @@ function processStatement(
 
   for (const [open, close] of Object.entries(BLOCK_PAIRS)) {
     if (cmd === 'if') {
+      const thenForm = findIfThenTailStart(tokens, offset)
+      if (thenForm !== null) {
+        const cond = evalBoolExpr(tokens.slice(offset + 1, thenForm.condEnd), env)
+        if (cond === true) {
+          return processSingleLineIfTail(env, lines, lineIdx, tokens, thenForm.tailStart, lineNum, opts)
+        }
+        return { nextIdx: lineIdx }
+      }
       const tailStart = findSingleLineIfTailStart(tokens, offset)
       if (tailStart !== null) {
         const cond = evalBoolExpr(tokens.slice(offset + 1, tailStart), env)
         if (cond === true) {
-          const tailCmd = tokens[tailStart]?.kind === 'identifier' ? tokens[tailStart]!.text.toLowerCase() : ''
-          if (tailCmd === 'goto' || tailCmd === 'call') {
-            return processGotoCall(env, lines, lineIdx, tokens, tailStart, opts)
-          }
-          if (tailCmd === 'send' || tailCmd === 'sendln') {
-            recordSend(opts, lineNum, tailCmd, tokens, tailStart + 1, env)
-          }
+          return processSingleLineIfTail(env, lines, lineIdx, tokens, tailStart, lineNum, opts)
         }
         return { nextIdx: lineIdx }
       }

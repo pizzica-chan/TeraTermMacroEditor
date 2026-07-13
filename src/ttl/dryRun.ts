@@ -700,6 +700,12 @@ export class DryRunSession {
       }
       if (tailCmd === 'send' || tailCmd === 'sendln') {
         this.pushSendEvent(lineNum, execOpts, tailCmd, tokens, tailStart + 1)
+      } else if (
+        WAIT_COMMANDS.has(tailCmd) ||
+        tailCmd === 'recvln' ||
+        tailCmd === 'waitrecv'
+      ) {
+        await this.processLineEffects(env, lineNum, tokens, tailStart, tailCmd, execOpts)
       }
     }
     return { nextIdx: lineIdx }

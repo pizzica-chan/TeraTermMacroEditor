@@ -876,5 +876,28 @@ console.log('\n=== 58. wait complete.#13 suffix pattern ===')
   assert(wait?.payload === 'complete.' + String.fromCharCode(13), 'literal with trailing CR suffix', wait?.payload)
 }
 
+console.log('\n=== 59. single-line if wait ===')
+{
+  const state = await runDryRun({
+    source: `if 1 then wait 'login:'\nif 1 wait 'done'\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const waits = eventsOfKind(state.events, 'receive-wait')
+  assert(waits.length === 2, 'single-line if emits wait events', waits.length)
+  assert(waits[0]?.payload === 'login:', 'if then wait pattern', waits[0]?.payload)
+  assert(waits[1]?.payload === 'done', 'if cond wait pattern', waits[1]?.payload)
+}
+
+console.log('\n=== 60. wait undefined variable pattern ===')
+{
+  const state = await runDryRun({
+    source: `wait missing\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const wait = eventsOfKind(state.events, 'receive-wait')[0]
+  assert(wait?.payload === undefined, 'undefined wait variable has no pattern payload', wait?.payload)
+  assert(wait?.message.includes('（任意）'), 'undefined wait variable has no resolved pattern', wait?.message)
+}
+
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)
 if (failed > 0) process.exit(1)

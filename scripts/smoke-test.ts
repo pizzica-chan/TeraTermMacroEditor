@@ -81,6 +81,51 @@ assert(
   waitMatchstr,
 )
 
+const waitResultEval = evaluateTTL(`wait 'x'\nif result=1\nsend 'ok'\nendif\nend`)
+assert(
+  waitResultEval.sendEntries[0]?.payload === 'ok',
+  'wait sets result=1 for static if chain',
+  waitResultEval.sendEntries,
+)
+
+const bareWaitEval = evaluateTTL(`wait\nif result=1\nsend 'ok'\nendif\nend`)
+assert(
+  bareWaitEval.sendEntries[0]?.payload === 'ok',
+  'bare wait sets result=1',
+  bareWaitEval.sendEntries,
+)
+
+const recvlnResultEval = evaluateTTL(`recvln\nif result=1\nsend 'ok'\nelse\nsend 'no'\nendif\nend`)
+assert(
+  recvlnResultEval.sendEntries[0]?.payload === 'ok',
+  'recvln sets result=1 and inputstr origin',
+  recvlnResultEval.sendEntries,
+)
+
+const waitrecvEval = evaluateTTL(`waitrecv 'ab' 2 1\nend`)
+const waitrecvInput = waitrecvEval.afterLine.get(1)?.get('inputstr')
+assert(
+  waitrecvInput?.kind === 'str' && waitrecvInput.value === 'ab' && waitrecvInput.origin === 'match-received',
+  'waitrecv sets inputstr substring',
+  waitrecvInput,
+)
+
+const singleLineIfWait = evaluateTTL(`if 1 then wait 'pat'\nend`)
+const slWaitMatch = singleLineIfWait.afterLine.get(1)?.get('matchstr')
+assert(
+  slWaitMatch?.kind === 'str' && slWaitMatch.value === 'pat',
+  'single-line if then wait',
+  slWaitMatch,
+)
+
+const undefinedWaitVar = evaluateTTL(`wait missing\nend`)
+const undefinedWaitMatch = undefinedWaitVar.afterLine.get(1)?.get('matchstr')
+assert(
+  undefinedWaitMatch?.kind === 'str' && undefinedWaitMatch.value === '〈受信データ〉',
+  'wait with undefined variable does not use variable name as pattern',
+  undefinedWaitMatch,
+)
+
 console.log('\n=== 6. command registry ===')
 const missingSpecs = [...TTL_COMMANDS].filter((c) => !(c in COMMAND_ARG_SPECS))
 assert(missingSpecs.length === 0, 'all TTL_COMMANDS have arg specs', missingSpecs)

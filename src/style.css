@@ -337,7 +337,8 @@ body {
 }
 
 .variable-list[hidden],
-.send-list[hidden] {
+.send-list[hidden],
+.dryrun-list[hidden] {
   display: none !important;
 }
 

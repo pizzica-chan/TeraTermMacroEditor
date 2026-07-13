@@ -107,6 +107,8 @@ export function createSidePanel(container: HTMLElement): {
     if (tab === 'dryrun' && dryRunState) renderDryRun(dryRunState)
     else if (tab === 'dryrun') {
       updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+    } else {
+      updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
     }
   }
 
@@ -409,8 +411,9 @@ export function createSidePanel(container: HTMLElement): {
     },
     updateDryRun(state) {
       dryRunState = state
-      if (activeTab === 'dryrun') renderDryRun(state ?? { status: 'idle', currentLine: 0, events: [] })
-      else if (state) updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+      if (activeTab === 'dryrun') {
+        renderDryRun(state ?? { status: 'idle', currentLine: 0, events: [] })
+      }
     },
   }
 }
