@@ -219,6 +219,48 @@ function evalSendOperand(
   return null
 }
 
+function tokenGapBefore(tokens: Token[], i: number): boolean {
+  const prev = tokens[i - 1]
+  const cur = tokens[i]
+  if (!prev || !cur) return false
+  return cur.column > prev.column + prev.text.length
+}
+
+/** 1 つの wait 引数パターンを読み取り、消費した次トークン位置を返す */
+export function parseWaitPatternAt(
+  tokens: Token[],
+  start: number,
+  env: Env,
+): { pattern: string; next: number } | null {
+  if (start >= tokens.length) return null
+  const parts: string[] = []
+  let i = start
+  while (i < tokens.length) {
+    if (parts.length > 0 && tokenGapBefore(tokens, i)) break
+    const operand = evalSendOperand(tokens, i, env)
+    if (!operand) break
+    if (operand.scalar?.kind === 'str') parts.push(operand.scalar.value)
+    else if (operand.scalar?.kind === 'int') parts.push(String(operand.scalar.value))
+    else parts.push(operand.label)
+    i = operand.next
+  }
+  if (parts.length === 0) return null
+  return { pattern: parts.join(''), next: i }
+}
+
+/** wait 系コマンドの引数パターンを収集（1パターンは #NN 連結・隣接リテラル結合に対応） */
+export function collectWaitPatterns(tokens: Token[], start: number, env: Env): string[] {
+  const patterns: string[] = []
+  let i = start
+  while (i < tokens.length) {
+    const parsed = parseWaitPatternAt(tokens, i, env)
+    if (!parsed) break
+    patterns.push(parsed.pattern)
+    i = parsed.next
+  }
+  return patterns
+}
+
 function cloneEnv(env: Env): Env {
   const next = new Map<string, RuntimeValue>()
   for (const [k, v] of env) {
@@ -609,13 +651,15 @@ function processLine(env: Env, line: string, lineNum: number): void {
 
   if (applyStaticCommandEffects(cmd, tokens, offset, env)) return
 
-  if (cmd === 'wait' || cmd === 'waitln' || cmd === 'waitregex') {
-    const arg = tokens[offset + 1]
-    if (arg?.kind === 'string') {
-      setScalar(env, 'matchstr', { kind: 'str', value: unquoteString(arg.text), origin: 'literal' })
-    } else {
-      setScalar(env, 'matchstr', { kind: 'str', value: '', origin: 'match-received' })
-    }
+  if (cmd === 'wait' || cmd === 'waitln' || cmd === 'waitregex' || cmd === 'wait4all') {
+    const patterns = collectWaitPatterns(tokens, offset + 1, env)
+    if (patterns.length === 0) return
+    const value = patterns[0]!
+    const origin =
+      tokens[offset + 1]?.kind === 'string' && value === unquoteString(tokens[offset + 1]!.text)
+        ? 'literal'
+        : 'match-received'
+    setScalar(env, 'matchstr', { kind: 'str', value, origin })
     return
   }
 

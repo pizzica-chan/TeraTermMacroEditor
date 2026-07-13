@@ -16,6 +16,8 @@ import { RESERVED, stripComments, tokenizeLine, unquoteString, type Token } from
 import {
   buildStringFromOperands,
   collectSendPayload,
+  collectWaitPatterns,
+  parseWaitPatternAt,
   createMacroEnvironment,
   prepareAssignedScalar,
   type MacroEnvironment,
@@ -187,7 +189,7 @@ const DIALOG_COMMANDS = new Set([
   'dirnamebox',
 ])
 
-const WAIT_COMMANDS = new Set(['wait', 'waitln', 'waitregex', 'recvln', 'waitrecv'])
+const WAIT_COMMANDS = new Set(['wait', 'waitln', 'waitregex', 'wait4all'])
 const FLOW_LOG_COMMANDS = new Set(['connect', 'disconnect', 'pause', 'mpause', 'flushrecv', 'sendbreak'])
 
 interface CallFrame {
@@ -362,6 +364,45 @@ function collectStringArgs(tokens: Token[], start: number, env: Env): string[] {
     args.push(resolveStringToken(tokens[i], env))
   }
   return args
+}
+
+function formatWaitPatternLabel(pattern: string): string {
+  return pattern === '' ? '（空＝任意1文字）' : pattern
+}
+
+function buildWaitReceiveEvent(
+  cmd: string,
+  patterns: string[],
+  lineNum: number,
+  locationPrefix?: string,
+): Omit<DryRunEvent, 'id'> {
+  const simulated = patterns[0] ?? ''
+  const requireAll = cmd === 'wait4all'
+  let message: string
+  let detail: string | undefined
+
+  if (patterns.length === 0) {
+    message = `${cmd}: 待機パターン「（任意）」`
+  } else if (patterns.length === 1) {
+    message = `${cmd}: 待機パターン「${formatWaitPatternLabel(patterns[0]!)}」`
+  } else {
+    const modeLabel = requireAll ? '（すべて）' : '（いずれか）'
+    const listed = patterns.map((p, i) => `#${i + 1}「${formatWaitPatternLabel(p)}」`).join(' ')
+    message = `${cmd}: 待機パターン${modeLabel} ${listed}`
+    detail = requireAll
+      ? 'ドライラン: result=1（すべてに一致想定）'
+      : `ドライラン: result=1（#1 ${formatWaitPatternLabel(simulated)} に一致想定）`
+  }
+
+  return {
+    kind: 'receive-wait',
+    line: lineNum,
+    location: formatLocation(lineNum, locationPrefix),
+    command: cmd,
+    message,
+    payload: patterns.length === 1 ? simulated : undefined,
+    detail,
+  }
 }
 
 function isKnownStringValue(v: RuntimeScalar): v is RuntimeScalar & { kind: 'str' } {
@@ -782,25 +823,59 @@ export class DryRunSession {
 
     if (applyStaticCommandEffects(cmd, tokens, offset, env)) return
 
-    if (WAIT_COMMANDS.has(cmd)) {
-      const pattern = tokens[offset + 1] ? resolveStringToken(tokens[offset + 1], env) : ''
+    if (cmd === 'recvln') {
+      this.pushEvent(buildWaitReceiveEvent(cmd, [], lineNum, execOpts.locationPrefix))
+      setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+      setScalar(env, 'inputstr', { kind: 'str', value: '〈受信行〉', origin: 'match-received' })
+      return
+    }
+
+    if (cmd === 'waitrecv') {
+      const parsed = parseWaitPatternAt(tokens, offset + 1, env)
+      const sub = parsed?.pattern ?? ''
+      const len = parsed ? evalIntExpr(tokens, parsed.next, env) : undefined
+      const pos = parsed ? evalIntExpr(tokens, parsed.next + 1, env) : undefined
+      const lenLabel = len !== undefined ? String(len) : '?'
+      const posLabel = pos !== undefined ? String(pos) : '?'
       this.pushEvent({
         kind: 'receive-wait',
         line: lineNum,
         location: formatLocation(lineNum, execOpts.locationPrefix),
         command: cmd,
-        message: `${cmd}: 待機パターン「${pattern || '（任意）'}」`,
-        payload: pattern,
+        message: `waitrecv: 部分一致「${formatWaitPatternLabel(sub)}」 len=${lenLabel} pos=${posLabel}`,
+        payload: sub || undefined,
       })
-      if (tokens[offset + 1]?.kind === 'string') {
-        setScalar(env, 'matchstr', { kind: 'str', value: unquoteString(tokens[offset + 1]!.text), origin: 'literal' })
-      } else {
-        setScalar(env, 'matchstr', { kind: 'str', value: pattern || '〈受信データ〉', origin: 'match-received' })
-      }
       setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
-      if (cmd === 'recvln' || cmd === 'waitrecv') {
-        setScalar(env, 'inputstr', { kind: 'str', value: pattern || '〈受信行〉', origin: 'match-received' })
+      setScalar(env, 'inputstr', {
+        kind: 'str',
+        value: sub || '〈受信行〉',
+        origin: 'match-received',
+      })
+      return
+    }
+
+    if (WAIT_COMMANDS.has(cmd)) {
+      const patterns = collectWaitPatterns(tokens, offset + 1, env)
+      const simulated = patterns[0] ?? ''
+      this.pushEvent(buildWaitReceiveEvent(cmd, patterns, lineNum, execOpts.locationPrefix))
+
+      let matchstrValue: string
+      if (patterns.length === 0) {
+        matchstrValue = '〈受信データ〉'
+      } else if (patterns[0] === '') {
+        matchstrValue = ''
+      } else {
+        matchstrValue = simulated || '〈受信データ〉'
       }
+      const matchOrigin =
+        patterns.length > 0 &&
+        tokens[offset + 1]?.kind === 'string' &&
+        patterns[0] === unquoteString(tokens[offset + 1]!.text)
+          ? 'literal'
+          : 'match-received'
+      setScalar(env, 'matchstr', { kind: 'str', value: matchstrValue, origin: matchOrigin })
+
+      setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
       return
     }
 

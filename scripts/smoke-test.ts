@@ -73,6 +73,14 @@ const strcopySrc = `strcopy 'tera term' 6 4 substr\nsend substr`
 const strcopyEval = evaluateTTL(strcopySrc)
 assert(strcopyEval.sendEntries[0]?.payload === 'term', 'strcopy send', strcopyEval.sendEntries[0]?.payload)
 
+const waitHexEval = evaluateTTL(`wait 'OK'#10'>'\nend`)
+const waitMatchstr = waitHexEval.afterLine.get(1)?.get('matchstr')
+assert(
+  waitMatchstr?.kind === 'str' && waitMatchstr.value === 'OK' + String.fromCharCode(10) + '>',
+  'wait hex pattern in evaluator matchstr',
+  waitMatchstr,
+)
+
 console.log('\n=== 6. command registry ===')
 const missingSpecs = [...TTL_COMMANDS].filter((c) => !(c in COMMAND_ARG_SPECS))
 assert(missingSpecs.length === 0, 'all TTL_COMMANDS have arg specs', missingSpecs)

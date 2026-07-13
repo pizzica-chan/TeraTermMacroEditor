@@ -782,5 +782,99 @@ console.log('\n=== 50. password send via InputStr identifier ===')
   assert(sends[0]?.maskPayload === true, 'mixed-case inputstr send masked', sends[0])
 }
 
+console.log('\n=== 51. wait multiple patterns ===')
+{
+  const state = await runDryRun({
+    source: `prompt = 'login:'\nwait 'OK' 'ERROR'\nwait prompt 'done'\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const waits = eventsOfKind(state.events, 'receive-wait')
+  assert(waits[0]?.payload === undefined, 'multi pattern wait has no payload line', waits[0])
+  assert(waits[0]?.message.includes('OK') && waits[0]?.message.includes('ERROR'), 'multi wait message lists patterns', waits[0]?.message)
+  assert(waits[0]?.detail?.includes('result=1'), 'multi wait detail notes simulated result', waits[0]?.detail)
+  assert(waits[1]?.message.includes('login:') && waits[1]?.message.includes('done'), 'mixed variable and literal patterns', waits[1]?.message)
+  assert(waits[1]?.payload === undefined, 'second multi wait also omits payload', waits[1]?.payload)
+}
+
+console.log('\n=== 52. recvln without args keeps result=1 ===')
+{
+  const state = await runDryRun({
+    source: `recvln\nif result=1\nsend 'matched'\nelse\nsend 'no'\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const sends = eventsOfKind(state.events, 'send').map((e) => e.payload)
+  assert(sends[0] === 'matched', 'recvln without args simulates success', sends)
+}
+
+console.log('\n=== 53. wait hex pattern is single argument ===')
+{
+  const state = await runDryRun({
+    source: `wait #10'>'\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const wait = eventsOfKind(state.events, 'receive-wait')[0]
+  const expected = String.fromCharCode(10) + '>'
+  assert(wait?.payload === expected, 'hex wait joins into one pattern', wait?.payload)
+  assert(wait?.message.includes('待機パターン「'), 'hex wait is single-pattern message', wait?.message)
+}
+
+console.log('\n=== 54. wait4all logs all patterns ===')
+{
+  const state = await runDryRun({
+    source: `wait4all 'A' 'B'\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const wait = eventsOfKind(state.events, 'receive-wait')[0]
+  assert(wait?.message.includes('すべて'), 'wait4all uses all-patterns label', wait?.message)
+  assert(wait?.message.includes('A') && wait?.message.includes('B'), 'wait4all lists patterns', wait?.message)
+}
+
+console.log('\n=== 55. multi wait copy text omits payload line ===')
+{
+  const { buildDryRunPlainTextForCopy } = await import('../src/ttl/dryRun')
+  const state = await runDryRun({
+    source: `wait 'OK' 'ERROR'\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const text = buildDryRunPlainTextForCopy(state)
+  const lines = text.split('\n')
+  const eventIdx = lines.findIndex((l) => l.includes('[L1] receive-wait'))
+  assert(eventIdx >= 0, 'copy has wait event line', eventIdx)
+  assert(lines[eventIdx + 1]?.startsWith('ドライラン:'), 'copy skips duplicate payload after multi wait', lines[eventIdx + 1])
+}
+
+console.log('\n=== 56. recvln does not overwrite matchstr ===')
+{
+  const state = await runDryRun({
+    source: `wait 'keep'\nrecvln\nsend matchstr\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  assert(sends[0]?.payload === 'keep', 'recvln leaves prior matchstr intact', sends[0]?.payload)
+}
+
+console.log('\n=== 57. waitrecv parses substring len pos ===')
+{
+  const state = await runDryRun({
+    source: `waitrecv 'C'#13 2 1\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const wait = eventsOfKind(state.events, 'receive-wait')[0]
+  const expected = 'C' + String.fromCharCode(13)
+  assert(wait?.payload === expected, 'waitrecv substring includes trailing #13', wait?.payload)
+  assert(wait?.message.includes('len=2') && wait?.message.includes('pos=1'), 'waitrecv logs len and pos', wait?.message)
+  assert(!wait?.message.includes('いずれか'), 'waitrecv is not multi-pattern wait', wait?.message)
+}
+
+console.log('\n=== 58. wait complete.#13 suffix pattern ===')
+{
+  const state = await runDryRun({
+    source: `wait 'complete.'#13\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const wait = eventsOfKind(state.events, 'receive-wait')[0]
+  assert(wait?.payload === 'complete.' + String.fromCharCode(13), 'literal with trailing CR suffix', wait?.payload)
+}
+
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)
 if (failed > 0) process.exit(1)
