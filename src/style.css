@@ -19,6 +19,15 @@
   --warning: #cca700;
   --info: #3794ff;
   --success: #4ec9b0;
+  --flow-edge-default: #858585;
+  --flow-edge-positive: #4ec9b0;
+  --flow-edge-negative: #f14c4c;
+  --flow-edge-accent: #3794ff;
+  --flow-node-default: #3c3c3c;
+  --flow-node-control: #6a4c93;
+  --flow-node-io: #28666e;
+  --flow-node-include: #7a5c1e;
+  --flow-node-warning: #8b3a3a;
 }
 
 [data-theme='light'] {
@@ -34,6 +43,15 @@
   --warning: #9a7d28;
   --info: #4a7ab8;
   --success: #3d8f7a;
+  --flow-edge-default: #77736c;
+  --flow-edge-positive: #3d8f7a;
+  --flow-edge-negative: #c44a4a;
+  --flow-edge-accent: #4a7ab8;
+  --flow-node-default: #d0cdc7;
+  --flow-node-control: #c6b5d8;
+  --flow-node-io: #a8cfce;
+  --flow-node-include: #d8c595;
+  --flow-node-warning: #dfaaaa;
 }
 
 html,
@@ -271,9 +289,9 @@ body {
 
 /* Side panel */
 .side-pane {
-  width: 300px;
+  width: 440px;
   min-width: 200px;
-  max-width: 600px;
+  max-width: 900px;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
   overflow-y: auto;
@@ -338,8 +356,104 @@ body {
 
 .variable-list[hidden],
 .send-list[hidden],
-.dryrun-list[hidden] {
+.dryrun-list[hidden],
+.flowchart-host[hidden],
+.include-section[hidden],
+.diagnostics-section[hidden] {
   display: none !important;
+}
+
+.flowchart-host {
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+  background: var(--bg-primary);
+}
+
+.flowchart-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.flowchart-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 12px !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 6px !important;
+  background: var(--flow-node-default) !important;
+  color: var(--text-primary) !important;
+  font-family: 'Cascadia Code', 'Consolas', 'Meiryo UI', monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: pre-line;
+  text-align: center;
+  box-shadow: 0 2px 7px rgb(0 0 0 / 20%);
+}
+
+.flowchart-node-decision {
+  border-radius: 18px !important;
+  background: var(--flow-node-control) !important;
+}
+
+.flowchart-node-loop {
+  border-width: 2px !important;
+  background: var(--flow-node-control) !important;
+}
+
+.flowchart-node-io,
+.flowchart-node-dialog {
+  background: var(--flow-node-io) !important;
+}
+
+.flowchart-node-assignment {
+  background: var(--flow-node-default) !important;
+  border-style: dashed;
+}
+
+.flowchart-node-include {
+  border-style: dashed !important;
+  background: var(--flow-node-include) !important;
+}
+
+.flowchart-node-terminal,
+.flowchart-node-warning {
+  background: var(--flow-node-warning) !important;
+}
+
+.flowchart-node-entry,
+.flowchart-node-exit {
+  border-radius: 24px !important;
+  min-height: 48px !important;
+}
+
+.flowchart-node-active {
+  outline: 3px solid var(--warning);
+  outline-offset: 3px;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--warning) 65%, transparent);
+}
+
+.flowchart-host .react-flow__minimap {
+  width: 84px;
+  height: 56px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.flowchart-host .react-flow__controls {
+  border: 1px solid var(--border-color);
+  box-shadow: none;
+}
+
+.flowchart-host .react-flow__controls-button {
+  border-bottom-color: var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 .panel-header h2 {
@@ -355,6 +469,13 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.panel-action-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .panel-action-btn {

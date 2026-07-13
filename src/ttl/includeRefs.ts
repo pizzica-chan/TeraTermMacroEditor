@@ -234,7 +234,7 @@ function collectStaticIntConstants(lines: string[], beforeLineIdx?: number): Map
   return constants
 }
 
-function collectStaticStringArrayValues(lines: string[], beforeLineIdx?: number): Map<string, Map<number, string>> {
+export function collectStaticStringArrayValues(lines: string[], beforeLineIdx?: number): Map<string, Map<number, string>> {
   const endLine = beforeLineIdx ?? lines.length
   const arrays = new Map<string, Map<number, string>>()
 

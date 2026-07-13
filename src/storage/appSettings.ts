@@ -6,6 +6,8 @@ export interface AppSettings {
   defaultEncoding: TextEncoding
   defaultNewline: NewlineType
   sidePanelWidth: number
+  flowchartShowDetailedWaits: boolean
+  flowchartShowAssignments: boolean
 }
 
 const STORAGE_KEY = 'ttl-macro-editor-settings'
@@ -14,7 +16,9 @@ const DEFAULTS: AppSettings = {
   isDark: true,
   defaultEncoding: 'UTF-8',
   defaultNewline: 'LF',
-  sidePanelWidth: 300,
+  sidePanelWidth: 440,
+  flowchartShowDetailedWaits: false,
+  flowchartShowAssignments: false,
 }
 
 function isEncoding(v: unknown): v is TextEncoding {
@@ -35,9 +39,17 @@ export function loadAppSettings(): AppSettings {
       defaultEncoding: isEncoding(parsed.defaultEncoding) ? parsed.defaultEncoding : DEFAULTS.defaultEncoding,
       defaultNewline: isNewline(parsed.defaultNewline) ? parsed.defaultNewline : DEFAULTS.defaultNewline,
       sidePanelWidth:
-        typeof parsed.sidePanelWidth === 'number' && parsed.sidePanelWidth >= 200 && parsed.sidePanelWidth <= 600
+        typeof parsed.sidePanelWidth === 'number' && parsed.sidePanelWidth >= 200 && parsed.sidePanelWidth <= 900
           ? parsed.sidePanelWidth
           : DEFAULTS.sidePanelWidth,
+      flowchartShowDetailedWaits:
+        typeof parsed.flowchartShowDetailedWaits === 'boolean'
+          ? parsed.flowchartShowDetailedWaits
+          : DEFAULTS.flowchartShowDetailedWaits,
+      flowchartShowAssignments:
+        typeof parsed.flowchartShowAssignments === 'boolean'
+          ? parsed.flowchartShowAssignments
+          : DEFAULTS.flowchartShowAssignments,
     }
   } catch {
     return { ...DEFAULTS }

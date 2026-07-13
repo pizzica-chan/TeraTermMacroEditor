@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
+import react from '@vitejs/plugin-react'
 
 import { cloudflare } from "@cloudflare/vite-plugin";
 
@@ -50,7 +51,7 @@ function fixDistHtml(): Plugin {
 
 export default defineConfig({
   base,
-  plugins: [fixDistHtml(), cloudflare()],
+  plugins: [react(), fixDistHtml(), cloudflare()],
   build: {
     cssCodeSplit: false,
     target: 'es2015',

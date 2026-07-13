@@ -2,25 +2,41 @@ import type { AnalysisResult, VariableInfo } from '../ttl/analyzer'
 import type { SendEntry } from '../ttl/evaluator'
 import { buildDryRunPlainTextForCopy, formatDryRunEventMessage, type DryRunEvent, type DryRunState } from '../ttl/dryRun'
 import { buildSendPlainTextForCopy, countUnresolvedSendEntries } from '../ttl/sendText'
+import type { FlowchartModel } from '../ttl/flowchart'
+import { mountFlowchart } from './flowchart/mountFlowchart'
 
-export type SidePanelTab = 'variables' | 'sends' | 'dryrun'
+export type SidePanelTab = 'variables' | 'sends' | 'dryrun' | 'flowchart'
 
-export function createSidePanel(container: HTMLElement): {
+export function createSidePanel(
+  container: HTMLElement,
+  options?: { dark?: boolean; showDetailedWaits?: boolean; showAssignments?: boolean },
+): {
   update: (data: { analysis: AnalysisResult; sendEntries: SendEntry[] }) => void
   updateDryRun: (state: DryRunState | null) => void
+  updateFlowchart: (model: FlowchartModel | null) => void
+  setFlowchartTheme: (dark: boolean) => void
   showTab: (tab: SidePanelTab) => void
   onGotoLine: (handler: (line: number) => void) => void
   onGotoDryRunLocation: (handler: (location: string) => void) => void
   onGotoSendLocation: (handler: (location: string) => void) => void
+  onGotoFlowchartLocation: (handler: (location: string) => void) => void
+  onFlowchartDetailedWaitsChange: (handler: (show: boolean) => void) => void
+  onFlowchartAssignmentsChange: (handler: (show: boolean) => void) => void
   onClearDryRun: (handler: () => void) => void
 } {
   let gotoHandler: ((line: number) => void) | null = null
   let dryRunGotoHandler: ((location: string) => void) | null = null
   let sendGotoHandler: ((location: string) => void) | null = null
+  let flowchartGotoHandler: ((location: string) => void) | null = null
+  let flowchartDetailedWaitsHandler: ((show: boolean) => void) | null = null
+  let flowchartAssignmentsHandler: ((show: boolean) => void) | null = null
   let clearDryRunHandler: (() => void) | null = null
   let activeTab: SidePanelTab = 'sends'
   let cached: { analysis: AnalysisResult; sendEntries: SendEntry[] } | null = null
   let dryRunState: DryRunState | null = null
+  let flowchartModel: FlowchartModel | null = null
+  let showDetailedWaits = options?.showDetailedWaits ?? false
+  let showAssignments = options?.showAssignments ?? false
 
   container.innerHTML = ''
 
@@ -29,6 +45,7 @@ export function createSidePanel(container: HTMLElement): {
   tabs.innerHTML = `
     <button type="button" class="side-panel-tab active" data-tab="sends">送信データ</button>
     <button type="button" class="side-panel-tab" data-tab="dryrun">ドライラン</button>
+    <button type="button" class="side-panel-tab" data-tab="flowchart">フロー</button>
     <button type="button" class="side-panel-tab" data-tab="variables">変数</button>
   `
 
@@ -40,6 +57,10 @@ export function createSidePanel(container: HTMLElement): {
       <button type="button" id="send-copy-btn" class="panel-action-btn" title="送信データをプレーンテキストでコピー（未解決部分はプレースホルダー付き）">コピー</button>
       <button type="button" id="dryrun-copy-btn" class="panel-action-btn" hidden title="ドライランのログをプレーンテキストでコピー">コピー</button>
       <button type="button" id="dryrun-clear-btn" class="panel-action-btn" hidden title="ドライランのログをクリア">クリア</button>
+      <div class="panel-action-group" id="flowchart-options" hidden>
+        <button type="button" id="flowchart-waits-btn" class="panel-action-btn" title="詳細な受信待機コマンドの表示を切り替え"></button>
+        <button type="button" id="flowchart-assignments-btn" class="panel-action-btn" title="変数への代入の表示を切り替え"></button>
+      </div>
     </div>
     <div class="panel-stats" id="side-panel-stats"></div>
   `
@@ -61,7 +82,12 @@ export function createSidePanel(container: HTMLElement): {
   dryRunList.id = 'dryrun-list'
   dryRunList.hidden = true
 
-  body.append(variableList, sendList, dryRunList)
+  const flowchartHost = document.createElement('div')
+  flowchartHost.className = 'flowchart-host'
+  flowchartHost.id = 'flowchart-host'
+  flowchartHost.hidden = true
+
+  body.append(variableList, sendList, dryRunList, flowchartHost)
 
   const diagSection = document.createElement('div')
   diagSection.className = 'diagnostics-section'
@@ -70,9 +96,39 @@ export function createSidePanel(container: HTMLElement): {
   const sendCopyBtn = header.querySelector<HTMLButtonElement>('#send-copy-btn')!
   const dryRunCopyBtn = header.querySelector<HTMLButtonElement>('#dryrun-copy-btn')!
   const dryRunClearBtn = header.querySelector<HTMLButtonElement>('#dryrun-clear-btn')!
+  const flowchartWaitsBtn = header.querySelector<HTMLButtonElement>('#flowchart-waits-btn')!
+  const flowchartAssignmentsBtn = header.querySelector<HTMLButtonElement>('#flowchart-assignments-btn')!
+  const flowchartOptions = header.querySelector<HTMLElement>('#flowchart-options')!
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
   container.append(tabs, header, body, diagSection)
+  const flowchart = mountFlowchart(flowchartHost, {
+    dark: options?.dark ?? true,
+    onGotoLocation(location) {
+      flowchartGotoHandler?.(location)
+    },
+  })
+
+  function updateFlowchartWaitsButton() {
+    flowchartWaitsBtn.textContent = `受信詳細: ${showDetailedWaits ? 'ON' : 'OFF'}`
+    flowchartWaitsBtn.setAttribute('aria-pressed', String(showDetailedWaits))
+  }
+  function updateFlowchartAssignmentsButton() {
+    flowchartAssignmentsBtn.textContent = `代入: ${showAssignments ? 'ON' : 'OFF'}`
+    flowchartAssignmentsBtn.setAttribute('aria-pressed', String(showAssignments))
+  }
+  updateFlowchartWaitsButton()
+  updateFlowchartAssignmentsButton()
+  flowchartWaitsBtn.addEventListener('click', () => {
+    showDetailedWaits = !showDetailedWaits
+    updateFlowchartWaitsButton()
+    flowchartDetailedWaitsHandler?.(showDetailedWaits)
+  })
+  flowchartAssignmentsBtn.addEventListener('click', () => {
+    showAssignments = !showAssignments
+    updateFlowchartAssignmentsButton()
+    flowchartAssignmentsHandler?.(showAssignments)
+  })
 
   function isDryRunCopyAvailable(state: DryRunState | null): boolean {
     if (!state) return false
@@ -98,15 +154,28 @@ export function createSidePanel(container: HTMLElement): {
     variableList.hidden = tab !== 'variables'
     sendList.hidden = tab !== 'sends'
     dryRunList.hidden = tab !== 'dryrun'
+    flowchartHost.hidden = tab !== 'flowchart'
     sendCopyBtn.hidden = tab !== 'sends'
     dryRunCopyBtn.hidden = tab !== 'dryrun'
     dryRunClearBtn.hidden = tab !== 'dryrun'
+    flowchartOptions.hidden = tab !== 'flowchart'
+    diagSection.hidden = tab === 'flowchart'
+    container.querySelector<HTMLElement>('.include-section')?.toggleAttribute('hidden', tab === 'flowchart')
     const title = container.querySelector('#side-panel-title')!
     title.textContent =
-      tab === 'variables' ? '変数' : tab === 'sends' ? '送信データ' : 'ドライラン'
+      tab === 'variables'
+        ? '変数'
+        : tab === 'sends'
+          ? '送信データ'
+          : tab === 'dryrun'
+            ? 'ドライラン'
+            : 'フローチャート'
     if (tab === 'dryrun' && dryRunState) renderDryRun(dryRunState)
     else if (tab === 'dryrun') {
       updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+    } else if (tab === 'flowchart') {
+      updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+      requestAnimationFrame(() => flowchart.refresh())
     } else {
       updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
     }
@@ -141,6 +210,16 @@ export function createSidePanel(container: HTMLElement): {
                   : '待機'
       statsEl.textContent = `${statusLabel} / L${dryRunState.currentLine || '-'} / ${dryRunState.events.length} 件`
       setDryRunCopyEnabled()
+      return
+    }
+    if (activeTab === 'flowchart') {
+      if (!flowchartModel) {
+        statsEl.textContent = '解析待ち'
+      } else {
+        const warningText =
+          flowchartModel.warnings.length > 0 ? ` / 注意 ${flowchartModel.warnings.length}` : ''
+        statsEl.textContent = `ノード ${flowchartModel.nodes.length} / エッジ ${flowchartModel.edges.length}${warningText}`
+      }
       return
     }
     if (activeTab === 'variables') {
@@ -398,6 +477,15 @@ export function createSidePanel(container: HTMLElement): {
     onGotoSendLocation(handler) {
       sendGotoHandler = handler
     },
+    onGotoFlowchartLocation(handler) {
+      flowchartGotoHandler = handler
+    },
+    onFlowchartDetailedWaitsChange(handler) {
+      flowchartDetailedWaitsHandler = handler
+    },
+    onFlowchartAssignmentsChange(handler) {
+      flowchartAssignmentsHandler = handler
+    },
     onClearDryRun(handler) {
       clearDryRunHandler = handler
     },
@@ -411,9 +499,24 @@ export function createSidePanel(container: HTMLElement): {
     },
     updateDryRun(state) {
       dryRunState = state
+      const currentLocation =
+        state?.currentLocation && /^L\d+$/.test(state.currentLocation) && flowchartModel
+          ? `${flowchartModel.rootSourceId}:${state.currentLocation}`
+          : state?.currentLocation
+      flowchart.setActiveLocation(currentLocation)
       if (activeTab === 'dryrun') {
         renderDryRun(state ?? { status: 'idle', currentLine: 0, events: [] })
       }
+    },
+    updateFlowchart(model) {
+      flowchartModel = model
+      flowchart.update(model)
+      if (activeTab === 'flowchart') {
+        updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
+      }
+    },
+    setFlowchartTheme(dark) {
+      flowchart.setTheme(dark)
     },
   }
 }

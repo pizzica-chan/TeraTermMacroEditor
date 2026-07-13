@@ -33,9 +33,12 @@ import { showGotoLineDialog } from './ui/gotoLineDialog'
 import { setupSidePanelResize } from './ui/sidePanelResize'
 import { DryRunSession, isDryRunMainLocation, type DryRunState } from './ttl/dryRun'
 import { createBrowserDialogAdapter, cancelActiveTtlDialog } from './ui/ttlDialog'
+import { buildFlowchart } from './ttl/flowchart'
 
 const appSettings = loadAppSettings()
 let isDark = appSettings.isDark
+let flowchartShowDetailedWaits = appSettings.flowchartShowDetailedWaits
+let flowchartShowAssignments = appSettings.flowchartShowAssignments
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
@@ -59,7 +62,11 @@ app.innerHTML = `
 `
 
 const editor = createEditor(document.querySelector('#editor')!, '')
-const sidePanel = createSidePanel(document.querySelector('#side-panel')!)
+const sidePanel = createSidePanel(document.querySelector('#side-panel')!, {
+  dark: isDark,
+  showDetailedWaits: flowchartShowDetailedWaits,
+  showAssignments: flowchartShowAssignments,
+})
 const includePanel = createIncludePanel(document.querySelector('#side-panel')!)
 sidePanel.onGotoLine((line) => editor.gotoLine(line))
 
@@ -73,6 +80,7 @@ function applyTheme(dark: boolean) {
   isDark = dark
   editor.setTheme(dark)
   document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  sidePanel.setFlowchartTheme(dark)
   setThemeButton(dark)
   saveAppSettings({ isDark: dark })
 }
@@ -232,6 +240,21 @@ function runAnalysisImmediate(text: string): void {
 
   if (!isDryRunInProgress()) {
     sidePanel.update({ analysis: result, sendEntries: evaluation.sendEntries })
+    if (tab) {
+      sidePanel.updateFlowchart(
+        buildFlowchart(text, {
+          sourceId: tab.id,
+          sourceName: tab.fileName,
+          includeResolver: resolver,
+          getSourceName: (sourceId) =>
+            tabManager.allTabs.find((candidate) => candidate.id === sourceId)?.fileName,
+          showDetailedWaits: flowchartShowDetailedWaits,
+          showAssignments: flowchartShowAssignments,
+        }),
+      )
+    } else {
+      sidePanel.updateFlowchart(null)
+    }
     refreshIncludePanel(text)
   }
 }
@@ -614,6 +637,8 @@ function findTabForLocationPrefixInTab(prefix: string, tab: EditorTab): EditorTa
 }
 
 function findTabForLocationPrefix(prefix: string, contextTab: EditorTab | null): EditorTab | null {
+  const directTab = tabManager.allTabs.find((tab) => tab.id === prefix)
+  if (directTab) return directTab
   if (!contextTab) return null
 
   const normalized = normalizeIncludePath(prefix)
@@ -672,6 +697,10 @@ function gotoSendLocation(location: string): void {
 
 function gotoDryRunLocation(location: string): void {
   gotoTtlLocation(location, getDryRunOriginTab() ?? tabManager.activeTab)
+}
+
+function gotoFlowchartLocation(location: string): void {
+  gotoTtlLocation(location, tabManager.activeTab)
 }
 
 function refreshDryRunHighlight(): void {
@@ -794,6 +823,17 @@ createToolbar(document.querySelector('#toolbar')!, editor, {
 
 sidePanel.onGotoDryRunLocation(gotoDryRunLocation)
 sidePanel.onGotoSendLocation(gotoSendLocation)
+sidePanel.onGotoFlowchartLocation(gotoFlowchartLocation)
+sidePanel.onFlowchartDetailedWaitsChange((show) => {
+  flowchartShowDetailedWaits = show
+  saveAppSettings({ flowchartShowDetailedWaits: show })
+  runAnalysisNow(editor.getValue())
+})
+sidePanel.onFlowchartAssignmentsChange((show) => {
+  flowchartShowAssignments = show
+  saveAppSettings({ flowchartShowAssignments: show })
+  runAnalysisNow(editor.getValue())
+})
 
 sidePanel.onClearDryRun(() => {
   if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
