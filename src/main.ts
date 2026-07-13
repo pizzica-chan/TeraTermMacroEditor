@@ -819,7 +819,7 @@ function setupFileDrop() {
     'dragover',
     (e) => {
       const de = e as DragEvent
-      if (![...de.dataTransfer?.items ?? []].some((item) => item.kind === 'file')) return
+      if (!Array.from(de.dataTransfer?.items ?? []).some((item) => item.kind === 'file')) return
       e.preventDefault()
       showDrag(true)
     },
@@ -836,7 +836,7 @@ function setupFileDrop() {
     'drop',
     async (e) => {
       const de = e as DragEvent
-      const files = [...de.dataTransfer?.files ?? []].filter(isOpenableFile)
+      const files = Array.from(de.dataTransfer?.files ?? []).filter(isOpenableFile)
       if (files.length === 0) return
 
       e.preventDefault()
