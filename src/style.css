@@ -359,11 +359,23 @@ body {
 .variable-list[hidden],
 .send-list[hidden],
 .dryrun-list[hidden],
+.flowchart-toolbar[hidden],
 .flowchart-host[hidden],
 .flowchart-warnings[hidden],
 .include-section[hidden],
 .diagnostics-section[hidden] {
   display: none !important;
+}
+
+.flowchart-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
 }
 
 .flowchart-host {

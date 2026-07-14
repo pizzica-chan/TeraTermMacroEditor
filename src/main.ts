@@ -215,6 +215,25 @@ function getIncludeCrossTabContext(tab: EditorTab): {
 let analysisTimer: ReturnType<typeof setTimeout> | null = null
 const ANALYSIS_DEBOUNCE_MS = 250
 
+function buildFlowchartForActiveTab(text: string) {
+  const tab = tabManager.activeTab
+  if (!tab) return null
+  const resolver = createIncludeResolver(tab)
+  return buildFlowchart(text, {
+    sourceId: tab.id,
+    sourceName: tab.fileName,
+    includeResolver: resolver,
+    getSourceName: (sourceId) =>
+      tabManager.allTabs.find((candidate) => candidate.id === sourceId)?.fileName,
+    showDetailedWaits: flowchartShowDetailedWaits,
+    showAssignments: flowchartShowAssignments,
+  })
+}
+
+function refreshFlowchart(): void {
+  sidePanel.updateFlowchart(buildFlowchartForActiveTab(editor.getValue()))
+}
+
 function runAnalysisImmediate(text: string): void {
   const tab = tabManager.activeTab
   if (tab) syncTabIncludeBindings(tab, text)
@@ -238,25 +257,9 @@ function runAnalysisImmediate(text: string): void {
   setAnalysisCache(text, result, evaluation)
   editor.notifyAnalysisCacheChanged()
 
-  if (!isDryRunInProgress()) {
-    sidePanel.update({ analysis: result, sendEntries: evaluation.sendEntries })
-    if (tab) {
-      sidePanel.updateFlowchart(
-        buildFlowchart(text, {
-          sourceId: tab.id,
-          sourceName: tab.fileName,
-          includeResolver: resolver,
-          getSourceName: (sourceId) =>
-            tabManager.allTabs.find((candidate) => candidate.id === sourceId)?.fileName,
-          showDetailedWaits: flowchartShowDetailedWaits,
-          showAssignments: flowchartShowAssignments,
-        }),
-      )
-    } else {
-      sidePanel.updateFlowchart(null)
-    }
-    refreshIncludePanel(text)
-  }
+  sidePanel.update({ analysis: result, sendEntries: evaluation.sendEntries })
+  sidePanel.updateFlowchart(buildFlowchartForActiveTab(text))
+  refreshIncludePanel(text, { readOnly: isDryRunInProgress() })
 }
 
 function runAnalysis(text: string, immediate = false): void {
@@ -285,7 +288,7 @@ function buildTabNameMap(): Record<string, string> {
   return map
 }
 
-function refreshIncludePanel(text?: string) {
+function refreshIncludePanel(text?: string, options?: { readOnly?: boolean }) {
   const tab = tabManager.activeTab
   if (!tab) return
 
@@ -294,6 +297,7 @@ function refreshIncludePanel(text?: string) {
   const otherTabs = tabManager.getOtherTabs(tab.id)
 
   includePanel.update(refs, tab, otherTabs, {
+    readOnly: options?.readOnly ?? false,
     onBindingChange(path, tabId) {
       if (tabId) tab.includeBindings[path] = tabId
       else delete tab.includeBindings[path]
@@ -356,7 +360,9 @@ function schedulePersistWorkspaceSession(): void {
 }
 
 editor.onChange((text) => {
-  tabManager.activeTab?.docSettings.markDirty()
+  if (!isDryRunInProgress()) {
+    tabManager.activeTab?.docSettings.markDirty()
+  }
   tabManager.notifyContentChanged()
   runAnalysis(text)
   updateCursorPosition()
@@ -570,6 +576,7 @@ let dryRunActive = false
 let dryRunRunPromise: Promise<DryRunState> | null = null
 let dryRunClearedState: DryRunState | null = null
 let dryRunOriginTabId: string | null = null
+let dryRunSnapshot: DryRunSnapshot | null = null
 const dryRunDialogAdapter = createBrowserDialogAdapter()
 
 function isDryRunInProgress(): boolean {
@@ -591,7 +598,8 @@ function collectDryRunLinkedTabIds(originTab: EditorTab): Set<string> {
   const queue: EditorTab[] = [originTab]
   while (queue.length > 0) {
     const tab = queue.pop()!
-    for (const tabId of Object.values(tab.includeBindings)) {
+    const bindings = getBindingsForTab(tab)
+    for (const tabId of Object.values(bindings)) {
       if (linked.has(tabId)) continue
       linked.add(tabId)
       const next = tabManager.allTabs.find((t) => t.id === tabId)
@@ -599,6 +607,13 @@ function collectDryRunLinkedTabIds(originTab: EditorTab): Set<string> {
     }
   }
   return linked
+}
+
+function getBindingsForTab(tab: EditorTab): Record<string, string> {
+  if (isDryRunInProgress() && dryRunSnapshot) {
+    return dryRunSnapshot.bindings.get(tab.id) ?? tab.includeBindings
+  }
+  return tab.includeBindings
 }
 
 function isDryRunRelatedTab(closedTabId: string): boolean {
@@ -609,7 +624,16 @@ function isDryRunRelatedTab(closedTabId: string): boolean {
 }
 
 function findTabForLocationPrefixInTab(prefix: string, tab: EditorTab): EditorTab | null {
-  const bindings = tab.includeBindings
+  const bindings = getBindingsForTab(tab)
+  const directBinding = bindings[prefix]
+  if (directBinding) {
+    return tabManager.allTabs.find((t) => t.id === directBinding) ?? null
+  }
+  const fromBindingKey = resolveIncludeBindingTabId(bindings, prefix)
+  if (fromBindingKey) {
+    return tabManager.allTabs.find((t) => t.id === fromBindingKey) ?? null
+  }
+
   const normalized = normalizeIncludePath(prefix)
 
   const fromStatic = resolveIncludeBindingTabId(bindings, normalized, undefined, normalized)
@@ -717,7 +741,9 @@ function gotoTtlLocation(location: string, contextTab: EditorTab | null): boolea
 }
 
 function gotoSendLocation(location: string): void {
-  gotoTtlLocation(location, tabManager.activeTab)
+  if (!gotoTtlLocation(location, tabManager.activeTab)) {
+    setStatusMessage('送信データの参照先タブを特定できません')
+  }
 }
 
 function gotoDryRunLocation(location: string): void {
@@ -752,6 +778,7 @@ function applyDryRunExecutionHighlight(state: DryRunState): void {
 function stopDryRun(): void {
   dryRunActive = false
   dryRunRunPromise = null
+  dryRunSnapshot = null
   const session = dryRunSession
   if (session) {
     session.stop()
@@ -774,7 +801,7 @@ async function startDryRun(): Promise<void> {
   dryRunActive = true
   const runId = ++dryRunRunId
   const tab = tabManager.activeTab
-  const dryRunSnapshot = tab ? snapshotDryRunContext(tab) : undefined
+  dryRunSnapshot = tab ? snapshotDryRunContext(tab) : null
   const sourceSnapshot =
     tab && dryRunSnapshot ? dryRunSnapshot.contents.get(tab.id) ?? editor.getValue() : editor.getValue()
   const resolver =
@@ -817,6 +844,7 @@ async function startDryRun(): Promise<void> {
       dryRunRunPromise = null
       dryRunSession = null
       dryRunActive = false
+      dryRunSnapshot = null
       setDryRunToolbarState(false)
       editor.clearExecutionLine()
       editor.setDryRunLocked(false)
@@ -856,12 +884,12 @@ sidePanel.onGotoFlowchartLocation(gotoFlowchartLocation)
 sidePanel.onFlowchartDetailedWaitsChange((show) => {
   flowchartShowDetailedWaits = show
   saveAppSettings({ flowchartShowDetailedWaits: show })
-  runAnalysisNow(editor.getValue())
+  refreshFlowchart()
 })
 sidePanel.onFlowchartAssignmentsChange((show) => {
   flowchartShowAssignments = show
   saveAppSettings({ flowchartShowAssignments: show })
-  runAnalysisNow(editor.getValue())
+  refreshFlowchart()
 })
 
 sidePanel.onClearDryRun(() => {

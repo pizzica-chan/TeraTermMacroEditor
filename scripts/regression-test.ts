@@ -3,6 +3,7 @@
  */
 import { analyzeTTL, type IncludeResolver } from '../src/ttl/analyzer'
 import { evaluateTTL } from '../src/ttl/evaluator'
+import { includeLoopIterationBindingKey } from '../src/ttl/includeRefs'
 
 let passed = 0
 let failed = 0
@@ -286,6 +287,72 @@ assert(
   includeCallEval.sendEntries.map((entry) => entry.payload).join(',') === 'called,child-done,after',
   'call and return inside include resume correctly',
   includeCallEval.sendEntries,
+)
+
+const includeValueResolver: IncludeResolver = {
+  ...includeResolver,
+  resolve: (path) => (path === 'values.ttl' ? `included_value = 42` : null),
+}
+const includeValueSource = `include 'values.ttl'\nsend included_value`
+const includeValueEval = evaluateTTL(includeValueSource, { includeResolver: includeValueResolver })
+assert(
+  includeValueEval.sendEntries[0]?.payload === '42',
+  'value assigned in include is available to parent evaluation',
+  includeValueEval.sendEntries,
+)
+assert(
+  includeValueEval.getHoverAt(2, 6)?.info.display === '42',
+  'value assigned in include is available to parent hover',
+  includeValueEval.getHoverAt(2, 6),
+)
+
+const dynamicIncludeValueResolver: IncludeResolver = {
+  resolve: () => null,
+  resolveDynamic: (_rawArg, context) =>
+    context?.effectiveRaw === 'values.ttl' ? `dynamic_value = 84` : null,
+  getLinkedTabId: () => null,
+  resolverForLinkedTab: () => null,
+}
+const dynamicIncludeValueSource =
+  `include_file = 'values.ttl'\ninclude include_file\nsend dynamic_value`
+const dynamicIncludeValueEval = evaluateTTL(dynamicIncludeValueSource, {
+  includeResolver: dynamicIncludeValueResolver,
+})
+assert(
+  dynamicIncludeValueEval.getHoverAt(3, 6)?.info.display === '84',
+  'value assigned in variable-path include is available to parent hover',
+  dynamicIncludeValueEval.getHoverAt(3, 6),
+)
+
+const hoverReferences = evaluateTTL(`hover_value = 123\nsend hover_value\ncopy = hover_value`)
+assert(
+  hoverReferences.getHoverAt(2, 6)?.info.display === '123',
+  'assigned value is shown when hovering a command argument reference',
+  hoverReferences.getHoverAt(2, 6),
+)
+assert(
+  hoverReferences.getHoverAt(3, 7)?.info.display === '123',
+  'assigned value is shown when hovering an assignment RHS reference',
+  hoverReferences.getHoverAt(3, 7),
+)
+
+const loopSendBindingKey = includeLoopIterationBindingKey(4, 0)
+const loopSendResolver: IncludeResolver = {
+  resolve: () => null,
+  resolveDynamic: (_rawArg, context) =>
+    context?.loopValue === 0 ? `send 'from-loop'\nend` : null,
+  getLinkedTabId: (bindingKey) =>
+    bindingKey === loopSendBindingKey || bindingKey === 'sub.ttl' ? 'sub-tab' : null,
+  resolverForLinkedTab: () => null,
+}
+const loopSendEval = evaluateTTL(
+  `strdim files 1\nfiles[0] = 'sub.ttl'\nfor i 0 0\n  include files[i]\nnext\nend`,
+  { includeResolver: loopSendResolver },
+)
+assert(
+  loopSendEval.sendEntries[0]?.location === `${loopSendBindingKey}:L1`,
+  'loop include send location uses loop binding key',
+  loopSendEval.sendEntries[0]?.location,
 )
 
 console.log(`\n=== REGRESSION RESULT: ${passed} passed, ${failed} failed ===`)

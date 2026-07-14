@@ -68,7 +68,11 @@ function escapeHtml(text: string): string {
 
 const varHoverTooltip = hoverTooltip(
   (view: EditorView, pos: number): Tooltip | null => {
-    const evalResult = view.state.field(evalField, false)
+    // include のリンク変更や非同期解析の完了直後は StateField のスナップショットが
+    // 一時的に古い場合があるため、現在の文書に対応する最新キャッシュを優先する。
+    const evalResult =
+      getCachedEvaluation(view.state.doc.toString()) ??
+      view.state.field(evalField, false)
     if (!evalResult) return null
 
     const line = view.state.doc.lineAt(pos)

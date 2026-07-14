@@ -58,10 +58,6 @@ export function createSidePanel(
       <button type="button" id="send-copy-btn" class="panel-action-btn" title="送信データをプレーンテキストでコピー（未解決部分はプレースホルダー付き）">コピー</button>
       <button type="button" id="dryrun-copy-btn" class="panel-action-btn" hidden title="ドライランのログをプレーンテキストでコピー">コピー</button>
       <button type="button" id="dryrun-clear-btn" class="panel-action-btn" hidden title="ドライランのログをクリア">クリア</button>
-      <div class="panel-action-group" id="flowchart-options" hidden>
-        <button type="button" id="flowchart-waits-btn" class="panel-action-btn" title="詳細な受信待機コマンドの表示を切り替え"></button>
-        <button type="button" id="flowchart-assignments-btn" class="panel-action-btn" title="変数への代入の表示を切り替え"></button>
-      </div>
     </div>
     <div class="panel-stats" id="side-panel-stats"></div>
   `
@@ -83,6 +79,15 @@ export function createSidePanel(
   dryRunList.id = 'dryrun-list'
   dryRunList.hidden = true
 
+  const flowchartToolbar = document.createElement('div')
+  flowchartToolbar.className = 'flowchart-toolbar'
+  flowchartToolbar.id = 'flowchart-toolbar'
+  flowchartToolbar.hidden = true
+  flowchartToolbar.innerHTML = `
+    <button type="button" id="flowchart-waits-btn" class="panel-action-btn" title="詳細な受信待機コマンドの表示を切り替え"></button>
+    <button type="button" id="flowchart-assignments-btn" class="panel-action-btn" title="変数への代入の表示を切り替え"></button>
+  `
+
   const flowchartHost = document.createElement('div')
   flowchartHost.className = 'flowchart-host'
   flowchartHost.id = 'flowchart-host'
@@ -93,7 +98,7 @@ export function createSidePanel(
   flowchartWarnings.id = 'flowchart-warnings'
   flowchartWarnings.hidden = true
 
-  body.append(variableList, sendList, dryRunList, flowchartHost, flowchartWarnings)
+  body.append(variableList, sendList, dryRunList, flowchartToolbar, flowchartHost, flowchartWarnings)
 
   const diagSection = document.createElement('div')
   diagSection.className = 'diagnostics-section'
@@ -102,9 +107,8 @@ export function createSidePanel(
   const sendCopyBtn = header.querySelector<HTMLButtonElement>('#send-copy-btn')!
   const dryRunCopyBtn = header.querySelector<HTMLButtonElement>('#dryrun-copy-btn')!
   const dryRunClearBtn = header.querySelector<HTMLButtonElement>('#dryrun-clear-btn')!
-  const flowchartWaitsBtn = header.querySelector<HTMLButtonElement>('#flowchart-waits-btn')!
-  const flowchartAssignmentsBtn = header.querySelector<HTMLButtonElement>('#flowchart-assignments-btn')!
-  const flowchartOptions = header.querySelector<HTMLElement>('#flowchart-options')!
+  const flowchartWaitsBtn = flowchartToolbar.querySelector<HTMLButtonElement>('#flowchart-waits-btn')!
+  const flowchartAssignmentsBtn = flowchartToolbar.querySelector<HTMLButtonElement>('#flowchart-assignments-btn')!
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
   container.append(tabs, header, body, diagSection)
@@ -172,11 +176,11 @@ export function createSidePanel(
     variableList.hidden = tab !== 'variables'
     sendList.hidden = tab !== 'sends'
     dryRunList.hidden = tab !== 'dryrun'
+    flowchartToolbar.hidden = tab !== 'flowchart'
     flowchartHost.hidden = tab !== 'flowchart'
     sendCopyBtn.hidden = tab !== 'sends'
     dryRunCopyBtn.hidden = tab !== 'dryrun'
     dryRunClearBtn.hidden = tab !== 'dryrun'
-    flowchartOptions.hidden = tab !== 'flowchart'
     flowchart.setVisible(tab === 'flowchart')
     diagSection.hidden = tab === 'flowchart'
     container.querySelector<HTMLElement>('.include-section')?.toggleAttribute('hidden', tab === 'flowchart')
@@ -371,24 +375,25 @@ export function createSidePanel(
     }
   }
 
-  function render(data: { analysis: AnalysisResult; sendEntries: SendEntry[] }) {
-    const { analysis, sendEntries } = data
-    updateStats(analysis, sendEntries)
-
+  function renderVariableList(analysis: AnalysisResult) {
     if (analysis.variables.length === 0) {
       variableList.innerHTML = '<div class="empty-state">変数がありません</div>'
     } else {
       variableList.innerHTML = analysis.variables.map(renderVariable).join('')
       bindVariableGotoHandlers()
     }
+  }
 
+  function renderSendList(sendEntries: SendEntry[]) {
     if (sendEntries.length === 0) {
       sendList.innerHTML = '<div class="empty-state">send / sendln はありません</div>'
     } else {
       sendList.innerHTML = sendEntries.map(renderSend).join('')
       bindSendGotoHandlers()
     }
+  }
 
+  function renderDiagnostics(analysis: AnalysisResult) {
     const errors = analysis.diagnostics.filter((d) => d.severity === 'error').length
     const warnings = analysis.diagnostics.filter((d) => d.severity === 'warning').length
     const diagEl = container.querySelector('#diagnostics-list')!
@@ -398,6 +403,21 @@ export function createSidePanel(
       const summary = `<div class="diag-summary">${errors > 0 ? `<span class="err-count">${errors} エラー</span>` : ''}${warnings > 0 ? `<span class="warn-count">${warnings} 警告</span>` : ''}</div>`
       diagEl.innerHTML = summary + analysis.diagnostics.map(renderDiagnostic).join('')
       bindDiagnosticGotoHandlers()
+    }
+  }
+
+  function render(data: { analysis: AnalysisResult; sendEntries: SendEntry[] }) {
+    const { analysis, sendEntries } = data
+    updateStats(analysis, sendEntries)
+
+    if (activeTab === 'variables') {
+      renderVariableList(analysis)
+    }
+    if (activeTab === 'sends') {
+      renderSendList(sendEntries)
+    }
+    if (activeTab !== 'flowchart') {
+      renderDiagnostics(analysis)
     }
   }
 

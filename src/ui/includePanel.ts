@@ -13,6 +13,7 @@ export interface IncludePanelActions {
   onBindingChange: (path: string, tabId: string | null) => void
   onGotoLine: (line: number) => void
   onOpenLinkedTab: (tabId: string) => void
+  readOnly?: boolean
 }
 
 export function createIncludePanel(container: HTMLElement): {
@@ -39,7 +40,12 @@ export function createIncludePanel(container: HTMLElement): {
         .join('')
 
       for (const el of listEl.querySelectorAll<HTMLSelectElement>('.include-link-select')) {
+        if (actions.readOnly) {
+          el.disabled = true
+          el.title = 'ドライラン中はインクルードのリンクを変更できません'
+        }
         el.addEventListener('change', () => {
+          if (actions.readOnly) return
           const path = el.dataset.path!
           const tabId = el.value || null
           actions.onBindingChange(path, tabId)

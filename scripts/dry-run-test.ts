@@ -1,6 +1,7 @@
 import { buildDryRunPlainTextForCopy, createMockDialogAdapter, DryRunSession, isDryRunMainLocation, runDryRun, type DryRunDialogAdapter } from '../src/ttl/dryRun'
 import { SAMPLE_MACRO } from '../src/editor/createEditor'
 import type { IncludeResolver } from '../src/ttl/analyzer'
+import { includeLoopIterationBindingKey } from '../src/ttl/includeRefs'
 
 let passed = 0
 let failed = 0
@@ -897,6 +898,28 @@ console.log('\n=== 60. wait undefined variable pattern ===')
   const wait = eventsOfKind(state.events, 'receive-wait')[0]
   assert(wait?.payload === undefined, 'undefined wait variable has no pattern payload', wait?.payload)
   assert(wait?.message.includes('（任意）'), 'undefined wait variable has no resolved pattern', wait?.message)
+}
+
+console.log('\n=== 61. loop include location uses binding key ===')
+{
+  const loopBindingKey = includeLoopIterationBindingKey(4, 0)
+  const loopIncludeResolver: IncludeResolver = {
+    resolve: () => null,
+    resolveDynamic: (_rawArg, context) =>
+      context?.loopValue === 0 ? `send 'from-loop'\nend` : null,
+    getLinkedTabId: (bindingKey) =>
+      bindingKey === 'sub.ttl' || bindingKey === loopBindingKey ? 'sub-tab' : null,
+    resolverForLinkedTab: () => null,
+  }
+  const state = await runDryRun({
+    source: `strdim files 1\nfiles[0] = 'sub.ttl'\nfor i 0 0\n  include files[i]\nnext\nend`,
+    includeResolver: loopIncludeResolver,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const includeEvent = state.events.find((event) => event.command === 'include')
+  const childSend = eventsOfKind(state.events, 'send')[0]
+  assert(includeEvent?.message === 'include sub.ttl@i=0', 'loop include message stays human readable', includeEvent?.message)
+  assert(childSend?.location === `${loopBindingKey}:L1`, 'loop include child location uses loop binding key', childSend?.location)
 }
 
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)

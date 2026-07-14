@@ -4,6 +4,7 @@ import { getCommandOutputEffect } from './commandOutputs'
 import {
   extractIncludeArgText,
   includeDynamicBindingKey,
+  includeLoopIterationBindingKey,
   normalizeIncludePath,
   resolveLoopIncludeBindingKey,
 } from './includeRefs'
@@ -1329,6 +1330,7 @@ export class DryRunSession {
         let bindingKey: string
         let content: string | null
         let locationPrefix: string
+        let includeDisplayPrefix: string
         let includeRawArg: string | undefined
         let effectiveRaw: string | undefined
 
@@ -1337,6 +1339,7 @@ export class DryRunSession {
           bindingKey = normalizeIncludePath(path)
           content = execOpts.includeResolver.resolve(path)
           locationPrefix = path
+          includeDisplayPrefix = path
         } else {
           includeRawArg = extractIncludeArgText(tokens, offset)
           effectiveRaw = resolveIncludeEffectiveRaw(tokens, offset, env)
@@ -1349,9 +1352,10 @@ export class DryRunSession {
               rawArg: includeRawArg,
               effectiveRaw,
             })
-            locationPrefix = effectiveRaw
+            includeDisplayPrefix = effectiveRaw
               ? `${effectiveRaw}@${execOpts.loopFrame!.variable}=${loopValue}`
               : `${includeRawArg}@${execOpts.loopFrame!.variable}=${loopValue}`
+            locationPrefix = includeLoopIterationBindingKey(lineNum, loopValue)
           } else {
             bindingKey = includeDynamicBindingKey(includeRawArg)
             content = execOpts.includeResolver.resolveDynamic(includeRawArg, {
@@ -1359,6 +1363,7 @@ export class DryRunSession {
               effectiveRaw,
             })
             locationPrefix = effectiveRaw ?? includeRawArg
+            includeDisplayPrefix = locationPrefix
           }
         }
 
@@ -1369,7 +1374,7 @@ export class DryRunSession {
               line: lineNum,
               location: formatLocation(lineNum, execOpts.locationPrefix),
               command: 'include',
-              message: `include ${locationPrefix}: ネスト深度の上限（${MAX_INCLUDE_DEPTH}）に達したためスキップしました`,
+              message: `include ${includeDisplayPrefix}: ネスト深度の上限（${MAX_INCLUDE_DEPTH}）に達したためスキップしました`,
             })
             return { nextIdx: lineIdx }
           }
@@ -1380,7 +1385,7 @@ export class DryRunSession {
               line: lineNum,
               location: formatLocation(lineNum, execOpts.locationPrefix),
               command: 'include',
-              message: `include ${locationPrefix}: タブ循環参照のためスキップしました`,
+              message: `include ${includeDisplayPrefix}: タブ循環参照のためスキップしました`,
             })
             return { nextIdx: lineIdx }
           }
@@ -1389,7 +1394,7 @@ export class DryRunSession {
             line: lineNum,
             location: formatLocation(lineNum, execOpts.locationPrefix),
             command: 'include',
-            message: `include ${locationPrefix}`,
+            message: `include ${includeDisplayPrefix}`,
           })
           const childResolver = linkedTabId
             ? execOpts.includeResolver.resolverForLinkedTab(linkedTabId) ?? execOpts.includeResolver
@@ -1409,7 +1414,7 @@ export class DryRunSession {
             line: lineNum,
             location: formatLocation(lineNum, execOpts.locationPrefix),
             command: 'include',
-            message: `include ${locationPrefix}: リンク先が未設定です`,
+            message: `include ${includeDisplayPrefix}: リンク先が未設定です`,
           })
         } else {
           this.pushEvent({
@@ -1417,7 +1422,7 @@ export class DryRunSession {
             line: lineNum,
             location: formatLocation(lineNum, execOpts.locationPrefix),
             command: 'include',
-            message: `include ${locationPrefix}: 循環参照のためスキップしました`,
+            message: `include ${includeDisplayPrefix}: 循環参照のためスキップしました`,
           })
         }
       }

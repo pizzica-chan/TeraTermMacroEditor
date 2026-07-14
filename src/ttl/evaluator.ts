@@ -3,6 +3,7 @@ import type { IncludeResolver } from './analyzer'
 import {
   extractIncludeArgText,
   includeDynamicBindingKey,
+  includeLoopIterationBindingKey,
   normalizeIncludePath,
   resolveLoopIncludeBindingKey,
 } from './includeRefs'
@@ -1149,9 +1150,7 @@ function processStatement(
             rawArg: includeRawArg,
             effectiveRaw,
           })
-          locationPrefix = effectiveRaw
-            ? `${effectiveRaw}@${opts.loopFrame!.variable}=${loopValue}`
-            : `${includeRawArg}@${opts.loopFrame!.variable}=${loopValue}`
+          locationPrefix = includeLoopIterationBindingKey(lineNum, loopValue)
         } else {
           bindingKey = includeDynamicBindingKey(includeRawArg)
           content = opts.includeResolver.resolveDynamic(includeRawArg, {
