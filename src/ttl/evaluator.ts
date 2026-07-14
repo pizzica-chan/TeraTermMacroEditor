@@ -398,6 +398,74 @@ function evalTokenValue(token: Token | undefined, env: Env): RuntimeScalar | und
   return undefined
 }
 
+/** if 条件で未確定とみなす値（既定値・ダイアログ戻り値は静的に真偽を断定しない） */
+function evalConditionTokenValue(token: Token | undefined, env: Env): RuntimeScalar | undefined {
+  const v = evalTokenValue(token, env)
+  if (v?.kind === 'int' && (v.origin === 'system-default' || v.origin === 'dialog-result')) {
+    return undefined
+  }
+  return v
+}
+
+/**
+ * 到達不能判定と同様、リテラルだけで真と断定できる if 条件か。
+ * 変数比較は未確定とする。
+ */
+function evalGuaranteedLiteralCondition(tokens: Token[]): boolean | undefined {
+  if (tokens.length === 1) {
+    const token = tokens[0]
+    if (token?.kind === 'number') {
+      const value = Number(token.text)
+      return Number.isFinite(value) ? value !== 0 : undefined
+    }
+    if (token?.kind === 'string') return unquoteString(token.text) !== ''
+    return undefined
+  }
+  if (
+    tokens.length === 2 &&
+    tokens[0]?.kind === 'identifier' &&
+    tokens[0].text.toLowerCase() === 'not'
+  ) {
+    const inner = evalGuaranteedLiteralCondition(tokens.slice(1))
+    return inner === undefined ? undefined : !inner
+  }
+  return undefined
+}
+
+function isGuaranteedIfCondition(line: string, lineIdx: number, cmd: string): boolean {
+  const tokens = tokenizeLine(line, lineIdx + 1)
+  let off = tokens[0]?.kind === 'label' ? 1 : 0
+  let condEnd = tokens.length
+  if (cmd === 'if' || cmd === 'elseif') {
+    const thenIdx = tokens.findIndex(
+      (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
+    )
+    if (thenIdx >= 0) condEnd = thenIdx
+  }
+  return evalGuaranteedLiteralCondition(tokens.slice(off + 1, condEnd)) === true
+}
+
+function isConditionalIfEndContext(opts: EvalOptions): boolean {
+  return (opts.blockTerminatorStack ?? []).some((entry) => entry.kind === 'if' && !entry.guaranteed)
+}
+
+function withIfBodyOpts(opts: EvalOptions, line: string, lineIdx: number, cmd: string): EvalOptions {
+  return {
+    ...opts,
+    blockTerminatorStack: [
+      ...(opts.blockTerminatorStack ?? []),
+      { kind: 'if', guaranteed: isGuaranteedIfCondition(line, lineIdx, cmd) },
+    ],
+  }
+}
+
+function withElseBodyOpts(opts: EvalOptions): EvalOptions {
+  return {
+    ...opts,
+    blockTerminatorStack: [...(opts.blockTerminatorStack ?? []), { kind: 'if', guaranteed: false }],
+  }
+}
+
 /** 単純な整数式: a, a - b, a + b */
 function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefined {
   const first = evalTokenValue(tokens[start], env)
@@ -834,8 +902,8 @@ function evalBoolExpr(tokens: Token[], env: Env): boolean | undefined {
     const op = tokens[j]
     if (op?.kind !== 'operator' || !['=', '<>', '<', '>', '<=', '>='].includes(op.text)) continue
 
-    const lhs = evalTokenValue(tokens[j - 1], env)
-    const rhs = evalTokenValue(tokens[j + 1], env)
+    const lhs = evalConditionTokenValue(tokens[j - 1], env)
+    const rhs = evalConditionTokenValue(tokens[j + 1], env)
     const cmp = scalarCompare(lhs, op.text, rhs)
     if (cmp === undefined) return undefined
 
@@ -852,7 +920,7 @@ function evalBoolExpr(tokens: Token[], env: Env): boolean | undefined {
   }
 
   if (tokens.length === 1) {
-    const v = evalTokenValue(tokens[0], env)
+    const v = evalConditionTokenValue(tokens[0], env)
     if (v?.kind === 'int') return v.value !== 0
     if (v?.kind === 'str') return v.value !== ''
   }
@@ -898,7 +966,15 @@ function processIfChain(
         const bodyStart = cursor + 1
         const bodyEnd = endIdx - 1
         if (bodyStart <= bodyEnd) {
-          const run = processBlock(env, lines, bodyStart, bodyEnd, beforeLine, afterLine, opts)
+          const run = processBlock(
+            env,
+            lines,
+            bodyStart,
+            bodyEnd,
+            beforeLine,
+            afterLine,
+            withElseBodyOpts(opts),
+          )
           if (run !== 'complete') return blockRunToStmtResult(run, endIdx)
         }
       }
@@ -912,7 +988,15 @@ function processIfChain(
       const bodyEnd = nextSibling - 1
 
       if (condResult === true && bodyStart <= bodyEnd) {
-        const run = processBlock(env, lines, bodyStart, bodyEnd, beforeLine, afterLine, opts)
+        const run = processBlock(
+          env,
+          lines,
+          bodyStart,
+          bodyEnd,
+          beforeLine,
+          afterLine,
+          withIfBodyOpts(opts, lines[cursor]!, cursor, kw),
+        )
         if (run !== 'complete') return blockRunToStmtResult(run, endIdx)
         executed = true
         break
@@ -954,6 +1038,8 @@ interface EvalOptions {
   inInclude?: boolean
   /** if/while/for 等のブロック内 */
   inBlock?: boolean
+  /** if 分岐内の end がマクロ全体を止めるか（未確定 if では分岐のみ終了） */
+  blockTerminatorStack?: { kind: 'if'; guaranteed: boolean }[]
   locationPrefix?: string
   sendEntries?: SendEntry[]
   loopFrame?: { variable: string; value: number; index: number; total: number }
@@ -1091,6 +1177,16 @@ function processSingleLineIfTail(
   }
   if (tailCmd === 'send' || tailCmd === 'sendln') {
     recordSend(opts, lineNum, tailCmd, tokens, tailStart + 1, env)
+    return { nextIdx: lineIdx }
+  }
+  if (tailCmd === 'end') {
+    if (isConditionalIfEndContext(opts)) return { nextIdx: lineIdx, stopBlock: true }
+    return { nextIdx: lineIdx, stopAll: true }
+  }
+  if (tailCmd === 'exit') {
+    if (opts.inInclude && opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
+    if (opts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
+    return { nextIdx: lineIdx, stopAll: true }
   }
   return { nextIdx: lineIdx }
 }
@@ -1189,6 +1285,7 @@ function processStatement(
   }
 
   if (cmd === 'end') {
+    if (isConditionalIfEndContext(opts)) return { nextIdx: lineIdx, stopBlock: true }
     return { nextIdx: lineIdx, stopAll: true }
   }
 
@@ -1309,7 +1406,15 @@ function processStatement(
       if (thenForm !== null) {
         const cond = evalBoolExpr(tokens.slice(offset + 1, thenForm.condEnd), env)
         if (cond === true) {
-          return processSingleLineIfTail(env, lines, lineIdx, tokens, thenForm.tailStart, lineNum, opts)
+          return processSingleLineIfTail(
+            env,
+            lines,
+            lineIdx,
+            tokens,
+            thenForm.tailStart,
+            lineNum,
+            withIfBodyOpts(opts, line, lineIdx, 'if'),
+          )
         }
         return { nextIdx: lineIdx }
       }
@@ -1317,7 +1422,15 @@ function processStatement(
       if (tailStart !== null) {
         const cond = evalBoolExpr(tokens.slice(offset + 1, tailStart), env)
         if (cond === true) {
-          return processSingleLineIfTail(env, lines, lineIdx, tokens, tailStart, lineNum, opts)
+          return processSingleLineIfTail(
+            env,
+            lines,
+            lineIdx,
+            tokens,
+            tailStart,
+            lineNum,
+            withIfBodyOpts(opts, line, lineIdx, 'if'),
+          )
         }
         return { nextIdx: lineIdx }
       }

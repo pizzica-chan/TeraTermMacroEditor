@@ -154,6 +154,8 @@ interface AnalysisContext {
   fileUnreachable: boolean
   /** ブロック内の end / exit 以降（endif 等でスコープ復帰） */
   blockUnreachableStack: boolean[]
+  /** ブロック開始時の fileUnreachable（条件未確定ブロック閉じ時に復元） */
+  fileUnreachableSnapshotStack: boolean[]
   /** goto / return 以降のフォールスルー到達不能（ラベル行でリセット） */
   fallthroughDeadStack: boolean[]
   topLevelFallthroughDead: boolean
@@ -212,6 +214,7 @@ function createIncludeChildContext(
     forLoopBlocks: createForLoopBlockList(content),
     fileUnreachable: false,
     blockUnreachableStack: [],
+    fileUnreachableSnapshotStack: [],
     fallthroughDeadStack: [],
     topLevelFallthroughDead: false,
     hasCallInFile: parent.hasCallInFile,
@@ -239,6 +242,7 @@ function isLineUnreachable(ctx: AnalysisContext): boolean {
 function enterBlockScope(ctx: AnalysisContext): void {
   ctx.blockUnreachableStack.push(false)
   ctx.fallthroughDeadStack.push(false)
+  ctx.fileUnreachableSnapshotStack.push(ctx.fileUnreachable)
 }
 
 function leaveBlockScope(ctx: AnalysisContext): void {
@@ -672,8 +676,13 @@ function closeBlock(ctx: AnalysisContext, open: string, lineNum: number, column:
     return
   }
   while (ctx.blockStack.length > matchIdx) {
+    const closed = ctx.blockStack[ctx.blockStack.length - 1]!
     leaveBlockScope(ctx)
     ctx.blockStack.pop()
+    const snapshot = ctx.fileUnreachableSnapshotStack.pop()
+    if (!closed.guaranteedEntry && snapshot !== undefined) {
+      ctx.fileUnreachable = snapshot
+    }
   }
 }
 
@@ -1270,6 +1279,7 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
     forLoopBlocks: createForLoopBlockList(source),
     fileUnreachable: false,
     blockUnreachableStack: [],
+    fileUnreachableSnapshotStack: [],
     fallthroughDeadStack: [],
     topLevelFallthroughDead: false,
     hasCallInFile: sourceContainsCall(lines),

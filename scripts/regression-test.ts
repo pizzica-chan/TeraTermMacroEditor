@@ -214,6 +214,31 @@ assert(
   yesnoboxNotEqualIf.diagnostics,
 )
 
+const sendAfterConditionalEnd = evaluateTTL(
+  `if result = 0 then\n end\nendif\nsendln 'after'`,
+)
+assert(
+  sendAfterConditionalEnd.sendEntries.some((entry) => entry.payload === 'after'),
+  '未確定 if 内の end 後も sendln を送信データに含める',
+  sendAfterConditionalEnd.sendEntries,
+)
+
+const sendAfterYesnoboxConditionalEnd = evaluateTTL(
+  `yesnobox '' ''\nif result <> 0 then\n end\nendif\nsendln 'after'`,
+)
+assert(
+  sendAfterYesnoboxConditionalEnd.sendEntries.some((entry) => entry.payload === 'after'),
+  'yesnobox 後の未確定 if 内 end の後も sendln を送信データに含める',
+  sendAfterYesnoboxConditionalEnd.sendEntries,
+)
+
+const sendAfterGuaranteedIfEnd = evaluateTTL(`if 1 then\n end\nendif\nsendln 'after'`)
+assert(
+  !sendAfterGuaranteedIfEnd.sendEntries.some((entry) => entry.payload === 'after'),
+  'if 1 内の end では endif 以降の sendln を送信データに含めない',
+  sendAfterGuaranteedIfEnd.sendEntries,
+)
+
 const conditionallyAssignedConstant = analyzeTTL(
   `x = 0\nif result = 0 then\nx = 1\nendif\nif x = 1 then\nend\nendif\naaa = 0`,
 )
