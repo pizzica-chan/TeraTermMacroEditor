@@ -205,6 +205,15 @@ assert(
   singleLineIfGoto.diagnostics,
 )
 
+const yesnoboxNotEqualIf = analyzeTTL(
+  `yesnobox '' ''\nif result <> 0 then\n end\nendif\n\naaa = 0`,
+)
+assert(
+  !yesnoboxNotEqualIf.diagnostics.some((diag) => diag.line === 6 && diag.message.includes('到達しません')),
+  'yesnobox後の if result<>0 then end は endif 以降を到達不能にしない',
+  yesnoboxNotEqualIf.diagnostics,
+)
+
 const conditionallyAssignedConstant = analyzeTTL(
   `x = 0\nif result = 0 then\nx = 1\nendif\nif x = 1 then\nend\nendif\naaa = 0`,
 )
