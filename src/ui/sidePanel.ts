@@ -215,6 +215,7 @@ export function createSidePanel(
     dryRunClearBtn.hidden = tab !== 'dryrun'
     flowchart.setVisible(tab === 'flowchart')
     diagSection.hidden = tab === 'flowchart'
+    branchSection.hidden = tab !== 'sends'
     container.querySelector<HTMLElement>('.include-section')?.toggleAttribute('hidden', tab === 'flowchart')
     const title = container.querySelector('#side-panel-title')!
     title.textContent =
@@ -469,7 +470,7 @@ export function createSidePanel(
   ) {
     const section = container.querySelector<HTMLElement>('#branch-assumptions-section')!
     const list = container.querySelector<HTMLElement>('#branch-assumptions-list')!
-    if (branches.length === 0) {
+    if (activeTab !== 'sends' || branches.length === 0) {
       section.hidden = true
       list.innerHTML = ''
       return
