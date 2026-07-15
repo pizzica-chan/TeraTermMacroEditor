@@ -16,15 +16,13 @@ export interface IncludePanelActions {
   readOnly?: boolean
 }
 
-export function createIncludePanel(container: HTMLElement): {
+export function createIncludePanel(mount: HTMLElement): {
   update: (refs: IncludeRef[], tab: EditorTab, otherTabs: EditorTab[], actions: IncludePanelActions) => void
 } {
   const section = document.createElement('div')
   section.className = 'include-section'
   section.innerHTML = `<h2>インクルード</h2><div class="include-list" id="include-list"></div>`
-  const anchor = container.querySelector('.diagnostics-section')
-  if (anchor) container.insertBefore(section, anchor)
-  else container.appendChild(section)
+  mount.appendChild(section)
 
   const listEl = section.querySelector('#include-list') as HTMLElement
 

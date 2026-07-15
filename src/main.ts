@@ -78,7 +78,7 @@ const sidePanel = createSidePanel(document.querySelector('#side-panel')!, {
   showDetailedWaits: flowchartShowDetailedWaits,
   showAssignments: flowchartShowAssignments,
 })
-const includePanel = createIncludePanel(document.querySelector('#side-panel')!)
+const includePanel = createIncludePanel(sidePanel.includeMount)
 sidePanel.onGotoLine((line) => editor.gotoLine(line))
 
 setupSidePanelResize(

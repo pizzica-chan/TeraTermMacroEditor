@@ -1,0 +1,67 @@
+; ============================================================
+; 動作確認用: 解析警告・未確定分岐・include リンク
+; ============================================================
+;
+; 【開き方】
+;   1. ファイル → 開く でこのファイルを選択
+;   2. 新しいタブを開き analysis-warnings-sub.ttl も読み込む
+;      （同じ samples フォルダにあります）
+;
+; 【前提タブ（デフォルト）】
+;   ・上部「解析結果は暫定です」… 未選択分岐・未リンク include の件数
+;   ・未確定分岐 … L36 / L44 / L46 の if / elseif が一覧表示
+;   ・インクルード … analysis-warnings-sub.ttl のタブ紐づけ未設定
+;   ・診断 … 未定義変数などの解析結果
+;
+; 【送信データタブ】
+;   ・同様の暫定警告バナー（設定は「前提」タブで行う旨の案内）
+;   ・仮定未選択時: branch-a / branch-b / branch-c / from-sub は載らない想定
+;   ・L36 を True にすると branch-a-true が載る
+;   ・L44=True, L46=False など組み合わせで送信リストが変わる
+;   ・sub をリンク後は from-sub が載る（L36 等の仮定と組み合わせ）
+;
+; 【フロータブ】
+;   ・include 未リンク警告のみ（分岐仮定の警告は出ない）
+;
+; 【ドライラン】
+;   ・開始時に include 未リンク警告の確認ダイアログ（未選択分岐は対象外）
+;   ・実行時の分岐は yesnobox / 実際の result で決まる（仮定は無関係）
+;
+; ============================================================
+
+; --- 未確定分岐 A: yesnobox 直後の if ---
+
+yesnobox '続行しますか？' '確認'
+
+if result <> 0 then
+ sendln 'branch-a-true'
+endif
+; ↑ L36: 未確定分岐 UI に表示 / True で branch-a-true
+
+
+; --- 未確定分岐 B: if / elseif チェーン ---
+
+if result = 0 then
+ sendln 'branch-b-true'
+elseif result <> 1 then
+ sendln 'branch-c-true'
+else
+ sendln 'branch-else'
+endif
+; ↑ L44 if / L46 elseif が未確定分岐 UI に表示
+
+
+; --- include 未リンク（sub タブを開いてから前提で紐づけ）---
+
+include 'analysis-warnings-sub.ttl'
+sendln msg
+; ↑ sub をリンクするまで from-sub は送信データに載らない想定
+
+
+; --- 診断エリア用（解析警告とは別）---
+
+sendln unknown_var
+; ↑ 診断に「未定義」系の警告が出る想定
+
+
+end

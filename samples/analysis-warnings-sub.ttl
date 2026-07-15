@@ -1,0 +1,4 @@
+; analysis-warnings-verify.ttl 用の include 先（手動リンク確認用）
+msg = 'from-sub'
+sendln msg
+end

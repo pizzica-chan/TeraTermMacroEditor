@@ -7,7 +7,7 @@ import type { FlowchartModel } from '../ttl/flowchart'
 import type { AnalysisLimitations } from '../ttl/analysisLimitations'
 import { mountFlowchart } from './flowchart/mountFlowchart'
 
-export type SidePanelTab = 'variables' | 'sends' | 'dryrun' | 'flowchart'
+export type SidePanelTab = 'setup' | 'sends' | 'dryrun' | 'flowchart' | 'variables'
 
 export function createSidePanel(
   container: HTMLElement,
@@ -25,6 +25,7 @@ export function createSidePanel(
   setFlowchartActiveLocation: (location: string | undefined) => void
   setFlowchartTheme: (dark: boolean) => void
   showTab: (tab: SidePanelTab) => void
+  includeMount: HTMLElement
   onGotoLine: (handler: (line: number) => void) => void
   onGotoDryRunLocation: (handler: (location: string) => void) => void
   onGotoSendLocation: (handler: (location: string) => void) => void
@@ -42,7 +43,7 @@ export function createSidePanel(
   let flowchartAssignmentsHandler: ((show: boolean) => void) | null = null
   let clearDryRunHandler: (() => void) | null = null
   let branchAssumptionHandler: ((line: number, value: boolean | null) => void) | null = null
-  let activeTab: SidePanelTab = 'sends'
+  let activeTab: SidePanelTab = 'setup'
   let cached: {
     analysis: AnalysisResult
     sendEntries: SendEntry[]
@@ -60,7 +61,8 @@ export function createSidePanel(
   const tabs = document.createElement('div')
   tabs.className = 'side-panel-tabs'
   tabs.innerHTML = `
-    <button type="button" class="side-panel-tab active" data-tab="sends">送信データ</button>
+    <button type="button" class="side-panel-tab active" data-tab="setup">前提</button>
+    <button type="button" class="side-panel-tab" data-tab="sends">送信データ</button>
     <button type="button" class="side-panel-tab" data-tab="dryrun">ドライラン</button>
     <button type="button" class="side-panel-tab" data-tab="flowchart">フロー</button>
     <button type="button" class="side-panel-tab" data-tab="variables">変数</button>
@@ -70,7 +72,7 @@ export function createSidePanel(
   header.className = 'panel-header'
   header.innerHTML = `
     <div class="panel-header-row">
-      <h2 id="side-panel-title">送信データ</h2>
+      <h2 id="side-panel-title">前提</h2>
       <div class="panel-action-group">
         <button type="button" id="send-copy-btn" class="panel-action-btn" title="送信データをプレーンテキストでコピー（未解決部分はプレースホルダー付き）">コピー</button>
         <button type="button" id="dryrun-copy-btn" class="panel-action-btn" hidden title="ドライランのログをプレーンテキストでコピー">コピー</button>
@@ -95,6 +97,7 @@ export function createSidePanel(
   const sendList = document.createElement('div')
   sendList.className = 'send-list'
   sendList.id = 'send-list'
+  sendList.hidden = true
 
   const dryRunList = document.createElement('div')
   dryRunList.className = 'dryrun-list'
@@ -120,21 +123,29 @@ export function createSidePanel(
   flowchartWarnings.id = 'flowchart-warnings'
   flowchartWarnings.hidden = true
 
-  body.append(variableList, sendList, dryRunList, flowchartToolbar, flowchartHost, flowchartWarnings)
+  const setupPanel = document.createElement('div')
+  setupPanel.className = 'setup-panel'
+  setupPanel.id = 'setup-panel'
 
-  const diagSection = document.createElement('div')
-  diagSection.className = 'diagnostics-section'
-  diagSection.innerHTML = `<h2>診断</h2><div class="diagnostics-list" id="diagnostics-list"></div>`
+  const includeMount = document.createElement('div')
+  includeMount.className = 'include-mount'
+  includeMount.id = 'include-mount'
 
   const branchSection = document.createElement('div')
   branchSection.className = 'branch-assumptions-section'
   branchSection.id = 'branch-assumptions-section'
-  branchSection.hidden = true
   branchSection.innerHTML = `
     <h2>未確定分岐</h2>
     <p class="branch-assumptions-hint">静的に真偽が決まらない if / elseif です。True / False を選ぶと送信データ・変数ホバーに反映されます。</p>
     <div class="branch-assumptions-list" id="branch-assumptions-list"></div>
   `
+
+  setupPanel.append(branchSection, includeMount)
+  body.append(setupPanel, variableList, sendList, dryRunList, flowchartToolbar, flowchartHost, flowchartWarnings)
+
+  const diagSection = document.createElement('div')
+  diagSection.className = 'diagnostics-section'
+  diagSection.innerHTML = `<h2>診断</h2><div class="diagnostics-list" id="diagnostics-list"></div>`
 
   const sendCopyBtn = header.querySelector<HTMLButtonElement>('#send-copy-btn')!
   const dryRunCopyBtn = header.querySelector<HTMLButtonElement>('#dryrun-copy-btn')!
@@ -143,7 +154,7 @@ export function createSidePanel(
   const flowchartAssignmentsBtn = flowchartToolbar.querySelector<HTMLButtonElement>('#flowchart-assignments-btn')!
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
-  container.append(tabs, header, analysisWarning, body, branchSection, diagSection)
+  container.append(tabs, header, analysisWarning, body, diagSection)
   const flowchart = mountFlowchart(flowchartHost, {
     dark: options?.dark ?? true,
     onGotoLocation(location) {
@@ -206,6 +217,7 @@ export function createSidePanel(
       btn.classList.toggle('active', btn.dataset.tab === tab)
     }
     variableList.hidden = tab !== 'variables'
+    setupPanel.hidden = tab !== 'setup'
     sendList.hidden = tab !== 'sends'
     dryRunList.hidden = tab !== 'dryrun'
     flowchartToolbar.hidden = tab !== 'flowchart'
@@ -215,17 +227,17 @@ export function createSidePanel(
     dryRunClearBtn.hidden = tab !== 'dryrun'
     flowchart.setVisible(tab === 'flowchart')
     diagSection.hidden = tab === 'flowchart'
-    branchSection.hidden = tab !== 'sends'
-    container.querySelector<HTMLElement>('.include-section')?.toggleAttribute('hidden', tab === 'flowchart')
     const title = container.querySelector('#side-panel-title')!
     title.textContent =
-      tab === 'variables'
-        ? '変数'
-        : tab === 'sends'
-          ? '送信データ'
-          : tab === 'dryrun'
-            ? 'ドライラン'
-            : 'フローチャート'
+      tab === 'setup'
+        ? '前提'
+        : tab === 'variables'
+          ? '変数'
+          : tab === 'sends'
+            ? '送信データ'
+            : tab === 'dryrun'
+              ? 'ドライラン'
+              : 'フローチャート'
     if (tab === 'dryrun' && dryRunState) renderDryRun(dryRunState)
     else if (tab === 'dryrun') {
       updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
@@ -278,6 +290,20 @@ export function createSidePanel(
           flowchartModel.warnings.length > 0 ? ` / 注意 ${flowchartModel.warnings.length}` : ''
         statsEl.textContent = `ノード ${flowchartModel.nodes.length} / エッジ ${flowchartModel.edges.length}${warningText}`
       }
+      return
+    }
+    if (activeTab === 'setup') {
+      if (!cached) {
+        statsEl.textContent = '解析待ち'
+        return
+      }
+      const snapshot = cached
+      const branchCount = snapshot.indeterminateBranches.length
+      const unselected = snapshot.indeterminateBranches.filter(
+        (branch) => snapshot.branchAssumptions[String(branch.line)] === undefined,
+      ).length
+      const unlinked = snapshot.analysisLimitations.unlinkedIncludes.length
+      statsEl.textContent = `未確定分岐 ${branchCount}（未選択 ${unselected}） / 未リンク include ${unlinked}`
       return
     }
     if (activeTab === 'variables') {
@@ -429,9 +455,10 @@ export function createSidePanel(
 
   function renderAnalysisWarning(limitations: AnalysisLimitations | undefined) {
     const showUnassumedBranches =
-      activeTab === 'sends' && (limitations?.unassumedBranches.length ?? 0) > 0
+      (activeTab === 'setup' || activeTab === 'sends')
+      && (limitations?.unassumedBranches.length ?? 0) > 0
     const showUnlinkedIncludes =
-      (activeTab === 'sends' || activeTab === 'flowchart')
+      (activeTab === 'setup' || activeTab === 'sends' || activeTab === 'flowchart')
       && (limitations?.unlinkedIncludes.length ?? 0) > 0
     const shouldShow =
       !!limitations && (showUnassumedBranches || showUnlinkedIncludes)
@@ -459,7 +486,9 @@ export function createSidePanel(
       <div class="analysis-limitations-help">${
         activeTab === 'flowchart'
           ? 'include の参照タブを指定してください。分岐仮定はフロー表示に影響しません。'
-          : '未確定分岐の True/False と include の参照タブを指定してください。'
+          : activeTab === 'sends'
+            ? '「前提」タブで未確定分岐の True/False と include の参照タブを指定してください。'
+            : '未確定分岐の True/False と include の参照タブを指定してください。'
       }</div>
     `
   }
@@ -470,12 +499,14 @@ export function createSidePanel(
   ) {
     const section = container.querySelector<HTMLElement>('#branch-assumptions-section')!
     const list = container.querySelector<HTMLElement>('#branch-assumptions-list')!
-    if (activeTab !== 'sends' || branches.length === 0) {
-      section.hidden = true
-      list.innerHTML = ''
+    if (activeTab !== 'setup') {
       return
     }
     section.hidden = false
+    if (branches.length === 0) {
+      list.innerHTML = '<div class="empty-state">未確定分岐はありません</div>'
+      return
+    }
     list.innerHTML = branches
       .map((branch) => {
         const key = String(branch.line)
@@ -550,7 +581,9 @@ export function createSidePanel(
     if (activeTab === 'sends') {
       renderSendList(sendEntries)
     }
-    renderBranchAssumptions(indeterminateBranches, branchAssumptions)
+    if (activeTab === 'setup') {
+      renderBranchAssumptions(indeterminateBranches, branchAssumptions)
+    }
     if (activeTab !== 'flowchart') {
       renderDiagnostics(analysis)
     }
@@ -643,6 +676,7 @@ export function createSidePanel(
   }
 
   return {
+    includeMount,
     onGotoLine(handler) {
       gotoHandler = handler
     },

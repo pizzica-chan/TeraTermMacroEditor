@@ -358,13 +358,31 @@ body {
 
 .variable-list[hidden],
 .send-list[hidden],
+.setup-panel[hidden],
 .dryrun-list[hidden],
 .flowchart-toolbar[hidden],
 .flowchart-host[hidden],
 .flowchart-warnings[hidden],
-.include-section[hidden],
 .diagnostics-section[hidden] {
   display: none !important;
+}
+
+.setup-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.setup-panel .branch-assumptions-section {
+  border-top: none;
+  flex-shrink: 0;
+}
+
+.setup-panel .include-section {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .flowchart-toolbar {
