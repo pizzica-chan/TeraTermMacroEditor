@@ -1,0 +1,87 @@
+---
+description: 未確定 if 内 end の後（endif 以降）に到達不能警告・送信データが正しく出るよう analyzer/evaluator を保守する
+globs:
+  - src/ttl/analyzer.ts
+  - src/ttl/evaluator.ts
+  - src/ttl/branchAssumptions.ts
+  - src/ui/sidePanel.ts
+  - src/main.ts
+  - scripts/test-conditional-end-static.ts
+  - scripts/test-branch-assumptions.ts
+  - scripts/regression-test.ts
+alwaysApply: false
+---
+
+# 未確定 if 内 end → 後続コードへの静的解析
+
+## 何を守るか（後続コード）
+
+ユーザー TTL の **`endif` 以降の行** に対して、静的解析が次の両方で正しく動くこと。
+
+1. **到達不能警告（analyzer）** … 未確定 `if` 内の `end` だけでは、後続行に「到達しません」を出さない
+2. **送信データ（evaluator）** … 後続の `send` / `sendln` を収集リストに含める
+
+### 代表例（必ず維持）
+
+```ttl
+yesnobox '' ''
+if result <> 0 then
+ end
+endif
+
+sendln 'after'    ; ← 到達不能警告なし、送信データに after が載る
+```
+
+```ttl
+if 1 then
+ end
+endif
+sendln 'after'    ; ← 到達不能警告あり、送信データに after は載らない
+```
+
+## 不変条件
+
+| 条件 | analyzer（後続行） | evaluator（後続 send） |
+|------|-------------------|------------------------|
+| 変数条件の `if` 内 `end`（`result` 等） | 到達可能のまま | `endif` 以降を収集 |
+| `if 1` / `while 1` 内 `end` | 到達不能 | 以降を収集しない |
+
+- **dryRun.ts は対象外** … 実行時 `end` は常にマクロ終了（`stopAll`）
+
+## 実装の要点（触るときはセットで確認）
+
+**analyzer.ts**
+- `guaranteedEntry` … リテラルだけ真と断定できる `if`/`while` のみ `true`
+- `isConditionalTerminatorContext` … 未確定ブロックが残るとき `end` はブロック内だけ
+- `closeBlock` … 未確定ブロック閉じで `fileUnreachable` をスナップショット復元
+
+**evaluator.ts**
+- `evalConditionTokenValue` … `system-default` / `dialog-result` は if 条件で未確定
+- `blockTerminatorStack` + `isConditionalIfEndContext` … 未確定 `if` 内 `end` は `stopBlock`（`stopAll` にしない）
+- `resolveIfCondition` … 静的評価できなければ `branchAssumptions`（行番号 1-based）を参照
+- `EvaluateOptions.branchAssumptions` … UI でユーザーが選んだ True/False を渡す
+
+**branchAssumptions.ts / UI**
+- `collectIndeterminateIfBranches` … 各行直前 env で未確定の if/elseif を列挙
+- サイドパネル「未確定分岐」で True/False/クリア → `tab.branchAssumptions` → 再評価
+- include が未確定 if 内にあるとき、仮定 True で子ファイルの変数代入が親 env に反映される
+
+## 変更後の必須テスト
+
+```bash
+npm run test:conditional-end
+npm run test:branch-assumptions
+npm run test:regression
+```
+
+ケース定義:
+- `scripts/test-conditional-end-static.ts`（到達不能と送信データ）
+- `scripts/test-branch-assumptions.ts`（include + 分岐仮定）
+
+手動確認用 TTL: `samples/conditional-end-verify.ttl`（ファイル → 開く）
+
+## やってはいけない変更
+
+- `end` を無条件で `fileUnreachable = true` / `stopAll` に戻す
+- `result` の既定値 `0` で `if result = 0` を静的に真とする
+- dryRun の `end` を `stopBlock` に変える（実行セマンティクスが壊れる）

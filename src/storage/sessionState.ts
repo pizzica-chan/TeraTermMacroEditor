@@ -8,6 +8,7 @@ export interface SavedTabState {
   encoding: TextEncoding
   newline: NewlineType
   includeBindings: Record<string, string>
+  branchAssumptions?: Record<string, boolean>
 }
 
 export interface WorkspaceSession {

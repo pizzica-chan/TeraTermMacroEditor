@@ -432,7 +432,11 @@ function evalGuaranteedLiteralCondition(tokens: Token[]): boolean | undefined {
   return undefined
 }
 
-function isGuaranteedIfCondition(line: string, lineIdx: number, cmd: string): boolean {
+function evalGuaranteedIfCondition(
+  line: string,
+  lineIdx: number,
+  cmd: string,
+): boolean | undefined {
   const tokens = tokenizeLine(line, lineIdx + 1)
   let off = tokens[0]?.kind === 'label' ? 1 : 0
   let condEnd = tokens.length
@@ -442,27 +446,42 @@ function isGuaranteedIfCondition(line: string, lineIdx: number, cmd: string): bo
     )
     if (thenIdx >= 0) condEnd = thenIdx
   }
-  return evalGuaranteedLiteralCondition(tokens.slice(off + 1, condEnd)) === true
+  return evalGuaranteedLiteralCondition(tokens.slice(off + 1, condEnd))
 }
 
 function isConditionalIfEndContext(opts: EvalOptions): boolean {
+  // 未確定 if 内 end は分岐終了のみ（scripts/test-conditional-end-static.ts）
   return (opts.blockTerminatorStack ?? []).some((entry) => entry.kind === 'if' && !entry.guaranteed)
 }
 
-function withIfBodyOpts(opts: EvalOptions, line: string, lineIdx: number, cmd: string): EvalOptions {
+function hasAppliedBranchAssumption(
+  opts: EvalOptions,
+  line: string,
+  lineIdx: number,
+  env: Env,
+  cmd: string,
+): boolean {
+  return tryEvalCondition(line, lineIdx, env, cmd) === undefined
+    && opts.branchAssumptions?.has(lineIdx + 1) === true
+}
+
+function withIfBodyOpts(opts: EvalOptions, guaranteed: boolean): EvalOptions {
   return {
     ...opts,
     blockTerminatorStack: [
       ...(opts.blockTerminatorStack ?? []),
-      { kind: 'if', guaranteed: isGuaranteedIfCondition(line, lineIdx, cmd) },
+      { kind: 'if', guaranteed },
     ],
   }
 }
 
-function withElseBodyOpts(opts: EvalOptions): EvalOptions {
+function withElseBodyOpts(opts: EvalOptions, guaranteed = false): EvalOptions {
   return {
     ...opts,
-    blockTerminatorStack: [...(opts.blockTerminatorStack ?? []), { kind: 'if', guaranteed: false }],
+    blockTerminatorStack: [
+      ...(opts.blockTerminatorStack ?? []),
+      { kind: 'if', guaranteed },
+    ],
   }
 }
 
@@ -945,6 +964,30 @@ function tryEvalCondition(line: string, lineIdx: number, env: Env, cmd: string):
   return evalBoolExpr(tokens.slice(off + 1, condEnd), env)
 }
 
+/** 分岐仮定を適用しない静的な if 条件評価（未確定分岐の列挙用） */
+export function evalIfConditionStatic(
+  line: string,
+  lineIdx: number,
+  env: MacroEnvironment,
+  cmd: string,
+): boolean | undefined {
+  return tryEvalCondition(line, lineIdx, env as Env, cmd)
+}
+
+function resolveIfCondition(
+  line: string,
+  lineIdx: number,
+  env: Env,
+  cmd: string,
+  opts: EvalOptions,
+): boolean | undefined {
+  const staticResult = tryEvalCondition(line, lineIdx, env, cmd)
+  if (staticResult !== undefined) return staticResult
+  const assumed = opts.branchAssumptions?.get(lineIdx + 1)
+  if (assumed !== undefined) return assumed
+  return undefined
+}
+
 function processIfChain(
   env: Env,
   lines: string[],
@@ -956,6 +999,7 @@ function processIfChain(
   const endIdx = findBlockEnd(lines, lineIdx, 'if', 'endif')
   let cursor = lineIdx
   let executed = false
+  let pathGuaranteed = true
 
   while (cursor <= endIdx) {
     const kw = lineKeyword(lines[cursor]!, cursor)
@@ -973,7 +1017,7 @@ function processIfChain(
             bodyEnd,
             beforeLine,
             afterLine,
-            withElseBodyOpts(opts),
+            withElseBodyOpts(opts, pathGuaranteed),
           )
           if (run !== 'complete') return blockRunToStmtResult(run, endIdx)
         }
@@ -982,12 +1026,25 @@ function processIfChain(
     }
 
     if (kw === 'if' || kw === 'elseif') {
-      const condResult = tryEvalCondition(lines[cursor]!, cursor, env, kw)
+      const assumptionApplied = hasAppliedBranchAssumption(
+        opts,
+        lines[cursor]!,
+        cursor,
+        env,
+        kw,
+      )
+      const condResult = resolveIfCondition(lines[cursor]!, cursor, env, kw, opts)
+      const literalResult = evalGuaranteedIfCondition(lines[cursor]!, cursor, kw)
+      const conditionGuaranteed = assumptionApplied || literalResult !== undefined
       const nextSibling = findNextIfSiblingLine(lines, cursor, endIdx)
       const bodyStart = cursor + 1
       const bodyEnd = nextSibling - 1
 
       if (condResult === true && bodyStart <= bodyEnd) {
+        // elseif の明示的な True 仮定は、その分岐を選ぶ指定でもあるため、
+        // 先行 if/elseif の未仮定条件にかかわらず選択経路を確定扱いにする。
+        const selectedBranchGuaranteed =
+          conditionGuaranteed && (assumptionApplied || pathGuaranteed)
         const run = processBlock(
           env,
           lines,
@@ -995,13 +1052,14 @@ function processIfChain(
           bodyEnd,
           beforeLine,
           afterLine,
-          withIfBodyOpts(opts, lines[cursor]!, cursor, kw),
+          withIfBodyOpts(opts, selectedBranchGuaranteed),
         )
         if (run !== 'complete') return blockRunToStmtResult(run, endIdx)
         executed = true
         break
       }
 
+      pathGuaranteed &&= conditionGuaranteed && condResult === false
       cursor = nextSibling
       continue
     }
@@ -1045,6 +1103,8 @@ interface EvalOptions {
   loopFrame?: { variable: string; value: number; index: number; total: number }
   loopControl?: { breakRequested: boolean; continueRequested: boolean }
   callStack: CallFrame[]
+  /** 未確定 if/elseif 行番号（1-based）→ ユーザーが選んだ真偽 */
+  branchAssumptions?: Map<number, boolean>
 }
 
 interface StmtResult {
@@ -1265,12 +1325,19 @@ function processStatement(
         const childResolver = linkedTabId
           ? opts.includeResolver.resolverForLinkedTab(linkedTabId) ?? opts.includeResolver
           : opts.includeResolver
+        const childBranchAssumptions = linkedTabId
+          ? opts.includeResolver.getBranchAssumptions?.(linkedTabId)
+          : undefined
         const child = processIncludedContent(env, content, {
           ...opts,
           includeResolver: childResolver,
           includeStack: [...opts.includeStack, bindingKey],
           includeTabStack: linkedTabId ? [...opts.includeTabStack, linkedTabId] : opts.includeTabStack,
           locationPrefix,
+          // 行番号キーはソース内だけで有効。親の Lx ではなくリンク先自身の仮定を使う。
+          branchAssumptions: childBranchAssumptions
+            ? new Map(childBranchAssumptions)
+            : undefined,
         })
         if (child.stopAll) return { nextIdx: lineIdx, stopAll: true }
       }
@@ -1404,8 +1471,11 @@ function processStatement(
     if (cmd === 'if') {
       const thenForm = findIfThenTailStart(tokens, offset)
       if (thenForm !== null) {
-        const cond = evalBoolExpr(tokens.slice(offset + 1, thenForm.condEnd), env)
+        const cond = resolveIfCondition(line, lineIdx, env, 'if', opts)
         if (cond === true) {
+          const guaranteed =
+            hasAppliedBranchAssumption(opts, line, lineIdx, env, 'if')
+            || evalGuaranteedIfCondition(line, lineIdx, 'if') === true
           return processSingleLineIfTail(
             env,
             lines,
@@ -1413,15 +1483,18 @@ function processStatement(
             tokens,
             thenForm.tailStart,
             lineNum,
-            withIfBodyOpts(opts, line, lineIdx, 'if'),
+            withIfBodyOpts(opts, guaranteed),
           )
         }
         return { nextIdx: lineIdx }
       }
       const tailStart = findSingleLineIfTailStart(tokens, offset)
       if (tailStart !== null) {
-        const cond = evalBoolExpr(tokens.slice(offset + 1, tailStart), env)
+        const cond = resolveIfCondition(line, lineIdx, env, 'if', opts)
         if (cond === true) {
+          const guaranteed =
+            hasAppliedBranchAssumption(opts, line, lineIdx, env, 'if')
+            || evalGuaranteedIfCondition(line, lineIdx, 'if') === true
           return processSingleLineIfTail(
             env,
             lines,
@@ -1429,7 +1502,7 @@ function processStatement(
             tokens,
             tailStart,
             lineNum,
-            withIfBodyOpts(opts, line, lineIdx, 'if'),
+            withIfBodyOpts(opts, guaranteed),
           )
         }
         return { nextIdx: lineIdx }
@@ -1452,6 +1525,8 @@ export interface EvaluateOptions {
   includeResolver?: IncludeResolver
   /** マクロ起動時のコマンドライン引数（先頭要素はマクロファイルパス。paramcnt に含む） */
   macroArgv?: string[]
+  /** 未確定 if/elseif のユーザー仮定（行番号 1-based → 真偽） */
+  branchAssumptions?: Map<number, boolean>
 }
 
 export interface EvaluationResult {
@@ -1465,9 +1540,13 @@ export interface EvaluationResult {
   getHoverAt(line: number, column: number): HoverAtResult | null
 }
 
-/** ドライラン等でマクロ実行環境を初期化する */
-export function createMacroEnvironment(macroArgv?: string[]): Map<string, RuntimeValue> {
+export function initMacroEnvironment(macroArgv?: string[]): Map<string, RuntimeValue> {
   return initEnv(macroArgv)
+}
+
+/** @deprecated initMacroEnvironment を使用 */
+export function createMacroEnvironment(macroArgv?: string[]): Map<string, RuntimeValue> {
+  return initMacroEnvironment(macroArgv)
 }
 
 /** 実行環境の浅いコピー */
@@ -1490,6 +1569,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
     includeTabStack: [],
     sendEntries,
     callStack: [],
+    branchAssumptions: options?.branchAssumptions,
   }
 
   let lineIdx = 0

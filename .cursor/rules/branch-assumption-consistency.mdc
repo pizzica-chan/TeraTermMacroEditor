@@ -1,0 +1,44 @@
+---
+description: 未確定 if/elseif のユーザー仮定を静的評価全体へ一貫して反映し、実行系へ混入させない
+globs:
+  - src/ttl/evaluator.ts
+  - src/ttl/branchAssumptions.ts
+  - src/ttl/analysisLimitations.ts
+  - src/main.ts
+  - src/editor/branchAssumptionDecorations.ts
+  - src/ui/sidePanel.ts
+  - scripts/test-branch-assumptions.ts
+alwaysApply: false
+---
+
+# 分岐仮定の整合性
+
+`branchAssumptions` は「現在のソースの行番号（1-based）→ True/False」であり、
+送信データ・静的な変数環境・ホバー表示だけに適用する。
+
+## 必須の不変条件
+
+- True は then、False は後続 elseif/else を選択し、代入・include・send を同じ経路で評価する。
+- elseif の True 指定はその分岐を選ぶ指定であり、先行条件が未選択でも選択経路を確定扱いにする。
+- 仮定で選択経路が確定した場合、その経路上の `end` は `stopAll`。後続 send を残さない。
+- else を確定経路にできるのは、先行する全 if/elseif がリテラルまたは仮定で False と確定した場合だけ。
+- 未仮定の条件が一つでも残る経路では、従来の保守的評価を維持する。
+- 行番号キーを include 先へ引き継がない。同じ Lx でも別ソース。リンク先自身の仮定だけを使う。
+- 親で選択した include 経路の代入は親 env、送信データ、ホバーへ反映する。
+- フロー図と `dryRun.ts` には仮定を適用しない。実行時条件と静的な仮定を混同しない。
+- エディタ表示には「仮定」であることを明記し、実行結果のように見せない。
+- 送信データでは未選択分岐とタブ未指定 include を警告する。
+- フローとドライラン開始時はタブ未指定 include だけを警告し、分岐仮定の選択状況は参照しない。
+
+## 変更時の横展開確認
+
+ブロック if、単行 if、elseif、else、ネスト、include、`end`、True/False/クリアを確認する。
+特に制御フロー変更では、送信データだけでなく `beforeLine` と include 後の env も確認する。
+
+```bash
+npm run test:branch-assumptions
+npm run test:conditional-end
+npm run test:regression
+```
+
+回帰ケースは `scripts/test-branch-assumptions.ts` に追加する。

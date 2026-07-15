@@ -4,6 +4,8 @@
 import { analyzeTTL, type IncludeResolver } from '../src/ttl/analyzer'
 import { evaluateTTL } from '../src/ttl/evaluator'
 import { includeLoopIterationBindingKey } from '../src/ttl/includeRefs'
+import { runConditionalEndStaticTests } from './test-conditional-end-static'
+import { runBranchAssumptionTests } from './test-branch-assumptions'
 
 let passed = 0
 let failed = 0
@@ -149,19 +151,19 @@ assert(
   endAnalysis.diagnostics,
 )
 
-const endInConditionalIf = analyzeTTL(`if result = 0 then\nend\nendif\naaa = 0`)
-assert(
-  !endInConditionalIf.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
-  'end inside conditional if does not mark code after endif unreachable',
-  endInConditionalIf.diagnostics,
-)
+console.log('=== B2. 未確定 if 内 end / 静的解析 ===')
+{
+  const r = runConditionalEndStaticTests()
+  passed += r.passed
+  failed += r.failed
+}
 
-const exitInConditionalIf = analyzeTTL(`if result = 0 then\nexit\nendif\naaa = 0`)
-assert(
-  !exitInConditionalIf.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
-  'exit inside conditional if does not mark code after endif unreachable',
-  exitInConditionalIf.diagnostics,
-)
+console.log('=== B3. 未確定分岐仮定（include 内代入） ===')
+{
+  const r = runBranchAssumptionTests()
+  passed += r.passed
+  failed += r.failed
+}
 
 const exitInWhileStopsMain = analyzeTTL(`while 1\nexit\nendwhile\nsend 'after'`)
 assert(
@@ -175,68 +177,6 @@ assert(
   !exitInConditionalWhile.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
   'exit inside conditional while does not mark following code unreachable',
   exitInConditionalWhile.diagnostics,
-)
-
-const gotoInConditionalIf = analyzeTTL(`if result = 0 then\ngoto target\nendif\naaa = 0\n:target\nend`)
-assert(
-  !gotoInConditionalIf.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
-  'goto inside conditional if does not mark code after endif unreachable',
-  gotoInConditionalIf.diagnostics,
-)
-
-const definiteEndInIf = analyzeTTL(`if 1 then\nend\nendif\naaa = 0`)
-assert(
-  definiteEndInIf.diagnostics.some((diag) => diag.line === 4 && diag.message.includes('到達しません')),
-  'end inside statically true if marks code after endif unreachable',
-  definiteEndInIf.diagnostics,
-)
-
-const singleLineIfEnd = analyzeTTL(`if result = 0 then end\naaa = 0`)
-assert(
-  !singleLineIfEnd.diagnostics.some((diag) => diag.line === 2 && diag.message.includes('到達しません')),
-  'single-line if with unknown condition end does not mark following code unreachable',
-  singleLineIfEnd.diagnostics,
-)
-
-const singleLineIfGoto = analyzeTTL(`if result = 0 goto target\naaa = 0\n:target\nend`)
-assert(
-  !singleLineIfGoto.diagnostics.some((diag) => diag.line === 2 && diag.message.includes('到達しません')),
-  'single-line if goto with unknown condition does not mark following code unreachable',
-  singleLineIfGoto.diagnostics,
-)
-
-const yesnoboxNotEqualIf = analyzeTTL(
-  `yesnobox '' ''\nif result <> 0 then\n end\nendif\n\naaa = 0`,
-)
-assert(
-  !yesnoboxNotEqualIf.diagnostics.some((diag) => diag.line === 6 && diag.message.includes('到達しません')),
-  'yesnobox後の if result<>0 then end は endif 以降を到達不能にしない',
-  yesnoboxNotEqualIf.diagnostics,
-)
-
-const sendAfterConditionalEnd = evaluateTTL(
-  `if result = 0 then\n end\nendif\nsendln 'after'`,
-)
-assert(
-  sendAfterConditionalEnd.sendEntries.some((entry) => entry.payload === 'after'),
-  '未確定 if 内の end 後も sendln を送信データに含める',
-  sendAfterConditionalEnd.sendEntries,
-)
-
-const sendAfterYesnoboxConditionalEnd = evaluateTTL(
-  `yesnobox '' ''\nif result <> 0 then\n end\nendif\nsendln 'after'`,
-)
-assert(
-  sendAfterYesnoboxConditionalEnd.sendEntries.some((entry) => entry.payload === 'after'),
-  'yesnobox 後の未確定 if 内 end の後も sendln を送信データに含める',
-  sendAfterYesnoboxConditionalEnd.sendEntries,
-)
-
-const sendAfterGuaranteedIfEnd = evaluateTTL(`if 1 then\n end\nendif\nsendln 'after'`)
-assert(
-  !sendAfterGuaranteedIfEnd.sendEntries.some((entry) => entry.payload === 'after'),
-  'if 1 内の end では endif 以降の sendln を送信データに含めない',
-  sendAfterGuaranteedIfEnd.sendEntries,
 )
 
 const conditionallyAssignedConstant = analyzeTTL(

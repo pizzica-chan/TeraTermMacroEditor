@@ -16,6 +16,8 @@ export interface EditorTab {
   savedContent: string
   /** include パス（正規化）→ リンク先タブ ID */
   includeBindings: Record<string, string>
+  /** 未確定 if/elseif 行番号（文字列キー）→ ユーザー仮定の真偽 */
+  branchAssumptions?: Record<string, boolean>
 }
 
 let nextTabId = 1
@@ -143,6 +145,7 @@ export class TabManager {
     fileHandle?: FileSystemFileHandle | null
     savedContent?: string
     includeBindings?: Record<string, string>
+    branchAssumptions?: Record<string, boolean>
     activate?: boolean
   }): EditorTab | null {
     if (!this.canAddTab()) {
@@ -163,6 +166,7 @@ export class TabManager {
       editorState,
       savedContent: options.savedContent ?? content,
       includeBindings: options.includeBindings ? { ...options.includeBindings } : {},
+      branchAssumptions: options.branchAssumptions ? { ...options.branchAssumptions } : {},
     }
 
     this.tabs.push(tab)
@@ -305,6 +309,7 @@ export class TabManager {
       encoding: tab.docSettings.encoding,
       newline: tab.docSettings.newline,
       includeBindings: { ...tab.includeBindings },
+      branchAssumptions: { ...(tab.branchAssumptions ?? {}) },
     }))
     return {
       version: 1,
@@ -336,6 +341,7 @@ export class TabManager {
         editorState,
         savedContent: saved.savedContent,
         includeBindings: migrateIncludeBindings(saved.content, { ...saved.includeBindings }),
+        branchAssumptions: { ...(saved.branchAssumptions ?? {}) },
       })
     }
 

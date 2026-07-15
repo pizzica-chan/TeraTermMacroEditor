@@ -1,8 +1,10 @@
 import type { AnalysisResult, VariableInfo } from '../ttl/analyzer'
+import type { IndeterminateIfBranch } from '../ttl/branchAssumptions'
 import type { SendEntry } from '../ttl/evaluator'
 import { buildDryRunPlainTextForCopy, formatDryRunEventMessage, type DryRunEvent, type DryRunState } from '../ttl/dryRun'
 import { buildSendPlainTextForCopy, countUnresolvedSendEntries } from '../ttl/sendText'
 import type { FlowchartModel } from '../ttl/flowchart'
+import type { AnalysisLimitations } from '../ttl/analysisLimitations'
 import { mountFlowchart } from './flowchart/mountFlowchart'
 
 export type SidePanelTab = 'variables' | 'sends' | 'dryrun' | 'flowchart'
@@ -11,7 +13,13 @@ export function createSidePanel(
   container: HTMLElement,
   options?: { dark?: boolean; showDetailedWaits?: boolean; showAssignments?: boolean },
 ): {
-  update: (data: { analysis: AnalysisResult; sendEntries: SendEntry[] }) => void
+  update: (data: {
+    analysis: AnalysisResult
+    sendEntries: SendEntry[]
+    indeterminateBranches?: IndeterminateIfBranch[]
+    branchAssumptions?: Record<string, boolean>
+    analysisLimitations?: AnalysisLimitations
+  }) => void
   updateDryRun: (state: DryRunState | null) => void
   updateFlowchart: (model: FlowchartModel | null) => void
   setFlowchartActiveLocation: (location: string | undefined) => void
@@ -24,6 +32,7 @@ export function createSidePanel(
   onFlowchartDetailedWaitsChange: (handler: (show: boolean) => void) => void
   onFlowchartAssignmentsChange: (handler: (show: boolean) => void) => void
   onClearDryRun: (handler: () => void) => void
+  onBranchAssumptionChange: (handler: (line: number, value: boolean | null) => void) => void
 } {
   let gotoHandler: ((line: number) => void) | null = null
   let dryRunGotoHandler: ((location: string) => void) | null = null
@@ -32,8 +41,15 @@ export function createSidePanel(
   let flowchartDetailedWaitsHandler: ((show: boolean) => void) | null = null
   let flowchartAssignmentsHandler: ((show: boolean) => void) | null = null
   let clearDryRunHandler: (() => void) | null = null
+  let branchAssumptionHandler: ((line: number, value: boolean | null) => void) | null = null
   let activeTab: SidePanelTab = 'sends'
-  let cached: { analysis: AnalysisResult; sendEntries: SendEntry[] } | null = null
+  let cached: {
+    analysis: AnalysisResult
+    sendEntries: SendEntry[]
+    indeterminateBranches: IndeterminateIfBranch[]
+    branchAssumptions: Record<string, boolean>
+    analysisLimitations: AnalysisLimitations
+  } | null = null
   let dryRunState: DryRunState | null = null
   let flowchartModel: FlowchartModel | null = null
   let showDetailedWaits = options?.showDetailedWaits ?? false
@@ -55,15 +71,21 @@ export function createSidePanel(
   header.innerHTML = `
     <div class="panel-header-row">
       <h2 id="side-panel-title">送信データ</h2>
-      <button type="button" id="send-copy-btn" class="panel-action-btn" title="送信データをプレーンテキストでコピー（未解決部分はプレースホルダー付き）">コピー</button>
-      <button type="button" id="dryrun-copy-btn" class="panel-action-btn" hidden title="ドライランのログをプレーンテキストでコピー">コピー</button>
-      <button type="button" id="dryrun-clear-btn" class="panel-action-btn" hidden title="ドライランのログをクリア">クリア</button>
+      <div class="panel-action-group">
+        <button type="button" id="send-copy-btn" class="panel-action-btn" title="送信データをプレーンテキストでコピー（未解決部分はプレースホルダー付き）">コピー</button>
+        <button type="button" id="dryrun-copy-btn" class="panel-action-btn" hidden title="ドライランのログをプレーンテキストでコピー">コピー</button>
+        <button type="button" id="dryrun-clear-btn" class="panel-action-btn" hidden title="ドライランのログをクリア">クリア</button>
+      </div>
     </div>
     <div class="panel-stats" id="side-panel-stats"></div>
   `
 
   const body = document.createElement('div')
   body.className = 'side-panel-body'
+
+  const analysisWarning = document.createElement('div')
+  analysisWarning.className = 'analysis-limitations-warning'
+  analysisWarning.hidden = true
 
   const variableList = document.createElement('div')
   variableList.className = 'variable-list'
@@ -104,6 +126,16 @@ export function createSidePanel(
   diagSection.className = 'diagnostics-section'
   diagSection.innerHTML = `<h2>診断</h2><div class="diagnostics-list" id="diagnostics-list"></div>`
 
+  const branchSection = document.createElement('div')
+  branchSection.className = 'branch-assumptions-section'
+  branchSection.id = 'branch-assumptions-section'
+  branchSection.hidden = true
+  branchSection.innerHTML = `
+    <h2>未確定分岐</h2>
+    <p class="branch-assumptions-hint">静的に真偽が決まらない if / elseif です。True / False を選ぶと送信データ・変数ホバーに反映されます。</p>
+    <div class="branch-assumptions-list" id="branch-assumptions-list"></div>
+  `
+
   const sendCopyBtn = header.querySelector<HTMLButtonElement>('#send-copy-btn')!
   const dryRunCopyBtn = header.querySelector<HTMLButtonElement>('#dryrun-copy-btn')!
   const dryRunClearBtn = header.querySelector<HTMLButtonElement>('#dryrun-clear-btn')!
@@ -111,7 +143,7 @@ export function createSidePanel(
   const flowchartAssignmentsBtn = flowchartToolbar.querySelector<HTMLButtonElement>('#flowchart-assignments-btn')!
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
-  container.append(tabs, header, body, diagSection)
+  container.append(tabs, header, analysisWarning, body, branchSection, diagSection)
   const flowchart = mountFlowchart(flowchartHost, {
     dark: options?.dark ?? true,
     onGotoLocation(location) {
@@ -202,6 +234,7 @@ export function createSidePanel(
     } else {
       updateStats(cached?.analysis ?? { variables: [], diagnostics: [] }, cached?.sendEntries ?? [])
     }
+    renderAnalysisWarning(cached?.analysisLimitations)
     renderFlowchartWarnings()
   }
 
@@ -393,6 +426,93 @@ export function createSidePanel(
     }
   }
 
+  function renderAnalysisWarning(limitations: AnalysisLimitations | undefined) {
+    const showUnassumedBranches =
+      activeTab === 'sends' && (limitations?.unassumedBranches.length ?? 0) > 0
+    const showUnlinkedIncludes =
+      (activeTab === 'sends' || activeTab === 'flowchart')
+      && (limitations?.unlinkedIncludes.length ?? 0) > 0
+    const shouldShow =
+      !!limitations && (showUnassumedBranches || showUnlinkedIncludes)
+    analysisWarning.hidden = !shouldShow
+    if (!shouldShow || !limitations) {
+      analysisWarning.innerHTML = ''
+      return
+    }
+
+    const items: string[] = []
+    if (showUnassumedBranches) {
+      items.push(
+        `<li>True/False 未選択の分岐: ${limitations.unassumedBranches.length} 件</li>`,
+      )
+    }
+    if (showUnlinkedIncludes) {
+      items.push(
+        `<li>タブ未指定の include: ${limitations.unlinkedIncludes.length} 件</li>`,
+      )
+    }
+    analysisWarning.innerHTML = `
+      <div class="analysis-limitations-title">⚠ 解析結果は暫定です</div>
+      <div>解析条件が不足しているため、表示内容が正しい結果にならない可能性があります。</div>
+      <ul>${items.join('')}</ul>
+      <div class="analysis-limitations-help">${
+        activeTab === 'flowchart'
+          ? 'include の参照タブを指定してください。分岐仮定はフロー表示に影響しません。'
+          : '未確定分岐の True/False と include の参照タブを指定してください。'
+      }</div>
+    `
+  }
+
+  function renderBranchAssumptions(
+    branches: IndeterminateIfBranch[],
+    assumptions: Record<string, boolean>,
+  ) {
+    const section = container.querySelector<HTMLElement>('#branch-assumptions-section')!
+    const list = container.querySelector<HTMLElement>('#branch-assumptions-list')!
+    if (branches.length === 0) {
+      section.hidden = true
+      list.innerHTML = ''
+      return
+    }
+    section.hidden = false
+    list.innerHTML = branches
+      .map((branch) => {
+        const key = String(branch.line)
+        const assumed = assumptions[key]
+        const trueActive = assumed === true ? ' active' : ''
+        const falseActive = assumed === false ? ' active' : ''
+        const clearHidden = assumed === undefined ? ' hidden' : ''
+        return `
+          <div class="branch-assumption-item panel-goto-item" data-line="${branch.line}" title="L${branch.line} へ移動">
+            <div class="branch-assumption-head">
+              <span class="branch-assumption-line">L${branch.line}</span>
+              <span class="branch-assumption-cmd">${escapeHtml(branch.command)}</span>
+            </div>
+            <div class="branch-assumption-cond">${escapeHtml(branch.conditionText)}</div>
+            <div class="branch-assumption-actions">
+              <button type="button" class="branch-assumption-btn true${trueActive}" data-line="${branch.line}" data-value="true">True</button>
+              <button type="button" class="branch-assumption-btn false${falseActive}" data-line="${branch.line}" data-value="false">False</button>
+              <button type="button" class="branch-assumption-btn clear${clearHidden}" data-line="${branch.line}" data-value="clear">クリア</button>
+            </div>
+          </div>
+        `
+      })
+      .join('')
+
+    for (const btn of list.querySelectorAll<HTMLButtonElement>('.branch-assumption-btn')) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const line = Number(btn.dataset.line)
+        if (!Number.isFinite(line) || line <= 0) return
+        const value = btn.dataset.value
+        if (value === 'true') branchAssumptionHandler?.(line, true)
+        else if (value === 'false') branchAssumptionHandler?.(line, false)
+        else branchAssumptionHandler?.(line, null)
+      })
+    }
+    bindPanelGotoItems(list)
+  }
+
   function renderDiagnostics(analysis: AnalysisResult) {
     const errors = analysis.diagnostics.filter((d) => d.severity === 'error').length
     const warnings = analysis.diagnostics.filter((d) => d.severity === 'warning').length
@@ -406,9 +526,22 @@ export function createSidePanel(
     }
   }
 
-  function render(data: { analysis: AnalysisResult; sendEntries: SendEntry[] }) {
-    const { analysis, sendEntries } = data
+  function render(data: {
+    analysis: AnalysisResult
+    sendEntries: SendEntry[]
+    indeterminateBranches: IndeterminateIfBranch[]
+    branchAssumptions: Record<string, boolean>
+    analysisLimitations: AnalysisLimitations
+  }) {
+    const {
+      analysis,
+      sendEntries,
+      indeterminateBranches,
+      branchAssumptions,
+      analysisLimitations,
+    } = data
     updateStats(analysis, sendEntries)
+    renderAnalysisWarning(analysisLimitations)
 
     if (activeTab === 'variables') {
       renderVariableList(analysis)
@@ -416,6 +549,7 @@ export function createSidePanel(
     if (activeTab === 'sends') {
       renderSendList(sendEntries)
     }
+    renderBranchAssumptions(indeterminateBranches, branchAssumptions)
     if (activeTab !== 'flowchart') {
       renderDiagnostics(analysis)
     }
@@ -529,12 +663,27 @@ export function createSidePanel(
     onClearDryRun(handler) {
       clearDryRunHandler = handler
     },
+    onBranchAssumptionChange(handler) {
+      branchAssumptionHandler = handler
+    },
     showTab(tab) {
       setTab(tab)
       if (cached) render(cached)
     },
-    update({ analysis, sendEntries }) {
-      cached = { analysis, sendEntries }
+    update({
+      analysis,
+      sendEntries,
+      indeterminateBranches = [],
+      branchAssumptions = {},
+      analysisLimitations = { unassumedBranches: [], unlinkedIncludes: [] },
+    }) {
+      cached = {
+        analysis,
+        sendEntries,
+        indeterminateBranches,
+        branchAssumptions,
+        analysisLimitations,
+      }
       render(cached)
     },
     updateDryRun(state) {

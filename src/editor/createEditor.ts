@@ -11,6 +11,11 @@ import { valueTooltipExtension } from '../ttl/valueTooltip'
 import { ttlAutocompletion } from '../ttl/completion'
 import { includeDecorationExtension, applyIncludeDecorations, type IncludeDecorationInfo } from './includeDecorations'
 import { executionDecorationExtension, applyExecutionLine, clearExecutionLine } from './executionDecorations'
+import {
+  branchAssumptionDecorationExtension,
+  applyBranchAssumptionDecorations,
+  type BranchAssumptionDecoration,
+} from './branchAssumptionDecorations'
 import { includeGraphRevisionExtension, bumpIncludeGraphRevision, bumpAnalysisCacheRevision } from '../ttl/analysisContext'
 
 const SAMPLE_MACRO = `; Tera Term マクロ サンプル
@@ -60,6 +65,7 @@ export interface EditorInstance {
   onChange: (callback: (text: string) => void) => void
   gotoLine: (line: number) => void
   setIncludeDecorations: (info: IncludeDecorationInfo | null) => void
+  setBranchAssumptionDecorations: (assumptions: BranchAssumptionDecoration[] | null) => void
   notifyIncludeGraphChanged: () => void
   notifyAnalysisCacheChanged: () => void
   setExecutionLine: (line: number | null, waiting?: boolean) => void
@@ -96,6 +102,7 @@ function buildExtensions(onDocChange: (text: string) => void): Extension[] {
     ttlLinter,
     valueTooltipExtension,
     includeDecorationExtension,
+    branchAssumptionDecorationExtension,
     executionDecorationExtension,
     includeGraphRevisionExtension,
     ttlAutocompletion,
@@ -216,6 +223,9 @@ export function createEditor(parent: HTMLElement, initialText = SAMPLE_MACRO): E
     },
     setIncludeDecorations(info: IncludeDecorationInfo | null) {
       applyIncludeDecorations(view, info)
+    },
+    setBranchAssumptionDecorations(assumptions) {
+      applyBranchAssumptionDecorations(view, assumptions)
     },
     notifyIncludeGraphChanged() {
       bumpIncludeGraphRevision(view)

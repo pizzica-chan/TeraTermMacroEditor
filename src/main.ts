@@ -14,6 +14,7 @@ import { analyzeTTL, collectIncludeCrossTabVarContext, type IncludeResolver, typ
 import {
   findIncludeRefs,
   includeDynamicBindingKey,
+  isIncludeRefLinked,
   migrateIncludeBindings,
   normalizeIncludePath,
   resolveIncludeBindingTabId,
@@ -24,6 +25,16 @@ import {
 import { createIncludePanel } from './ui/includePanel'
 import { setIncludeResolver, setIncludeCrossTabContext, setAnalysisCache, clearAnalysisCache } from './ttl/analysisContext'
 import { evaluateTTL } from './ttl/evaluator'
+import {
+  collectIndeterminateIfBranches,
+  branchAssumptionsFromRecord,
+  pruneBranchAssumptions,
+} from './ttl/branchAssumptions'
+import {
+  formatAnalysisLimitationWarning,
+  hasAnalysisLimitations,
+  type AnalysisLimitations,
+} from './ttl/analysisLimitations'
 import { DocumentSettings } from './text/documentSettings'
 import type { TextEncoding, NewlineType } from './text/types'
 import { ENCODING_LABELS, NEWLINE_LABELS } from './text/types'
@@ -174,7 +185,77 @@ function createIncludeResolver(tab: EditorTab, dryRunSnapshot?: DryRunSnapshot):
       const linkedTab = tabManager.allTabs.find((t) => t.id === tabId)
       return linkedTab ? createIncludeResolver(linkedTab, dryRunSnapshot) : null
     },
+    getBranchAssumptions(tabId: string) {
+      // 分岐仮定は静的表示専用。ドライラン用スナップショットには混入させない。
+      if (dryRunSnapshot) return undefined
+      const linkedTab = tabManager.allTabs.find((t) => t.id === tabId)
+      return linkedTab
+        ? branchAssumptionsFromRecord(linkedTab.branchAssumptions)
+        : undefined
+    },
   }
+}
+
+function collectAnalysisLimitations(
+  originTab: EditorTab,
+  originSource: string,
+  originBranches?: ReturnType<typeof collectIndeterminateIfBranches>,
+): AnalysisLimitations {
+  const limitations: AnalysisLimitations = {
+    unassumedBranches: [],
+    unlinkedIncludes: [],
+  }
+  const visited = new Set<string>()
+  const queue: Array<{ tab: EditorTab; source: string }> = [
+    { tab: originTab, source: originSource },
+  ]
+
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    if (visited.has(current.tab.id)) continue
+    visited.add(current.tab.id)
+
+    const refs = findIncludeRefs(current.source)
+    for (const ref of refs) {
+      if (!isIncludeRefLinked(ref, current.tab.includeBindings)) {
+        limitations.unlinkedIncludes.push({
+          sourceName: current.tab.fileName,
+          line: ref.line,
+          raw: ref.raw,
+        })
+      }
+    }
+
+    const branches =
+      current.tab.id === originTab.id && originBranches
+        ? originBranches
+        : collectIndeterminateIfBranches(
+            current.source,
+            evaluateTTL(current.source, {
+              includeResolver: createIncludeResolver(current.tab),
+            }).beforeLine,
+          )
+    for (const branch of branches) {
+      if (current.tab.branchAssumptions?.[String(branch.line)] === undefined) {
+        limitations.unassumedBranches.push({
+          sourceName: current.tab.fileName,
+          line: branch.line,
+          conditionText: branch.conditionText,
+        })
+      }
+    }
+
+    for (const linkedTabId of new Set(Object.values(current.tab.includeBindings))) {
+      const linkedTab = tabManager.allTabs.find((tab) => tab.id === linkedTabId)
+      if (!linkedTab || visited.has(linkedTab.id)) continue
+      queue.push({
+        tab: linkedTab,
+        source: tabManager.getTabContent(linkedTab),
+      })
+    }
+  }
+
+  return limitations
 }
 
 function syncTabIncludeBindings(tab: EditorTab, source: string): void {
@@ -248,16 +329,43 @@ function runAnalysisImmediate(text: string): void {
     externallyUsedNames: crossTab?.externallyUsed,
     externallyDeclaredVars: crossTab?.externallyDeclared,
   })
-  const evaluation = evaluateTTL(text, {
+  const evaluationForBranches = evaluateTTL(text, {
     includeResolver: resolver,
   })
+  const indeterminateBranches = collectIndeterminateIfBranches(text, evaluationForBranches.beforeLine)
+
+  if (tab) {
+    const validLines = new Set(indeterminateBranches.map((b) => b.line))
+    tab.branchAssumptions = pruneBranchAssumptions(tab.branchAssumptions ?? {}, validLines)
+  }
+
+  const branchAssumptions = tab ? branchAssumptionsFromRecord(tab.branchAssumptions) : new Map<number, boolean>()
+  const evaluation =
+    branchAssumptions.size > 0
+      ? evaluateTTL(text, {
+          includeResolver: resolver,
+          branchAssumptions,
+        })
+      : evaluationForBranches
 
   if (editor.getValue() !== text) return
 
+  const analysisLimitations = tab
+    ? collectAnalysisLimitations(tab, text, indeterminateBranches)
+    : { unassumedBranches: [], unlinkedIncludes: [] }
+  editor.setBranchAssumptionDecorations(
+    [...branchAssumptions].map(([line, value]) => ({ line, value })),
+  )
   setAnalysisCache(text, result, evaluation)
   editor.notifyAnalysisCacheChanged()
 
-  sidePanel.update({ analysis: result, sendEntries: evaluation.sendEntries })
+  sidePanel.update({
+    analysis: result,
+    sendEntries: evaluation.sendEntries,
+    indeterminateBranches,
+    branchAssumptions: tab?.branchAssumptions ?? {},
+    analysisLimitations,
+  })
   sidePanel.updateFlowchart(buildFlowchartForActiveTab(text))
   refreshIncludePanel(text, { readOnly: isDryRunInProgress() })
 }
@@ -798,9 +906,28 @@ function stopDryRun(): void {
 
 async function startDryRun(): Promise<void> {
   if (dryRunActive || dryRunRunPromise) return
+  const tab = tabManager.activeTab
+  const currentSource = editor.getValue()
+  if (tab) {
+    syncTabIncludeBindings(tab, currentSource)
+    const limitations = collectAnalysisLimitations(tab, currentSource)
+    const dryRunLimitations: AnalysisLimitations = {
+      unassumedBranches: [],
+      unlinkedIncludes: limitations.unlinkedIncludes,
+    }
+    if (
+      hasAnalysisLimitations(dryRunLimitations)
+      && !confirm(
+        `${formatAnalysisLimitationWarning(dryRunLimitations)}\n\n`
+        + 'タブ未指定の include はドライランで実行できません。\n'
+        + 'このままドライランを開始しますか？',
+      )
+    ) {
+      return
+    }
+  }
   dryRunActive = true
   const runId = ++dryRunRunId
-  const tab = tabManager.activeTab
   dryRunSnapshot = tab ? snapshotDryRunContext(tab) : null
   const sourceSnapshot =
     tab && dryRunSnapshot ? dryRunSnapshot.contents.get(tab.id) ?? editor.getValue() : editor.getValue()
@@ -897,6 +1024,18 @@ sidePanel.onClearDryRun(() => {
   dryRunOriginTabId = null
   dryRunClearedState = { status: 'idle', currentLine: 0, events: [] }
   sidePanel.updateDryRun(dryRunClearedState)
+})
+
+sidePanel.onBranchAssumptionChange((line, value) => {
+  const tab = tabManager.activeTab
+  if (!tab) return
+  const next = { ...(tab.branchAssumptions ?? {}) }
+  const key = String(line)
+  if (value === null) delete next[key]
+  else next[key] = value
+  tab.branchAssumptions = next
+  schedulePersistWorkspaceSession()
+  runAnalysisNow(editor.getValue())
 })
 
 document.querySelector('#tab-add')!.addEventListener('click', handleNewTab)

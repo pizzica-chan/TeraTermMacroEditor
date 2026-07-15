@@ -96,6 +96,8 @@ export interface IncludeResolver {
   getLinkedTabId(bindingKey: string, rawArg?: string, effectiveRaw?: string): string | null
   /** インクルード先タブ用の resolver（ネストした include 用） */
   resolverForLinkedTab(tabId: string): IncludeResolver | null
+  /** 静的評価用。リンク先ソース自身の分岐仮定（親ソースの行番号仮定は流用しない） */
+  getBranchAssumptions?(tabId: string): ReadonlyMap<number, boolean> | undefined
 }
 
 export interface AnalyzeOptions {
@@ -270,6 +272,8 @@ function clearFallthroughDead(ctx: AnalysisContext): void {
 /**
  * 到達不能判定で安全に真と断定できる条件だけを扱う。
  * 変数や複合式は条件付き代入などの経路を追跡できないため、常に未確定とする。
+ *
+ * 未確定 if 内 end の不変条件テスト: scripts/test-conditional-end-static.ts
  */
 function evalGuaranteedLiteralCondition(tokens: Token[]): boolean | undefined {
   if (tokens.length === 1) {
@@ -659,6 +663,7 @@ function checkGotoCallLabelRef(
 }
 
 function closeBlock(ctx: AnalysisContext, open: string, lineNum: number, column: number, closeName: string): void {
+  // 未確定 if 閉じ時に fileUnreachable を復元（scripts/test-conditional-end-static.ts）
   let matchIdx = -1
   for (let i = ctx.blockStack.length - 1; i >= 0; i--) {
     if (ctx.blockStack[i]!.keyword === open) {
