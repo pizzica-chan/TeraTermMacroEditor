@@ -20,6 +20,12 @@ export interface StaticIntResult {
   value: number
 }
 
+export interface StaticStr2intResult {
+  destIndex: number
+  value: number
+  result: 0 | 1
+}
+
 function utf8Bytes(s: string): Uint8Array {
   return new TextEncoder().encode(s)
 }
@@ -117,6 +123,59 @@ export function computeStr2code(source: string): number {
     val = val * 256 + b
   }
   return val
+}
+
+/** strcompare: UTF-8 バイト列の辞書順比較（Tera Term の result: -1 / 0 / 1） */
+export function computeStrcompare(a: string, b: string): number {
+  const ab = utf8Bytes(a)
+  const bb = utf8Bytes(b)
+  const len = Math.min(ab.length, bb.length)
+  for (let i = 0; i < len; i++) {
+    if (ab[i]! < bb[i]!) return -1
+    if (ab[i]! > bb[i]!) return 1
+  }
+  if (ab.length < bb.length) return -1
+  if (ab.length > bb.length) return 1
+  return 0
+}
+
+/** strlen / strlength: UTF-8 バイト長 */
+export function computeStrlen(text: string): number {
+  return utf8Bytes(text).length
+}
+
+/** strscan: 部分文字列の 1-origin バイト位置（見つからなければ 0） */
+export function computeStrscan(haystack: string, needle: string): number {
+  if (needle.length === 0) return 0
+  const h = utf8Bytes(haystack)
+  const n = utf8Bytes(needle)
+  if (n.length === 0 || h.length < n.length) return 0
+  outer: for (let i = 0; i <= h.length - n.length; i++) {
+    for (let j = 0; j < n.length; j++) {
+      if (h[i + j] !== n[j]) continue outer
+    }
+    return i + 1
+  }
+  return 0
+}
+
+export type IfdefinedTypeCode = 0 | 1 | 3 | 4 | 5 | 6
+
+export interface IfdefinedLookup {
+  isLabel(name: string): boolean
+  /** 未定義は 0 */
+  varType(name: string): IfdefinedTypeCode
+}
+
+function normalizeIfdefinedName(name: string): string {
+  return name.replace(/^:/, '').toLowerCase()
+}
+
+/** ifdefined: 変数・ラベルの型コード（Tera Term v5） */
+export function computeIfdefined(varName: string, lookup: IfdefinedLookup): IfdefinedTypeCode {
+  const key = normalizeIfdefinedName(varName)
+  if (lookup.isLabel(key)) return 4
+  return lookup.varType(key)
 }
 
 export function parseStr2int(source: string): number | undefined {
@@ -310,14 +369,8 @@ export function tryStaticIntegerCommand(
   const lower = cmd.toLowerCase()
 
   switch (lower) {
-    case 'str2int': {
-      const src = ctx.resolveString(2)
-      const dest = destIdentifier(ctx, offset, 1)
-      if (src === undefined || dest === undefined) return undefined
-      const value = parseStr2int(src)
-      if (value === undefined) return undefined
-      return { destIndex: dest, value }
-    }
+    case 'str2int':
+      return undefined
     case 'str2code': {
       const src = ctx.resolveString(2)
       const dest = destIdentifier(ctx, offset, 1)
@@ -329,6 +382,57 @@ export function tryStaticIntegerCommand(
       const dest = destIdentifier(ctx, offset, 1)
       if (src === undefined || dest === undefined) return undefined
       return { destIndex: dest, value: computeChecksum8(src) }
+    }
+    default:
+      return undefined
+  }
+}
+
+export function tryStaticStr2intCommand(
+  cmd: string,
+  offset: number,
+  ctx: StaticValueContext,
+): StaticStr2intResult | undefined {
+  if (cmd.toLowerCase() !== 'str2int') return undefined
+  const src = ctx.resolveString(2)
+  const dest = destIdentifier(ctx, offset, 1)
+  if (src === undefined || dest === undefined) return undefined
+  const value = parseStr2int(src)
+  if (value !== undefined) return { destIndex: dest, value, result: 1 }
+  return { destIndex: dest, value: 0, result: 0 }
+}
+
+/** result のみを更新するコマンド（strcompare / strlen 等） */
+export function tryStaticResultCommand(
+  cmd: string,
+  ctx: StaticValueContext,
+  options?: { ifdefined?: IfdefinedLookup; ifdefinedName?: string },
+): number | undefined {
+  const lower = cmd.toLowerCase()
+  switch (lower) {
+    case 'strcompare': {
+      const a = ctx.resolveString(1)
+      const b = ctx.resolveString(2)
+      if (a === undefined || b === undefined) return undefined
+      return computeStrcompare(a, b)
+    }
+    case 'strlen':
+    case 'strlength': {
+      const text = ctx.resolveString(1)
+      if (text === undefined) return undefined
+      return computeStrlen(text)
+    }
+    case 'strscan': {
+      const haystack = ctx.resolveString(1)
+      const needle = ctx.resolveString(2)
+      if (haystack === undefined || needle === undefined) return undefined
+      return computeStrscan(haystack, needle)
+    }
+    case 'ifdefined': {
+      const lookup = options?.ifdefined
+      const name = options?.ifdefinedName ?? ctx.tokenAt(1)?.text
+      if (!lookup || !name) return undefined
+      return computeIfdefined(name, lookup)
     }
     default:
       return undefined

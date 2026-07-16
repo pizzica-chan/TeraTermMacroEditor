@@ -18,11 +18,15 @@ import {
 import { getCommandOutputEffect } from './commandOutputs'
 import {
   tryStaticIntegerCommand,
+  tryStaticResultCommand,
+  tryStaticStr2intCommand,
   tryStaticStringCommand,
+  type IfdefinedLookup,
+  type IfdefinedTypeCode,
   type StaticValueContext,
 } from './staticCommandEval'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
-import { collectLabelLineMap, formatLabelRef, normalizeLabelName } from './labels'
+import { collectLabelLineMap, collectLabelNames, formatLabelRef, normalizeLabelName } from './labels'
 import {
   findLabelLineIndex,
   findIfThenTailStart,
@@ -48,7 +52,7 @@ export type RuntimeScalar =
 
 export type RuntimeValue =
   | RuntimeScalar
-  | { kind: 'array'; size: number; elements: Map<number, RuntimeScalar> }
+  | { kind: 'array'; size: number; elements: Map<number, RuntimeScalar>; elementKind?: 'int' | 'str' }
   | { kind: 'range'; start: number; end: number; label: string }
 
 export interface HoverInfo {
@@ -291,7 +295,12 @@ function cloneEnv(env: Env): Env {
   const next = new Map<string, RuntimeValue>()
   for (const [k, v] of env) {
     if (v.kind === 'array') {
-      next.set(k, { kind: 'array', size: v.size, elements: new Map(v.elements) })
+      next.set(k, {
+        kind: 'array',
+        size: v.size,
+        elements: new Map(v.elements),
+        elementKind: v.elementKind,
+      })
     } else {
       next.set(k, v)
     }
@@ -318,7 +327,12 @@ function applyMacroArgv(env: Env, argv: string[]): void {
   for (let i = 0; i < argv.length; i++) {
     elements.set(i + 1, { kind: 'str', value: argv[i]!, origin: 'system-default' })
   }
-  env.set('params', { kind: 'array', size: Math.max(argv.length, 1), elements })
+  env.set('params', {
+    kind: 'array',
+    size: Math.max(argv.length, 1),
+    elements,
+    elementKind: 'str',
+  })
   for (let i = 1; i <= 9; i++) {
     env.set(`param${i}`, { kind: 'str', value: argv[i - 1] ?? '', origin: 'system-default' })
   }
@@ -605,11 +619,45 @@ function createEvaluatorStaticCtx(tokens: Token[], offset: number, env: Env): St
   }
 }
 
+function resolveIfdefinedVarType(name: string, env: Env): IfdefinedTypeCode {
+  const key = name.toLowerCase()
+  if (key === 'paramcnt' || key === 'timeout' || key === 'mtimeout' || key === 'result') return 1
+  if (key === 'params') return 6
+  if (/^param\d+$/.test(key)) return 3
+  if (key === 'inputstr' || key === 'matchstr' || /^groupmatchstr\d+$/.test(key)) return 3
+  const v = env.get(key)
+  if (!v) return 0
+  if (v.kind === 'int') return 1
+  if (v.kind === 'str') return 3
+  if (v.kind === 'array') {
+    if (v.elementKind === 'int') return 5
+    if (v.elementKind === 'str') return 6
+    for (const el of v.elements.values()) {
+      if (el.kind === 'int') return 5
+      if (el.kind === 'str') return 6
+    }
+    return 6
+  }
+  return 0
+}
+
+export function createIfdefinedLookup(env: Env, knownLabels: ReadonlySet<string>): IfdefinedLookup {
+  return {
+    isLabel(name) {
+      return knownLabels.has(name.replace(/^:/, '').toLowerCase())
+    },
+    varType(name) {
+      return resolveIfdefinedVarType(name, env)
+    },
+  }
+}
+
 function applyStaticCommandEffects(
   cmd: string,
   tokens: Token[],
   offset: number,
   env: Env,
+  knownLabels?: ReadonlySet<string>,
 ): boolean {
   const staticCtx = createEvaluatorStaticCtx(tokens, offset, env)
   const strResult = tryStaticStringCommand(cmd, offset, staticCtx)
@@ -621,6 +669,16 @@ function applyStaticCommandEffects(
     }
   }
 
+  const str2intResult = tryStaticStr2intCommand(cmd, offset, staticCtx)
+  if (str2intResult) {
+    const destTok = tokens[str2intResult.destIndex]
+    if (destTok?.kind === 'identifier') {
+      setScalar(env, destTok.text, { kind: 'int', value: str2intResult.value, origin: 'literal' })
+      setScalar(env, 'result', { kind: 'int', value: str2intResult.result, origin: 'literal' })
+      return true
+    }
+  }
+
   const intResult = tryStaticIntegerCommand(cmd, offset, staticCtx)
   if (intResult) {
     const destTok = tokens[intResult.destIndex]
@@ -628,6 +686,20 @@ function applyStaticCommandEffects(
       setScalar(env, destTok.text, { kind: 'int', value: intResult.value })
       return true
     }
+  }
+
+  const ifdefinedLookup = knownLabels ? createIfdefinedLookup(env, knownLabels) : undefined
+  const ifdefinedName =
+    cmd === 'ifdefined' && (tokens[offset + 1]?.kind === 'identifier' || tokens[offset + 1]?.kind === 'label')
+      ? tokens[offset + 1]!.text
+      : undefined
+  const resultVal = tryStaticResultCommand(cmd, staticCtx, {
+    ifdefined: ifdefinedLookup,
+    ifdefinedName,
+  })
+  if (resultVal !== undefined) {
+    setScalar(env, 'result', { kind: 'int', value: resultVal, origin: 'literal' })
+    return true
   }
 
   return false
@@ -703,7 +775,7 @@ function applyCommandOutputEffects(cmd: string, tokens: Token[], env: Env): bool
   return applied
 }
 
-function processLine(env: Env, line: string, lineNum: number): void {
+function processLine(env: Env, line: string, lineNum: number, knownLabels?: ReadonlySet<string>): void {
   const tokens = tokenizeLine(line, lineNum)
   if (tokens.length === 0) return
 
@@ -718,13 +790,23 @@ function processLine(env: Env, line: string, lineNum: number): void {
 
   if (cmd === 'strdim' && tokens[offset + 1]?.kind === 'identifier') {
     const size = evalIntExpr(tokens, offset + 2, env) ?? 0
-    env.set(tokens[offset + 1].text.toLowerCase(), { kind: 'array', size, elements: new Map() })
+    env.set(tokens[offset + 1].text.toLowerCase(), {
+      kind: 'array',
+      size,
+      elements: new Map(),
+      elementKind: 'str',
+    })
     return
   }
 
   if (cmd === 'intdim' && tokens[offset + 1]?.kind === 'identifier') {
     const size = evalIntExpr(tokens, offset + 2, env) ?? 0
-    env.set(tokens[offset + 1].text.toLowerCase(), { kind: 'array', size, elements: new Map() })
+    env.set(tokens[offset + 1].text.toLowerCase(), {
+      kind: 'array',
+      size,
+      elements: new Map(),
+      elementKind: 'int',
+    })
     return
   }
 
@@ -768,7 +850,7 @@ function processLine(env: Env, line: string, lineNum: number): void {
   }
 
   if (cmd === 'strconcat' && tokens[offset + 1]?.kind === 'identifier') {
-    if (applyStaticCommandEffects(cmd, tokens, offset, env)) return
+    if (applyStaticCommandEffects(cmd, tokens, offset, env, knownLabels)) return
     const dest = tokens[offset + 1].text
     const operands: RuntimeScalar[] = []
     const existing = env.get(dest.toLowerCase())
@@ -779,7 +861,7 @@ function processLine(env: Env, line: string, lineNum: number): void {
     return
   }
 
-  if (applyStaticCommandEffects(cmd, tokens, offset, env)) return
+  if (applyStaticCommandEffects(cmd, tokens, offset, env, knownLabels)) return
 
   if (applyWaitReceiveEffects(env, tokens, offset, cmd)) return
 
@@ -1146,6 +1228,7 @@ interface EvalOptions {
   callStack: CallFrame[]
   /** 未確定 if/elseif 行番号（1-based）→ ユーザーが選んだ真偽 */
   branchAssumptions?: Map<number, boolean>
+  knownLabels?: ReadonlySet<string>
 }
 
 interface StmtResult {
@@ -1204,6 +1287,7 @@ function processIncludedContent(env: Env, content: string, opts: EvalOptions): S
     inInclude: true,
     inBlock: false,
     callStack: [],
+    knownLabels: collectLabelNames(lines),
   }
   let i = 0
   while (i < lines.length) {
@@ -1558,7 +1642,7 @@ function processStatement(
     }
   }
 
-  processLine(env, line, lineNum)
+  processLine(env, line, lineNum, opts.knownLabels)
   return { nextIdx: lineIdx }
 }
 
@@ -1604,6 +1688,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   const sendEntries: SendEntry[] = []
   const env = initEnv(options?.macroArgv)
   const labels = collectLabelLineMap(lines)
+  const knownLabels = new Set(labels.keys())
   const evalOpts: EvalOptions = {
     includeResolver: options?.includeResolver,
     includeStack: [],
@@ -1611,6 +1696,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
     sendEntries,
     callStack: [],
     branchAssumptions: options?.branchAssumptions,
+    knownLabels,
   }
 
   let lineIdx = 0

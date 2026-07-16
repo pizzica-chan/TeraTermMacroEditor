@@ -4,7 +4,7 @@ import { checkCommandArgs } from '../src/ttl/argChecker'
 import { evaluateTTL } from '../src/ttl/evaluator'
 import { formatSendPayloadForDisplay } from '../src/ttl/sendText'
 import { findIncludeRefs, computeLoopValues } from '../src/ttl/includeRefs'
-import { computeStrcopySubstring, parseStr2int } from '../src/ttl/staticCommandEval'
+import { computeStrcopySubstring, computeStrcompare, computeStrlen, computeStrscan, parseStr2int } from '../src/ttl/staticCommandEval'
 import { tokenizeLine, stripComments } from '../src/ttl/tokenize'
 import { TTL_COMMANDS } from '../src/ttl/commands'
 import { COMMAND_ARG_SPECS } from '../src/ttl/commandArgs'
@@ -30,6 +30,15 @@ assert(stripComments('; comment\nx = 1').length === 2, 'stripComments keeps line
 console.log('\n=== 2. staticCommandEval ===')
 assert(computeStrcopySubstring('tera term', 6, 4) === 'term', 'strcopy')
 assert(parseStr2int('0x7b') === 123, 'str2int hex')
+assert(computeStrcompare('abc', 'def') === -1, 'strcompare less')
+assert(computeStrcompare('abc', 'abc') === 0, 'strcompare equal')
+assert(computeStrcompare('def', 'abc') === 1, 'strcompare greater')
+
+console.log('\n=== 2b. static result commands ===')
+assert(computeStrlen('abc') === 3, 'strlen ascii bytes')
+assert(computeStrlen('マクロ') === 9, 'strlen utf8 multibyte')
+assert(computeStrscan('tera term', 'term') === 6, 'strscan position')
+assert(computeStrscan('tera term', 'xyz') === 0, 'strscan not found')
 
 console.log('\n=== 3. includeRefs ===')
 const includeSrc = `bbb = ''
@@ -147,6 +156,27 @@ assert(
   'waitrecv sets inputstr substring',
   waitrecvInput,
 )
+
+const strcompareEval = evaluateTTL(
+  `strcompare 'abc' 'def'\nif result = -1 then\nsend 'less'\nendif\nstrcompare 'same' 'same'\nif result = 0 then\nsend 'eq'\nendif\nend`,
+)
+assert(strcompareEval.sendEntries[0]?.payload === 'less', 'strcompare sets result=-1 for if')
+assert(strcompareEval.sendEntries[1]?.payload === 'eq', 'strcompare sets result=0 for if')
+
+const strscanEval = evaluateTTL(`strscan 'tera term' 'term'\nif result = 6 then\nsend 'hit'\nendif\nend`)
+assert(strscanEval.sendEntries[0]?.payload === 'hit', 'strscan sets result position for if')
+
+const strlenEval = evaluateTTL(`strlen 'abc'\nif result = 3 then\nsend 'len'\nendif\nend`)
+assert(strlenEval.sendEntries[0]?.payload === 'len', 'strlen sets byte length in result')
+
+const str2intOk = evaluateTTL(`str2int val '123'\nif result = 1 then\nsend val\nendif\nend`)
+assert(str2intOk.sendEntries[0]?.payload === '123', 'str2int success sets result=1')
+
+const str2intNg = evaluateTTL(`str2int val 'abc'\nif result = 0 then\nsend 'fail'\nendif\nend`)
+assert(str2intNg.sendEntries[0]?.payload === 'fail', 'str2int failure sets result=0')
+
+const ifdefinedEval = evaluateTTL(`x = 1\nifdefined x\nif result = 1 then\nsend 'int'\nendif\nendif\nend`)
+assert(ifdefinedEval.sendEntries[0]?.payload === 'int', 'ifdefined integer type')
 
 const singleLineIfWait = evaluateTTL(`if 1 then wait 'pat'\nend`)
 const slWaitMatch = singleLineIfWait.afterLine.get(1)?.get('matchstr')

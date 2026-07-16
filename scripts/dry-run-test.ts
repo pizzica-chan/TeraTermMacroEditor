@@ -930,5 +930,30 @@ console.log('\n=== 61. loop include location uses binding key ===')
   assert(childSend?.location === `${loopBindingKey}:L1`, 'loop include child location uses loop binding key', childSend?.location)
 }
 
+console.log('\n=== 62. strcompare sets result for branching ===')
+{
+  const state = await runDryRun({
+    source: `command = 'next'\nstrcompare command 'next'\nif result = 0 then\nsend 'match'\nelse\nsend 'nomatch'\nendif\nstrcompare 'abc' 'def'\nif result = -1 then\nsend 'less'\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  assert(sends[0]?.payload === 'match', 'strcompare variable match sets result=0', sends[0]?.payload)
+    assert(sends[1]?.payload === 'less', 'strcompare literal less sets result=-1', sends[1]?.payload)
+}
+
+console.log('\n=== 63. strlen/strscan/str2int/ifdefined result ===')
+{
+  const state = await runDryRun({
+    source: `strscan 'tera term' 'term'\nif result = 6 then\nsend 'scan'\nendif\nstrlen 'abc'\nif result = 3 then\nsend 'len'\nendif\nstr2int n '9'\nif result = 1 then\nsend 'n9'\nendif\nx = 1\nifdefined x\nif result = 1 then\nsend 'int'\nendif\nendif\nstrdim arr 2\nifdefined arr\nif result = 6 then\nsend 'arr'\nendif\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  assert(sends[0]?.payload === 'scan', 'dry run strscan result', sends[0]?.payload)
+  assert(sends[1]?.payload === 'len', 'dry run strlen/strlength result', sends[1]?.payload)
+  assert(sends[2]?.payload === 'n9', 'dry run str2int result', sends[2]?.payload)
+  assert(sends[3]?.payload === 'int', 'dry run ifdefined int', sends[3]?.payload)
+  assert(sends[4]?.payload === 'arr', 'dry run ifdefined str array', sends[4]?.payload)
+}
+
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)
 if (failed > 0) process.exit(1)

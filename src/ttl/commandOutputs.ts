@@ -146,6 +146,8 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
   crc32file: { variables: [{ index: 1, type: 'integer' }], setsResult: true },
   ...resultOnly(
     'strlen',
+    'strlength',
+    'strcompare',
     'strscan',
     'filesearch',
     'foldersearch',

@@ -17,11 +17,17 @@ import {
   resolveLoopIncludeBindingKey,
 } from './includeRefs'
 import {
+  computeStrcompare,
+  computeStrlen,
+  computeStrscan,
   tryStaticIntegerCommand,
+  tryStaticResultCommand,
+  tryStaticStr2intCommand,
   tryStaticStringCommand,
   type StaticValueContext,
 } from './staticCommandEval'
 import { formatSendPayloadForDisplay } from './sendText'
+import { collectLabelNames } from './labels'
 import { RESERVED, stripComments, tokenizeLine, unquoteString, type Token } from './tokenize'
 import {
   buildStringFromOperands,
@@ -29,6 +35,7 @@ import {
   collectWaitPatterns,
   evalGroupedStringExprAt,
   parseWaitPatternAt,
+  createIfdefinedLookup,
   createMacroEnvironment,
   prepareAssignedScalar,
   type MacroEnvironment,
@@ -488,7 +495,13 @@ function createStaticCtx(tokens: Token[], offset: number, env: Env): StaticValue
   }
 }
 
-function applyStaticCommandEffects(cmd: string, tokens: Token[], offset: number, env: Env): boolean {
+function applyStaticCommandEffects(
+  cmd: string,
+  tokens: Token[],
+  offset: number,
+  env: Env,
+  knownLabels: ReadonlySet<string>,
+): boolean {
   const staticCtx = createStaticCtx(tokens, offset, env)
   const strResult = tryStaticStringCommand(cmd, offset, staticCtx)
   if (strResult) {
@@ -509,6 +522,17 @@ function applyStaticCommandEffects(cmd: string, tokens: Token[], offset: number,
       return true
     }
   }
+
+  const str2intResult = tryStaticStr2intCommand(cmd, offset, staticCtx)
+  if (str2intResult) {
+    const destTok = tokens[str2intResult.destIndex]
+    if (destTok?.kind === 'identifier') {
+      setScalar(env, destTok.text, { kind: 'int', value: str2intResult.value, origin: 'literal' })
+      setScalar(env, 'result', { kind: 'int', value: str2intResult.result, origin: 'literal' })
+      return true
+    }
+  }
+
   const intResult = tryStaticIntegerCommand(cmd, offset, staticCtx)
   if (intResult) {
     const destTok = tokens[intResult.destIndex]
@@ -517,6 +541,52 @@ function applyStaticCommandEffects(cmd: string, tokens: Token[], offset: number,
       return true
     }
   }
+
+  const resultOnlyStringCmds = new Set(['strcompare', 'strlen', 'strlength', 'strscan'])
+  if (resultOnlyStringCmds.has(cmd)) {
+    const args = collectStringArgs(tokens, offset + 1, env)
+    if (cmd === 'strcompare' && args.length >= 2) {
+      setScalar(env, 'result', {
+        kind: 'int',
+        value: computeStrcompare(args[0]!, args[1]!),
+        origin: 'literal',
+      })
+      return true
+    }
+    if ((cmd === 'strlen' || cmd === 'strlength') && args.length >= 1) {
+      setScalar(env, 'result', { kind: 'int', value: computeStrlen(args[0]!), origin: 'literal' })
+      return true
+    }
+    if (cmd === 'strscan' && args.length >= 2) {
+      setScalar(env, 'result', {
+        kind: 'int',
+        value: computeStrscan(args[0]!, args[1]!),
+        origin: 'literal',
+      })
+      return true
+    }
+  }
+
+  if (cmd === 'ifdefined') {
+    const nameTok = tokens[offset + 1]
+    if (nameTok?.kind === 'identifier' || nameTok?.kind === 'label') {
+      const resultVal = tryStaticResultCommand(cmd, staticCtx, {
+        ifdefined: createIfdefinedLookup(env, knownLabels),
+        ifdefinedName: nameTok.text,
+      })
+      if (resultVal !== undefined) {
+        setScalar(env, 'result', { kind: 'int', value: resultVal, origin: 'literal' })
+        return true
+      }
+    }
+  }
+
+  const resultVal = tryStaticResultCommand(cmd, staticCtx)
+  if (resultVal !== undefined) {
+    setScalar(env, 'result', { kind: 'int', value: resultVal, origin: 'literal' })
+    return true
+  }
+
   return false
 }
 
@@ -606,6 +676,7 @@ function canUnrollForLoop(start: number, end: number): boolean {
 export class DryRunSession {
   private readonly lines: string[]
   private readonly env: Env
+  private readonly knownLabels: ReadonlySet<string>
   private readonly opts: DryRunOptions
   private stopped = false
   private steps = 0
@@ -618,6 +689,7 @@ export class DryRunSession {
     this.opts = options
     this.lines = stripComments(options.source)
     this.env = createMacroEnvironment(options.macroArgv)
+    this.knownLabels = collectLabelNames(this.lines)
     this.maxSteps = Math.max(this.lines.length * 8, 128)
   }
 
@@ -818,12 +890,22 @@ export class DryRunSession {
   ): Promise<void> {
     if (cmd === 'strdim' && tokens[offset + 1]?.kind === 'identifier') {
       const size = evalIntExpr(tokens, offset + 2, env) ?? 0
-      env.set(tokens[offset + 1].text.toLowerCase(), { kind: 'array', size, elements: new Map() })
+      env.set(tokens[offset + 1].text.toLowerCase(), {
+        kind: 'array',
+        size,
+        elements: new Map(),
+        elementKind: 'str',
+      })
       return
     }
     if (cmd === 'intdim' && tokens[offset + 1]?.kind === 'identifier') {
       const size = evalIntExpr(tokens, offset + 2, env) ?? 0
-      env.set(tokens[offset + 1].text.toLowerCase(), { kind: 'array', size, elements: new Map() })
+      env.set(tokens[offset + 1].text.toLowerCase(), {
+        kind: 'array',
+        size,
+        elements: new Map(),
+        elementKind: 'int',
+      })
       return
     }
 
@@ -864,7 +946,7 @@ export class DryRunSession {
     }
 
     if (cmd === 'strconcat' && tokens[offset + 1]?.kind === 'identifier') {
-      if (applyStaticCommandEffects(cmd, tokens, offset, env)) return
+      if (applyStaticCommandEffects(cmd, tokens, offset, env, this.knownLabels)) return
       const dest = tokens[offset + 1].text
       const operands: RuntimeScalar[] = []
       const existing = env.get(dest.toLowerCase())
@@ -875,7 +957,7 @@ export class DryRunSession {
       return
     }
 
-    if (applyStaticCommandEffects(cmd, tokens, offset, env)) return
+    if (applyStaticCommandEffects(cmd, tokens, offset, env, this.knownLabels)) return
 
     if (cmd === 'recvln') {
       this.pushEvent(buildWaitReceiveEvent(cmd, [], lineNum, execOpts.locationPrefix))
