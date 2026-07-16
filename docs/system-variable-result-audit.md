@@ -9,17 +9,76 @@
 本家 Tera Term では多くのコマンドがシステム変数 `result`（および `matchstr` / `inputstr` 等）を更新する。  
 エディタ側でその更新が漏れている・誤っているパターンを洗い出し、今後の実装優先度の参考にする。
 
-## 実装の仕組み（現状）
+## エディタの基本方針：値と「静的に断定できるか」は別
+
+本家 Tera Term ではコマンド実行後に `result` 等へ**実際の数値**が入る。  
+本エディタの静的解析では、**数値そのもの**と**その値を静的 `if` 条件に使えるか**を分けて扱う。
+
+### `ValueOrigin`（由来）による区別
+
+`evaluator.ts` / `dryRun.ts` の変数環境では、スカラー値に `origin` を付ける。
+
+| `origin` | 意味 | ホバー等の表示 | 静的 `if result=...` |
+|----------|------|----------------|----------------------|
+| `system-default` | システム変数の初期状態（未更新の `result` など） | `valueKind: system-default` | **未確定**（使わない） |
+| `dialog-result` | 実行時依存の副作用（接続・ファイル I/O・未解決の `setsResult` 等） | `valueKind: runtime`、「実行時に決定」 | **未確定**（使わない） |
+| `literal` | リテラルや既知の文字列から**静的に計算した確定値** | `valueKind: known`、数値をそのまま表示 | **確定**（使える） |
+| `user-input` / `match-received` | 入力・受信文字列（主に `inputstr` / `matchstr`） | `valueKind: runtime` | 文字列条件は別経路 |
+
+`evalConditionTokenValue` が境界を守る。`system-default` と `dialog-result` の整数は `if` 条件評価で **`undefined`（未確定）** として扱われ、  
+**`result` の初期値 `0` で `if result = 0` を静的に真にしない**（`.cursor/rules/conditional-if-end-static.mdc` 参照）。
+
+```ts
+// evaluator.ts — 要約
+if (v?.kind === 'int' && (v.origin === 'system-default' || v.origin === 'dialog-result')) {
+  return undefined  // 静的 if では未確定
+}
+```
+
+### 評価の流れ（コマンド実行時）
+
+```
+コマンド行を評価
+  │
+  ├─ applyStaticCommandEffects
+  │     引数がリテラル / env 上の既知文字列なら実値を計算
+  │     → result 等に origin: 'literal' で設定（静的確定）
+  │
+  ├─ （静的計算できなければ）applyCommandOutputEffects
+  │     commandOutputs の setsResult 等
+  │     → result=0 等のプレースホルダ + origin: 'dialog-result'（静的未確定）
+  │
+  └─ dryRun の個別ハンドラ（wait / yesnobox 等）
+        ドライラン用のシミュレーション値
+```
+
+**ポイント:** 実行時依存コマンドで見える `result=0` は「本家でも 0 になる」という意味ではなく、  
+**「ここでは静的に判断できない」という印（プレースホルダ + `dialog-result`）** である。  
+ホバーでは数値 `0` ではなく「実行時に決定されます」系の表示になる。
+
+### (A) 対応の位置づけ
+
+(A) で直したのは「全部 `0` にする」ことではない。
+
+- **静的に計算できる**（例: `strlen 'abc'`, `strcompare a b` で `a`/`b` が既知）  
+  → 本家と同じ実値を入れ、`origin: 'literal'` とする  
+- **静的に計算できない**（例: `strlen basenum` で `basenum` が実行時まで不明）  
+  → 従来どおり `applyCommandOutputEffects` へ落ち、`dialog-result` のまま未確定
+
+```ttl
+strlen 'マクロ'          ; result = 9, origin: literal → if result = 9 は静的確定
+strlen basenum           ; result = 0, origin: dialog-result → if result = ... は未確定
+strmatch pattern text    ; result = 0, origin: dialog-result → 正規表現は実行時依存
+```
+
+## 実装の仕組み（経路一覧）
 
 | 経路 | 挙動 |
 |------|------|
-| `tryStaticResultCommand` / `applyStaticCommandEffects` | リテラル等が解決できるとき実値を計算（`strcompare` 等） |
-| `applyCommandOutputEffects` | `commandOutputs.ts` の `setsResult` コマンドで **`result=0` プレースホルダ** |
-| `dryRun.ts` の個別ハンドラ | `wait` 系・ダイアログ等を特別扱い |
-| `FLOW_LOG_COMMANDS` | `connect` 等はログのみで **`result` 未更新** |
-
-`evalConditionTokenValue` は `result` の `system-default` / `dialog-result` 起源を未確定扱い。  
-`origin: 'literal'` で設定された `result` は静的 `if` 条件で利用可能。
+| `tryStaticResultCommand` / `applyStaticCommandEffects` | 引数解決できれば実値を計算し **`origin: 'literal'`** |
+| `applyCommandOutputEffects` | `setsResult` コマンドで **`result=0` + `origin: 'dialog-result'`**（静的未確定） |
+| `dryRun.ts` の個別ハンドラ | `wait` 系・ダイアログ等を特別扱い（多くは `dialog-result` または簡略シミュレーション） |
+| `FLOW_LOG_COMMANDS` | `connect` 等はログのみで **`result` 未更新**（`system-default` のまま） |
 
 ---
 
@@ -38,6 +97,7 @@
 
 実装: `src/ttl/staticCommandEval.ts` の `tryStaticResultCommand` / `tryStaticStr2intCommand`、  
 `evaluator.ts` / `dryRun.ts` の `applyStaticCommandEffects`。  
+成功時は **`origin: 'literal'`**（静的確定）。引数未解決時は静的経路をスキップし、下流の `dialog-result` 扱いへ。  
 `ifdefined` のラベル判定には `EvalOptions.knownLabels` を使用。
 
 ### 公式参照
@@ -51,10 +111,11 @@
 ### 代表例
 
 ```ttl
-strscan 'tera term' 'term'    ; result = 6
-strlen basenum                ; result = バイト長
-str2int val '123'             ; val=123, result=1
-ifdefined data                ; result = 型コード
+strscan 'tera term' 'term'    ; 静的: result = 6 (literal)
+strlen 'abc'                  ; 静的: result = 3 (literal)
+strlen basenum                ; 未確定: basenum が不明なら dialog-result
+str2int val '123'             ; 静的: val=123, result=1 (literal)
+ifdefined data                ; 静的: result = 型コード (literal、env/ラベルが既知のとき)
 ```
 
 ### `str2int` の注意（対応済）
@@ -63,9 +124,10 @@ ifdefined data                ; result = 型コード
 
 ---
 
-## (B) `commandOutputs` に `setsResult` あり → 実値なしプレースホルダ
+## (B) `commandOutputs` に `setsResult` あり → 実行時依存（静的未確定）
 
-登録はあるが、ドライラン/静的評価では **`applyCommandOutputEffects` により `result=0` 固定**（意味は本家と不一致）。
+登録はあるが、引数や実行環境が解決できないときは **`applyCommandOutputEffects` により `result=0` + `origin: 'dialog-result'`**。  
+数値 `0` はプレースホルダであり、**静的 `if` では未確定**（本家の実際の戻り値とは一致しない場合がある）。
 
 ### 文字列・ファイル・UI
 
@@ -92,13 +154,13 @@ ifdefined data                ; result = 型コード
 
 ---
 
-## (C) `commandOutputs` 未登録 → `result` が更新されない
+## (C) `commandOutputs` 未登録 → `result` が更新されない（初期値のまま）
 
-| コマンド | 本家の `result` |
-|----------|-----------------|
-| **connect** / **cygconnect** | 0=未リンク, 1=リンクのみ, 2=接続済み |
-| **testlink** | 同上 |
-| **exec** | 起動成否・終了コード（第3引数 `wait` 依存） |
+| コマンド | 本家の `result` | エディタ |
+|----------|-----------------|----------|
+| **connect** / **cygconnect** | 0=未リンク, 1=リンクのみ, 2=接続済み | 未更新 → **`system-default`（静的未確定）** |
+| **testlink** | 同上 | 同上 |
+| **exec** | 起動成否・終了コード（第3引数 `wait` 依存） | 未更新 → **`system-default`** |
 
 `connect` は `dryRun.ts` の `FLOW_LOG_COMMANDS` でログのみ。`result` は未設定。
 
@@ -119,9 +181,11 @@ const FLOW_LOG_COMMANDS = new Set(['connect', 'disconnect', 'pause', 'mpause', '
 
 | コマンド | 本家 | エディタ |
 |----------|------|----------|
-| **wait** / **waitln** / **waitregex** / **wait4all** | 0=タイムアウト, 1〜n=パターン番号 | **常に `result=1`** |
-| **strmatch** | 正規表現マッチ + `matchstr` 等 | `result=0`, `matchstr` 空 |
-| ファイル I/O 全般 | 実ファイル操作 | 実行環境依存のプレースホルダ |
+| **wait** / **waitln** / **waitregex** / **wait4all** | 0=タイムアウト, 1〜n=パターン番号 | **`result=1` + `origin: 'literal'`**（常に成功想定の簡略シミュレーション） |
+| **strmatch** | 正規表現マッチ + `matchstr` 等 | `result=0` + `dialog-result`, `matchstr` 空 |
+| ファイル I/O 全般 | 実ファイル操作 | `dialog-result` プレースホルダ |
+
+`wait` の `literal` 付与は「静的に判断可能」とみなす**意図的例外**。本家の 0 / 1..n は再現していない。
 
 ドライランの `wait` 簡略化は `scripts/dry-run-test.ts` でも前提化されている。
 
@@ -159,7 +223,8 @@ const FLOW_LOG_COMMANDS = new Set(['connect', 'disconnect', 'pause', 'mpause', '
 |----------|------|
 | `src/ttl/commandOutputs.ts` | コマンドごとの出力・`setsResult` 定義 |
 | `src/ttl/staticCommandEval.ts` | 静的計算（`tryStaticResultCommand` 等） |
-| `src/ttl/evaluator.ts` | 送信データ・静的環境の評価 |
+| `src/ttl/evaluator.ts` | 送信データ・静的環境の評価、`evalConditionTokenValue` |
+| `.cursor/rules/conditional-if-end-static.mdc` | 未確定 `result` を静的 `if` に使わない不変条件 |
 | `src/ttl/dryRun.ts` | ドライラン実行 |
 | `scripts/smoke-test.ts` | `strcompare` 等の回帰 |
 | `scripts/dry-run-test.ts` | ドライラン回帰 |
@@ -173,3 +238,4 @@ const FLOW_LOG_COMMANDS = new Set(['connect', 'disconnect', 'pause', 'mpause', '
 | 2026-07-16 | 初版（調査メモ作成） |
 | 2026-07-16 | `strcompare` を本家仕様に合わせて実装（`computeStrcompare` / テスト追加） |
 | 2026-07-16 | (A) 全項目対応: `strlen`/`strlength`/`strscan`/`str2int`/`ifdefined` の静的 `result` 計算 |
+| 2026-07-16 | `ValueOrigin` と静的確定/未確定の方針を追記（`literal` vs `dialog-result`） |
