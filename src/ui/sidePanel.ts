@@ -2,7 +2,11 @@ import type { AnalysisResult, VariableInfo } from '../ttl/analyzer'
 import type { IndeterminateIfBranch } from '../ttl/branchAssumptions'
 import type { SendEntry } from '../ttl/evaluator'
 import { buildDryRunPlainTextForCopy, formatDryRunEventMessage, type DryRunEvent, type DryRunState } from '../ttl/dryRun'
-import { buildSendPlainTextForCopy, countUnresolvedSendEntries } from '../ttl/sendText'
+import {
+  buildSendPlainTextForCopy,
+  countUnresolvedSendEntries,
+  renderSendPayloadHtml,
+} from '../ttl/sendText'
 import type { FlowchartModel } from '../ttl/flowchart'
 import type { AnalysisLimitations } from '../ttl/analysisLimitations'
 import { mountFlowchart } from './flowchart/mountFlowchart'
@@ -145,7 +149,7 @@ export function createSidePanel(
 
   const diagSection = document.createElement('div')
   diagSection.className = 'diagnostics-section'
-  diagSection.innerHTML = `<h2>診断</h2><div class="diagnostics-list" id="diagnostics-list"></div>`
+  diagSection.innerHTML = `<h2>診断</h2><div class="diagnostics-summary" id="diagnostics-summary" hidden></div><div class="diagnostics-list" id="diagnostics-list"></div>`
 
   const sendCopyBtn = header.querySelector<HTMLButtonElement>('#send-copy-btn')!
   const dryRunCopyBtn = header.querySelector<HTMLButtonElement>('#dryrun-copy-btn')!
@@ -410,7 +414,7 @@ export function createSidePanel(
       !event.maskPayload && event.payload !== undefined ? event.payload : undefined
   const payload =
       displayPayload !== undefined
-        ? `<div class="dryrun-payload">${escapeHtml(displayPayload)}${event.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>`
+        ? `<div class="dryrun-payload">${renderSendPayloadHtml(displayPayload)}${event.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>`
         : ''
     return `
       <div class="dryrun-item ${kindClass}">
@@ -549,11 +553,15 @@ export function createSidePanel(
     const errors = analysis.diagnostics.filter((d) => d.severity === 'error').length
     const warnings = analysis.diagnostics.filter((d) => d.severity === 'warning').length
     const diagEl = container.querySelector('#diagnostics-list')!
+    const summaryEl = container.querySelector<HTMLElement>('#diagnostics-summary')!
     if (analysis.diagnostics.length === 0) {
+      summaryEl.hidden = true
+      summaryEl.innerHTML = ''
       diagEl.innerHTML = '<div class="empty-state success">問題は見つかりませんでした</div>'
     } else {
-      const summary = `<div class="diag-summary">${errors > 0 ? `<span class="err-count">${errors} エラー</span>` : ''}${warnings > 0 ? `<span class="warn-count">${warnings} 警告</span>` : ''}</div>`
-      diagEl.innerHTML = summary + analysis.diagnostics.map(renderDiagnostic).join('')
+      summaryEl.hidden = false
+      summaryEl.innerHTML = `${errors > 0 ? `<span class="err-count">${errors} エラー</span>` : ''}${warnings > 0 ? `<span class="warn-count">${warnings} 警告</span>` : ''}`
+      diagEl.innerHTML = analysis.diagnostics.map(renderDiagnostic).join('')
       bindDiagnosticGotoHandlers()
     }
   }
@@ -610,7 +618,7 @@ export function createSidePanel(
   }
 
   function renderSend(entry: SendEntry, index: number): string {
-    const payload = entry.payload || '（空）'
+    const payloadHtml = entry.payload ? renderSendPayloadHtml(entry.payload) : '（空）'
     const newlineBadge = entry.addsNewline ? '<span class="badge send-nl">+改行</span>' : ''
     const unresolved = entry.unresolved ? '<span class="badge unused">未解決</span>' : ''
     const loopBadge = entry.loopInfo
@@ -630,7 +638,7 @@ export function createSidePanel(
           ${loopBadge}
           ${gotoBtn}
         </div>
-        <div class="send-payload"${payloadTitle}>${escapeHtml(payload)}${entry.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>
+        <div class="send-payload"${payloadTitle}>${payloadHtml}${entry.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>
         <div class="send-meta">
           ${newlineBadge}${unresolved}
         </div>

@@ -1,6 +1,8 @@
 /** 主要モジュールのスモークテスト（実行時エラー検出用） */
 import { analyzeTTL } from '../src/ttl/analyzer'
+import { checkCommandArgs } from '../src/ttl/argChecker'
 import { evaluateTTL } from '../src/ttl/evaluator'
+import { formatSendPayloadForDisplay } from '../src/ttl/sendText'
 import { findIncludeRefs, computeLoopValues } from '../src/ttl/includeRefs'
 import { computeStrcopySubstring, parseStr2int } from '../src/ttl/staticCommandEval'
 import { tokenizeLine, stripComments } from '../src/ttl/tokenize'
@@ -81,6 +83,42 @@ assert(
   waitMatchstr,
 )
 
+const sendCtrlEval = evaluateTTL(`send #3\nsend 'A'#13'B'\nend`)
+assert(sendCtrlEval.sendEntries[0]?.payload === String.fromCharCode(3), 'send #3 payload', sendCtrlEval.sendEntries[0]?.payload)
+assert(
+  sendCtrlEval.sendEntries[1]?.payload === 'A' + String.fromCharCode(13) + 'B',
+  'send literal with #13 payload',
+  sendCtrlEval.sendEntries[1]?.payload,
+)
+assert(formatSendPayloadForDisplay(String.fromCharCode(3)) === '#3', 'display control #3')
+assert(
+  formatSendPayloadForDisplay('A' + String.fromCharCode(13) + 'B') === 'A#13B',
+  'display mixed literal and control',
+)
+
+const assignCtrlEval = evaluateTTL(`dddd = 'aaaaa'#13#10'bbbbb'\nend`)
+const dddd = assignCtrlEval.afterLine.get(1)?.get('dddd')
+assert(
+  dddd?.kind === 'str' &&
+    dddd.value === 'aaaaa' + String.fromCharCode(13, 10) + 'bbbbb',
+  'assignment joins #13#10 literals',
+  dddd,
+)
+
+const strconcatCtrlEval = evaluateTTL(`msg = 'a'\nstrconcat msg 'b'#13'c'\nend`)
+const msg = strconcatCtrlEval.afterLine.get(2)?.get('msg')
+assert(
+  msg?.kind === 'str' && msg.value === 'ab' + String.fromCharCode(13) + 'c',
+  'strconcat joins #13 literals',
+  msg,
+)
+
+const intAssignEval = evaluateTTL(`n = 1\nx = n+1\ny = n'0'\nend`)
+const xVal = intAssignEval.afterLine.get(2)?.get('x')
+assert(xVal?.kind === 'int' && xVal.value === 2, 'x = n+1 stays integer', xVal)
+const yVal = intAssignEval.afterLine.get(3)?.get('y')
+assert(yVal?.kind === 'str' && yVal.value === '10', 'y = n adjacent string literal', yVal)
+
 const waitResultEval = evaluateTTL(`wait 'x'\nif result=1\nsend 'ok'\nendif\nend`)
 assert(
   waitResultEval.sendEntries[0]?.payload === 'ok',
@@ -129,6 +167,20 @@ assert(
 console.log('\n=== 6. command registry ===')
 const missingSpecs = [...TTL_COMMANDS].filter((c) => !(c in COMMAND_ARG_SPECS))
 assert(missingSpecs.length === 0, 'all TTL_COMMANDS have arg specs', missingSpecs)
+
+console.log('\n=== 6b. inputbox #NN 連結引数 ===')
+const inputboxCtrl = analyzeTTL(`inputbox 'aaaaa'#13#10'bbbbb' ''\nend`)
+assert(
+  !inputboxCtrl.diagnostics.some((d) => d.message.includes('引数が多すぎます')),
+  'inputbox with #13#10 in message is not too many args',
+  inputboxCtrl.diagnostics,
+)
+const inputboxLine = stripComments(`inputbox 'aaaaa'#13#10'bbbbb' ''`)[0]!
+const inputboxTokens = tokenizeLine(inputboxLine, 1)
+assert(
+  checkCommandArgs('inputbox', inputboxTokens, 1, 1).length === 0,
+  'inputbox arg count accepts grouped string',
+)
 
 console.log('\n=== 7. SAMPLE_MACRO (editor default) ===')
 const sample = `; Tera Term マクロ サンプル

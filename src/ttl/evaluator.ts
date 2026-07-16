@@ -8,6 +8,13 @@ import {
   resolveLoopIncludeBindingKey,
 } from './includeRefs'
 import { findAssignmentIndex } from './argChecker'
+import {
+  isGroupedStringExprStart,
+  resolveStaticControlPart,
+  resolveStaticGroupedString,
+  resolveStaticLiteralPart,
+  tokenGapBefore,
+} from './argOperands'
 import { getCommandOutputEffect } from './commandOutputs'
 import {
   tryStaticIntegerCommand,
@@ -221,11 +228,28 @@ function evalSendOperand(
   return null
 }
 
-function tokenGapBefore(tokens: Token[], i: number): boolean {
-  const prev = tokens[i - 1]
-  const cur = tokens[i]
-  if (!prev || !cur) return false
-  return cur.column > prev.column + prev.text.length
+/** 隣接連結される文字列式（'a'#13'b' 等）を 1 つの文字列として評価 */
+export function evalGroupedStringExprAt(
+  tokens: Token[],
+  start: number,
+  env: Env,
+): { scalar: RuntimeScalar & { kind: 'str' }; next: number } | null {
+  const operands: RuntimeScalar[] = []
+  let i = start
+  let consumed = false
+
+  while (i < tokens.length) {
+    if (consumed && tokenGapBefore(tokens, i)) break
+    const operand = evalSendOperand(tokens, i, env)
+    if (!operand?.scalar) break
+    if (operand.scalar.kind !== 'str' && operand.scalar.kind !== 'int') break
+    operands.push(operand.scalar)
+    consumed = true
+    i = operand.next
+  }
+
+  if (!consumed) return null
+  return { scalar: buildStringFromOperands(operands), next: i }
 }
 
 /** 1 つの wait 引数パターンを読み取り、消費した次トークン位置を返す */
@@ -565,6 +589,19 @@ function createEvaluatorStaticCtx(tokens: Token[], offset: number, env: Env): St
       if (v?.kind === 'str' && isKnownStringValue(v)) return v.value
       return undefined
     },
+    resolveGroupedString(rel) {
+      return resolveStaticGroupedString(tokens, offset + rel, (tok, i) => {
+        const ctrl = resolveStaticControlPart(tokens, i)
+        if (ctrl !== undefined) return ctrl
+        const lit = resolveStaticLiteralPart(tok)
+        if (lit !== undefined) return lit
+        if (tok.kind === 'identifier') {
+          const v = env.get(tok.text.toLowerCase())
+          if (v?.kind === 'str' && isKnownStringValue(v)) return v.value
+        }
+        return undefined
+      })
+    },
   }
 }
 
@@ -695,12 +732,18 @@ function processLine(env: Env, line: string, lineNum: number): void {
 
   if (assignIdx > offset) {
     const arrayName = isArrayAssignTarget(tokens, assignIdx)
+    const rhsStart = assignIdx + 1
     let scalar: RuntimeScalar | undefined
-    const intVal = evalIntExpr(tokens, assignIdx + 1, env)
-    if (intVal !== undefined) {
-      scalar = { kind: 'int', value: intVal }
+    if (isGroupedStringExprStart(tokens, rhsStart)) {
+      const grouped = evalGroupedStringExprAt(tokens, rhsStart, env)
+      scalar = grouped?.scalar ?? evalTokenValue(tokens[rhsStart], env)
     } else {
-      scalar = evalTokenValue(tokens[assignIdx + 1], env)
+      const intVal = evalIntExpr(tokens, rhsStart, env)
+      if (intVal !== undefined) {
+        scalar = { kind: 'int', value: intVal }
+      } else {
+        scalar = evalTokenValue(tokens[rhsStart], env)
+      }
     }
 
     if (arrayName !== null && scalar) {
@@ -730,10 +773,8 @@ function processLine(env: Env, line: string, lineNum: number): void {
     const operands: RuntimeScalar[] = []
     const existing = env.get(dest.toLowerCase())
     if (existing?.kind === 'str') operands.push(existing)
-    for (let i = offset + 2; i < tokens.length; i++) {
-      const v = evalTokenValue(tokens[i], env)
-      if (v?.kind === 'str' || v?.kind === 'int') operands.push(v)
-    }
+    const grouped = evalGroupedStringExprAt(tokens, offset + 2, env)
+    if (grouped) operands.push(grouped.scalar)
     if (operands.length > 0) setScalar(env, dest, buildStringFromOperands(operands))
     return
   }

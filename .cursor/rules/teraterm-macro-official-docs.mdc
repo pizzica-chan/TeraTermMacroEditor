@@ -1,0 +1,48 @@
+---
+description: TTL の文法・構文・コマンド仕様は Tera Term 公式マニュアル v5 を確認する
+alwaysApply: true
+---
+
+# Tera Term マクロ公式ドキュメントの参照
+
+Tera Term マクロ（TTL）の**文法・構文・コマンド仕様・実行セマンティクス**を調べる・実装する・回答する際は、記憶や推測だけに頼らず、**Tera Term 公式マニュアル v5** を確認する。
+
+## いつ確認するか
+
+次のような場合は、作業前または回答前に公式ドキュメントを読む。
+
+- コマンド名、引数の個数・型、意味、戻り値（`result` 等）
+- 行形式（コマンド行・代入行・ラベル行）、式、演算子、優先順位
+- 変数・配列・型、文字列リテラル、コメント、エンコーディング
+- 制御構文（`if` / `while` / `for` / `do` / `goto` / `include` 等）の公式な挙動
+- エディタの静的解析・ドライランと実際の Tera Term 実行の差分を説明するとき
+
+## 参照先（公式・v5）
+
+このプロジェクトの基準は **Manual 5（英語版）** とする。`src/ttl/commandArgs.ts` も同じ版を参照している。
+
+| 内容 | URL |
+|------|-----|
+| MACRO 目次 | https://teratermproject.github.io/manual/5/en/macro/ |
+| TTL 言語（構文） | https://teratermproject.github.io/manual/5/en/macro/syntax/index.html |
+| コマンド一覧 | https://teratermproject.github.io/manual/5/en/macro/command/ |
+| 個別コマンド | `https://teratermproject.github.io/manual/5/en/macro/command/<command>.html` |
+
+構文の詳細は `syntax/` 配下（例: `lineformats.html`, `types.html`, `expressions.html`）も参照する。
+
+## 確認の手順
+
+1. 上記 URL を `WebFetch` や `WebSearch` で開き、該当ページを読む
+2. 複数コマンドや制御構文が絡む場合は、関連コマンドの個別ページも読む
+3. 公式と本リポジトリの実装が異なる場合は、その差分を明示する
+
+## 優先順位
+
+1. **Tera Term 公式マニュアル v5** … TTL の正しい仕様
+2. **本プロジェクトの実装・テスト・`.cursor/rules/`** … エディタ固有の静的解析・UI の挙動
+3. **`samples/` や会話履歴** … 補助的な例。公式と矛盾する場合は公式を優先
+
+## 注意
+
+- 古い TT4 情報や第三者サイトだけを根拠にしない
+- 本エディタの静的解析（`analyzer.ts` / `evaluator.ts`）や `dryRun.ts` は、実行時 Tera Term と意図的に異なる箇所がある。仕様確認は公式、エディタ挙動はプロジェクト内ルール・テストを併せて確認する

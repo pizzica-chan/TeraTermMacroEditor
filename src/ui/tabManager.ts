@@ -44,6 +44,7 @@ export class TabManager {
   private onBeforeTabLeave?: () => void
   private keepDryRunOnUserSwitch?: () => boolean
   private onTabClosed?: (closedTabId: string) => void
+  private externalChangeTabIds = new Set<string>()
 
   constructor(
     editor: EditorInstance,
@@ -63,6 +64,16 @@ export class TabManager {
 
   setOnTabClosed(fn: (closedTabId: string) => void): void {
     this.onTabClosed = fn
+  }
+
+  setExternalChangePending(tabId: string, pending: boolean): void {
+    if (pending) this.externalChangeTabIds.add(tabId)
+    else this.externalChangeTabIds.delete(tabId)
+    this.renderTabs()
+  }
+
+  hasExternalChangePending(tab: EditorTab): boolean {
+    return this.externalChangeTabIds.has(tab.id)
   }
 
   private userSwitchOptions(): { keepDryRun: true } | undefined {
@@ -119,7 +130,11 @@ export class TabManager {
 
       const title = document.createElement('span')
       title.className = 'tab-title'
-      title.textContent = (this.isTabDirty(tab) ? '• ' : '') + tab.fileName
+      const markers = [
+        this.isTabDirty(tab) ? '•' : '',
+        this.hasExternalChangePending(tab) ? '↻' : '',
+      ].filter(Boolean)
+      title.textContent = (markers.length > 0 ? `${markers.join(' ')} ` : '') + tab.fileName
 
       const closeBtn = document.createElement('button')
       closeBtn.className = 'tab-close'
@@ -231,6 +246,7 @@ export class TabManager {
     const idx = this.tabs.findIndex((t) => t.id === id)
     this.tabs.splice(idx, 1)
     this.onTabClosed?.(id)
+    this.externalChangeTabIds.delete(id)
     this.clearBindingsToTab(id)
 
     if (this.activeId === id) {

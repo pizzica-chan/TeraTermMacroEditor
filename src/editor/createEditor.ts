@@ -1,6 +1,6 @@
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, dropCursor, rectangularSelection, crosshairCursor } from '@codemirror/view'
 import { EditorState, Compartment, type Extension } from '@codemirror/state'
-import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo } from '@codemirror/commands'
+import { defaultKeymap, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth } from '@codemirror/commands'
 import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
 import { acceptCompletion, completionKeymap, completionStatus, startCompletion } from '@codemirror/autocomplete'
@@ -17,6 +17,7 @@ import {
   type BranchAssumptionDecoration,
 } from './branchAssumptionDecorations'
 import { includeGraphRevisionExtension, bumpIncludeGraphRevision, bumpAnalysisCacheRevision } from '../ttl/analysisContext'
+import { createEditorHistoryExtension, PROGRAM_REPLACE_USER_EVENT } from './editorHistory'
 
 const SAMPLE_MACRO = `; Tera Term マクロ サンプル
 ; 自動ログインの例
@@ -91,7 +92,7 @@ function buildExtensions(onDocChange: (text: string) => void): Extension[] {
     dropCursor(),
     rectangularSelection(),
     crosshairCursor(),
-    history(),
+    createEditorHistoryExtension(),
     foldGutter(),
     indentOnInput(),
     bracketMatching(),
@@ -195,8 +196,11 @@ export function createEditor(parent: HTMLElement, initialText = SAMPLE_MACRO): E
     },
     getValue: () => view.state.doc.toString(),
     setValue(text: string) {
+      const current = view.state.doc.toString()
+      if (text === current) return
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: text },
+        userEvent: PROGRAM_REPLACE_USER_EVENT,
       })
     },
     getState: () => view.state,
@@ -206,8 +210,8 @@ export function createEditor(parent: HTMLElement, initialText = SAMPLE_MACRO): E
     createState,
     undo: () => undo(view),
     redo: () => redo(view),
-    canUndo: () => true,
-    canRedo: () => true,
+    canUndo: () => undoDepth(view.state) > 0,
+    canRedo: () => redoDepth(view.state) > 0,
     focus: () => view.focus(),
     onChange(callback) {
       changeCallback = callback

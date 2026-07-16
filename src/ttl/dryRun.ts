@@ -1,5 +1,13 @@
 import type { IncludeResolver } from './analyzer'
 import { findAssignmentIndex } from './argChecker'
+import {
+  consumeOperand,
+  isGroupedStringExprStart,
+  resolveStaticControlPart,
+  resolveStaticGroupedString,
+  resolveStaticLiteralPart,
+  tokenGapBefore,
+} from './argOperands'
 import { getCommandOutputEffect } from './commandOutputs'
 import {
   extractIncludeArgText,
@@ -13,11 +21,13 @@ import {
   tryStaticStringCommand,
   type StaticValueContext,
 } from './staticCommandEval'
+import { formatSendPayloadForDisplay } from './sendText'
 import { RESERVED, stripComments, tokenizeLine, unquoteString, type Token } from './tokenize'
 import {
   buildStringFromOperands,
   collectSendPayload,
   collectWaitPatterns,
+  evalGroupedStringExprAt,
   parseWaitPatternAt,
   createMacroEnvironment,
   prepareAssignedScalar,
@@ -81,7 +91,7 @@ export function formatDryRunEventMessage(event: DryRunEvent): string {
 export function formatDryRunEventPayload(event: DryRunEvent): string | undefined {
   if (event.maskPayload) return undefined
   if (event.payload === undefined) return undefined
-  const text = event.payload
+  const text = formatSendPayloadForDisplay(event.payload)
   return event.addsNewline ? `${text} ↵` : text
 }
 
@@ -359,10 +369,30 @@ function resolveStringToken(token: Token | undefined, env: Env): string {
   return token.text
 }
 
+function resolveOperandSlice(tokens: Token[], i: number, env: Env): string {
+  const tok = tokens[i]
+  if (tok?.text === '#' && tokens[i + 1]?.kind === 'number') {
+    return String.fromCharCode(Number(tokens[i + 1]!.text))
+  }
+  return resolveStringToken(tok, env)
+}
+
 function collectStringArgs(tokens: Token[], start: number, env: Env): string[] {
   const args: string[] = []
-  for (let i = start; i < tokens.length; i++) {
-    args.push(resolveStringToken(tokens[i], env))
+  let i = start
+  while (i < tokens.length) {
+    const parts: string[] = []
+    let consumed = false
+    while (i < tokens.length) {
+      if (consumed && tokenGapBefore(tokens, i)) break
+      const next = consumeOperand(tokens, i)
+      if (next === null) break
+      parts.push(resolveOperandSlice(tokens, i, env))
+      consumed = true
+      i = next
+    }
+    if (!consumed) break
+    args.push(parts.join(''))
   }
   return args
 }
@@ -441,6 +471,19 @@ function createStaticCtx(tokens: Token[], offset: number, env: Env): StaticValue
       const v = env.get(tok.text.toLowerCase())
       if (v?.kind === 'str' && isKnownStringValue(v)) return v.value
       return undefined
+    },
+    resolveGroupedString(rel) {
+      return resolveStaticGroupedString(tokens, offset + rel, (tok, i) => {
+        const ctrl = resolveStaticControlPart(tokens, i)
+        if (ctrl !== undefined) return ctrl
+        const lit = resolveStaticLiteralPart(tok)
+        if (lit !== undefined) return lit
+        if (tok.kind === 'identifier') {
+          const v = env.get(tok.text.toLowerCase())
+          if (v?.kind === 'str' && isKnownStringValue(v)) return v.value
+        }
+        return undefined
+      })
     },
   }
 }
@@ -787,12 +830,18 @@ export class DryRunSession {
     const assignIdx = findAssignmentIndex(tokens, offset)
     if (assignIdx > offset) {
       const arrayName = isArrayAssignTarget(tokens, assignIdx)
+      const rhsStart = assignIdx + 1
       let scalar: RuntimeScalar | undefined
-      const intVal = evalIntExpr(tokens, assignIdx + 1, env)
-      if (intVal !== undefined) {
-        scalar = { kind: 'int', value: intVal }
+      if (isGroupedStringExprStart(tokens, rhsStart)) {
+        const grouped = evalGroupedStringExprAt(tokens, rhsStart, env)
+        scalar = grouped?.scalar ?? evalTokenValue(tokens[rhsStart], env)
       } else {
-        scalar = evalTokenValue(tokens[assignIdx + 1], env)
+        const intVal = evalIntExpr(tokens, rhsStart, env)
+        if (intVal !== undefined) {
+          scalar = { kind: 'int', value: intVal }
+        } else {
+          scalar = evalTokenValue(tokens[rhsStart], env)
+        }
       }
       if (arrayName !== null && scalar) {
         const indexTok = tokens[assignIdx - 2]
@@ -820,10 +869,8 @@ export class DryRunSession {
       const operands: RuntimeScalar[] = []
       const existing = env.get(dest.toLowerCase())
       if (existing?.kind === 'str') operands.push(existing)
-      for (let i = offset + 2; i < tokens.length; i++) {
-        const v = evalTokenValue(tokens[i], env)
-        if (v?.kind === 'str' || v?.kind === 'int') operands.push(v)
-      }
+      const grouped = evalGroupedStringExprAt(tokens, offset + 2, env)
+      if (grouped) operands.push(grouped.scalar)
       if (operands.length > 0) setScalar(env, dest, buildStringFromOperands(operands))
       return
     }

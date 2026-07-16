@@ -266,6 +266,57 @@ body {
   overflow: hidden;
 }
 
+.file-external-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-secondary));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-color));
+}
+
+.file-external-banner[hidden] {
+  display: none !important;
+}
+
+.file-external-banner-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-external-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.file-external-banner-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.file-external-banner-btn:hover {
+  background: var(--bg-tertiary);
+}
+
+.file-external-banner-btn.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.file-external-banner-btn.primary:hover {
+  filter: brightness(1.05);
+}
+
 .editor-pane {
   flex: 1;
   display: flex;
@@ -654,6 +705,17 @@ body {
 .send-nl-mark {
   color: var(--text-secondary);
   margin-left: 2px;
+}
+
+.send-ctrl {
+  display: inline-block;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  vertical-align: baseline;
 }
 
 .send-meta {
@@ -1146,6 +1208,7 @@ body {
 .diagnostics-section {
   border-top: 1px solid var(--border-color);
   padding: 12px 14px;
+  flex-shrink: 0;
 }
 
 .diagnostics-section h2 {
@@ -1157,17 +1220,20 @@ body {
   margin-bottom: 8px;
 }
 
-.diagnostics-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.diag-summary {
+.diagnostics-summary {
   display: flex;
   gap: 8px;
   margin-bottom: 6px;
   font-size: 11px;
+}
+
+.diagnostics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 5.75rem; /* 約3件分（1行メッセージ想定） */
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .err-count {

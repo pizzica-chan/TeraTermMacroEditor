@@ -1,3 +1,4 @@
+import { countGroupedArgs } from './argOperands'
 import type { Token } from './tokenize'
 import { getCommandArgSpec } from './commandArgs'
 
@@ -49,29 +50,6 @@ export function isAssignmentLine(tokens: Token[]): boolean {
   )
 }
 
-function countAtomicArgs(tokens: Token[]): number {
-  let count = 0
-  let i = 0
-  while (i < tokens.length) {
-    const tok = tokens[i]!
-    if (tok.kind === 'string' || tok.kind === 'number' || tok.kind === 'label') {
-      count++
-      i++
-    } else if (tok.kind === 'identifier') {
-      if (tokens[i + 1]?.text === '[' && tokens[i + 3]?.text === ']') {
-        count++
-        i += 4
-      } else {
-        count++
-        i++
-      }
-    } else {
-      i++
-    }
-  }
-  return count
-}
-
 /** コマンドの引数個数を数える */
 export function countCommandArgs(cmd: string, tokens: Token[]): number {
   const rest = tokens.slice(1)
@@ -94,7 +72,7 @@ export function countCommandArgs(cmd: string, tokens: Token[]): number {
     return 3
   }
 
-  return countAtomicArgs(rest)
+  return countGroupedArgs(rest)
 }
 
 function formatArgRange(spec: { min: number; max: number | null }): string {

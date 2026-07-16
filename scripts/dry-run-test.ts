@@ -77,6 +77,14 @@ console.log('\n=== 4. inputbox / passwordbox ===')
   const dialog = eventsOfKind(pwState.events, 'dialog')[0]
   assert(dialog?.message.includes('入力済み'), 'password not logged in plain text', dialog)
   assert(!dialog?.message.includes('secret'), 'password hidden', dialog)
+
+  const ctrlState = await runDryRun({
+    source: `inputbox 'aaaaa'#13#10'bbbbb' ''\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: 'x' }]),
+  })
+  const ctrlDialog = eventsOfKind(ctrlState.events, 'dialog')[0]
+  const expectedMsg = 'aaaaa' + String.fromCharCode(13, 10) + 'bbbbb'
+  assert(ctrlDialog?.detail === expectedMsg, 'inputbox message joins #13#10 literals', ctrlDialog?.detail)
 }
 
 console.log('\n=== 5. call / return / goto ===')

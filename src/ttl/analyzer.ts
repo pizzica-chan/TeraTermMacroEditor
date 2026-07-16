@@ -4,6 +4,12 @@ import {
   isSystemVariable,
 } from './commands'
 import { checkCommandArgs, findAssignmentIndex } from './argChecker'
+import {
+  isGroupedStringExprStart,
+  resolveStaticControlPart,
+  resolveStaticGroupedString,
+  resolveStaticLiteralPart,
+} from './argOperands'
 import { getCommandOutputEffect, getOutputVariableIndices } from './commandOutputs'
 import {
   computeLoopIncludeEffectiveRaw,
@@ -449,16 +455,50 @@ function resolveStaticInteger(
   return undefined
 }
 
+function resolveStaticOperandPart(
+  tokens: Token[],
+  index: number,
+  varMap: Map<string, VariableInfo>,
+): string | undefined {
+  const ctrl = resolveStaticControlPart(tokens, index)
+  if (ctrl !== undefined) return ctrl
+  const lit = resolveStaticLiteralPart(tokens[index])
+  if (lit !== undefined) return lit
+  const tok = tokens[index]
+  if (tok?.kind === 'identifier') {
+    return varMap.get(tok.text.toLowerCase())?.constantString
+  }
+  return undefined
+}
+
 function applyConstantValue(
   info: VariableInfo,
-  valueToken: Token | undefined,
+  tokens: Token[],
+  rhsStart: number,
   varMap: Map<string, VariableInfo>,
 ): void {
+  const valueToken = tokens[rhsStart]
   if (!valueToken) {
     info.constantValue = undefined
     info.constantString = undefined
     return
   }
+
+  if (!isGroupedStringExprStart(tokens, rhsStart)) {
+    info.constantValue = resolveStaticInteger(valueToken, varMap)
+    applyConstantString(info, valueToken, varMap)
+    return
+  }
+
+  const grouped = resolveStaticGroupedString(tokens, rhsStart, (_tok, i) =>
+    resolveStaticOperandPart(tokens, i, varMap),
+  )
+  if (grouped !== undefined) {
+    info.constantString = grouped
+    info.constantValue = undefined
+    return
+  }
+
   info.constantValue = resolveStaticInteger(valueToken, varMap)
   applyConstantString(info, valueToken, varMap)
 }
@@ -514,6 +554,11 @@ function createAnalyzerStaticCtx(
       const tok = tokens[offset + rel]
       if (tok?.kind !== 'identifier') return undefined
       return varMap.get(tok.text.toLowerCase())?.constantString
+    },
+    resolveGroupedString(rel) {
+      return resolveStaticGroupedString(tokens, offset + rel, (_tok, i) =>
+        resolveStaticOperandPart(tokens, i, varMap),
+      )
     },
   }
 }
@@ -1103,13 +1148,13 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
             isSystem: isSystemVariable(assignVarName),
             isUsed: false,
           }, ctx)
-          applyConstantValue(info, valueToken, ctx.varMap)
+          applyConstantValue(info, tokens, assignIdx + 1, ctx.varMap)
           ctx.varMap.set(varKey, info)
         } else {
           if (existing.type === 'unknown' && effectiveType !== 'unknown') {
             existing.type = effectiveType
           }
-          applyConstantValue(existing, valueToken, ctx.varMap)
+          applyConstantValue(existing, tokens, assignIdx + 1, ctx.varMap)
         }
       }
     }

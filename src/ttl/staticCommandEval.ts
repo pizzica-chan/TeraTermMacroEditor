@@ -6,6 +6,8 @@ export interface StaticValueContext {
   resolveInt(rel: number): number | undefined
   /** 第 rel 引数の変数に格納済みの文字列（in-place 系コマンド用） */
   resolveInPlaceVar(rel: number): string | undefined
+  /** 第 rel 引数から始まる隣接連結文字列（'a'#13 等） */
+  resolveGroupedString(rel: number): string | undefined
 }
 
 export interface StaticStringResult {
@@ -211,7 +213,7 @@ export function tryStaticStringCommand(
     }
     case 'strconcat': {
       const base = ctx.resolveInPlaceVar(1)
-      const append = ctx.resolveString(2)
+      const append = ctx.resolveGroupedString(2) ?? ctx.resolveString(2)
       const dest = destIdentifier(ctx, offset, 1)
       if (base === undefined || append === undefined || dest === undefined) return undefined
       return { destIndex: dest, value: base + append }
