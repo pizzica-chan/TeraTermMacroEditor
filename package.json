@@ -12,6 +12,7 @@
     "test:conditional-end": "tsx scripts/test-conditional-end-static.ts",
     "test:branch-assumptions": "tsx scripts/test-branch-assumptions.ts",
     "test:history": "tsx scripts/history-test.ts",
+    "test:file-watch": "tsx scripts/file-external-watch-test.ts",
     "test:all": "npm run test && npm run test:regression && npm run test:dry-run && npm run test:flowchart && npm run test:history",
     "test:dry-run": "tsx scripts/dry-run-test.ts",
     "test:flowchart": "tsx scripts/flowchart-test.ts",

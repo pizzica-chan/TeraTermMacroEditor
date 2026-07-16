@@ -44,7 +44,7 @@ import { showGotoLineDialog } from './ui/gotoLineDialog'
 import { setupSidePanelResize } from './ui/sidePanelResize'
 import { DryRunSession, isDryRunMainLocation, type DryRunState } from './ttl/dryRun'
 import { createBrowserDialogAdapter, cancelActiveTtlDialog } from './ui/ttlDialog'
-import { createFileExternalWatcher } from './ui/fileExternalWatch'
+import { createFileExternalWatcher, bytesFingerprint } from './ui/fileExternalWatch'
 import { buildFlowchart } from './ttl/flowchart'
 
 const appSettings = loadAppSettings()
@@ -487,10 +487,18 @@ function reloadTabFromDisk(tab: EditorTab, bytes: Uint8Array): void {
   schedulePersistWorkspaceSession()
 }
 
+const fileWatchDebug = new URLSearchParams(location.search).has('fileWatchDebug')
+
+function tabBaselineKey(tab: EditorTab): string {
+  const { bytes } = tab.docSettings.prepareSave(tab.savedContent)
+  return bytesFingerprint(bytes)
+}
+
 const fileWatcher = createFileExternalWatcher({
   getTabs: () => tabManager.allTabs,
   getActiveTabId: () => tabManager.activeTab?.id ?? null,
   isTabDirty: (tab) => tabManager.isTabDirty(tab),
+  getTabBaselineKey: tabBaselineKey,
   readFileAsBytes,
   onReloadTab: reloadTabFromDisk,
   onPendingChange: (tabId, pending) => tabManager.setExternalChangePending(tabId, pending),
@@ -509,7 +517,7 @@ const fileWatcher = createFileExternalWatcher({
       fileExternalBannerDismissBtn.textContent = '後で'
     }
   },
-})
+}, { debug: fileWatchDebug })
 
 fileExternalBannerReloadBtn.addEventListener('click', () => {
   const tabId = fileExternalBannerEl.dataset.tabId
@@ -525,12 +533,31 @@ fileExternalBannerReloadBtn.addEventListener('click', () => {
       return
     }
   }
-  void fileWatcher.reloadTab(tabId)
+  void fileWatcher.reloadTab(tabId).then((ok) => {
+    if (!ok) alert('ファイルの再読み込みに失敗しました。')
+  })
 })
 
 fileExternalBannerDismissBtn.addEventListener('click', () => {
   const tabId = fileExternalBannerEl.dataset.tabId
   if (tabId) fileWatcher.dismissBanner(tabId)
+})
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') scheduleFileWatchPoll()
+})
+
+let fileWatchFocusPollTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleFileWatchPoll(): void {
+  if (fileWatchFocusPollTimer) clearTimeout(fileWatchFocusPollTimer)
+  fileWatchFocusPollTimer = setTimeout(() => {
+    fileWatchFocusPollTimer = null
+    void fileWatcher.pollNow()
+  }, 200)
+}
+
+window.addEventListener('focus', () => {
+  scheduleFileWatchPoll()
 })
 
 let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -553,6 +580,10 @@ editor.onChange((text) => {
     tabManager.activeTab?.docSettings.markDirty()
   }
   tabManager.notifyContentChanged()
+  const tab = tabManager.activeTab
+  if (tab && tabManager.hasExternalChangePending(tab)) {
+    fileWatcher.refreshBanner()
+  }
   runAnalysis(text)
   updateCursorPosition()
   schedulePersistWorkspaceSession()
@@ -595,13 +626,16 @@ async function openFile(
   bytes: Uint8Array,
   fileName: string,
   fileHandle: FileSystemFileHandle | null,
-  options?: { ifAlreadyOpen?: 'switch' | 'skip' },
+  options?: { ifAlreadyOpen?: 'switch' | 'skip'; sourceFile?: File },
 ) {
   let existing: EditorTab | undefined
   if (fileHandle) {
     for (const tab of tabManager.allTabs) {
       if (!tab.fileHandle) continue
-      if (tab.fileHandle === fileHandle || (await tab.fileHandle.isSameEntry(fileHandle))) {
+      if (
+        tab.fileHandle === fileHandle ||
+        (tab.fileHandle.isSameEntry && (await tab.fileHandle.isSameEntry(fileHandle)))
+      ) {
         existing = tab
         break
       }
@@ -610,6 +644,7 @@ async function openFile(
   if (existing) {
     if (options?.ifAlreadyOpen === 'skip') return
     tabManager.switchTab(existing.id, dryRunKeepOptions())
+    void fileWatcher.pollNow()
     return
   }
 
@@ -628,9 +663,13 @@ async function openFile(
   if (tab) {
     syncUiFromTab(tab, dryRunKeepOptions())
     if (fileHandle) {
-      void fileHandle.getFile().then((file) => {
-        fileWatcher.markDiskSynced(tab.id, bytes, file)
-      })
+      if (options?.sourceFile) {
+        fileWatcher.markDiskSynced(tab.id, bytes, options.sourceFile)
+      } else {
+        void fileHandle.getFile().then((file) => {
+          fileWatcher.markDiskSynced(tab.id, bytes, file)
+        })
+      }
     }
   } else schedulePersistWorkspaceSession()
 }
@@ -644,7 +683,7 @@ async function handleOpen() {
       })
       const file = await handle.getFile()
       const bytes = await readFileAsBytes(file)
-      await openFile(bytes, handle.name, handle)
+      await openFile(bytes, handle.name, handle, { sourceFile: file })
     } else {
       const input = document.createElement('input')
       input.type = 'file'
@@ -682,6 +721,17 @@ async function handleSave() {
     if (!confirm(`${warning}\n\nこのまま保存しますか？`)) return
   }
 
+  if (tabManager.hasExternalChangePending(tab)) {
+    if (
+      !confirm(
+        `「${tab.fileName}」はディスク上で他のプログラムにより更新されています（↻）。\n\n` +
+          `保存すると、ディスクの変更内容は失われ、エディタの内容が書き込まれます。\n\n保存しますか？`,
+      )
+    ) {
+      return
+    }
+  }
+
   fileWatcher.setSaving(tab.id, true)
   try {
     if (tab.fileHandle && 'createWritable' in tab.fileHandle) {
@@ -707,12 +757,8 @@ async function handleSave() {
     persistWorkspaceSession()
 
     if (tab.fileHandle) {
-      try {
-        const file = await tab.fileHandle.getFile()
-        fileWatcher.markDiskSynced(tab.id, bytes, file)
-      } catch {
-        fileWatcher.markDiskSynced(tab.id, bytes)
-      }
+      // 保存直後の getFile() はキャッシュで古い場合があるため、書き込みバイトで同期する
+      fileWatcher.markDiskSynced(tab.id, bytes)
     }
   } catch (err) {
     if (isUserCancelError(err)) return
@@ -1143,6 +1189,25 @@ function isOpenableFile(file: File): boolean {
   return /\.(ttl|txt)$/i.test(file.name)
 }
 
+async function resolveDropFileEntry(
+  item: DataTransferItem,
+): Promise<{ file: File; fileHandle: FileSystemFileHandle | null } | null> {
+  if (item.kind !== 'file') return null
+  const file = item.getAsFile()
+  if (!file || !isOpenableFile(file)) return null
+
+  let fileHandle: FileSystemFileHandle | null = null
+  if (typeof item.getAsFileSystemHandle === 'function') {
+    try {
+      const handle = await item.getAsFileSystemHandle()
+      if (handle.kind === 'file') fileHandle = handle as FileSystemFileHandle
+    } catch {
+      // ハンドル取得不可時は内容のみ読み込む
+    }
+  }
+  return { file, fileHandle }
+}
+
 function setupFileDrop() {
   const dropTarget = document.querySelector('#app')!
 
@@ -1171,20 +1236,22 @@ function setupFileDrop() {
     'drop',
     async (e) => {
       const de = e as DragEvent
-      const files = Array.from(de.dataTransfer?.files ?? []).filter(isOpenableFile)
-      if (files.length === 0) return
+      const items = Array.from(de.dataTransfer?.items ?? [])
+      if (items.every((item) => item.kind !== 'file')) return
 
       e.preventDefault()
       e.stopPropagation()
       showDrag(false)
 
-      for (const file of files) {
+      for (const item of items) {
+        const entry = await resolveDropFileEntry(item)
+        if (!entry) continue
         if (!tabManager.canAddTab()) {
           alert(`タブは最大 ${MAX_TABS} 個まで開けます。`)
           break
         }
-        const bytes = await readFileAsBytes(file)
-        await openFile(bytes, file.name, null)
+        const bytes = await readFileAsBytes(entry.file)
+        await openFile(bytes, entry.file.name, entry.fileHandle, { sourceFile: entry.file })
       }
     },
     true,

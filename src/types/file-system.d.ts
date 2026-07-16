@@ -8,6 +8,16 @@ interface FileSystemFileHandle {
   readonly name: string
   getFile(): Promise<File>
   createWritable(): Promise<FileSystemWritableFileStream>
+  isSameEntry?(other: FileSystemFileHandle): Promise<boolean>
+}
+
+interface FileSystemHandle {
+  readonly kind: 'file' | 'directory'
+  readonly name: string
+}
+
+interface DataTransferItem {
+  getAsFileSystemHandle?(): Promise<FileSystemHandle>
 }
 
 interface FileSystemWritableFileStream extends WritableStream {

@@ -67,6 +67,8 @@ export class TabManager {
   }
 
   setExternalChangePending(tabId: string, pending: boolean): void {
+    const has = this.externalChangeTabIds.has(tabId)
+    if (pending === has) return
     if (pending) this.externalChangeTabIds.add(tabId)
     else this.externalChangeTabIds.delete(tabId)
     this.renderTabs()
