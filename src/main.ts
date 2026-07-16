@@ -44,6 +44,7 @@ import { showGotoLineDialog } from './ui/gotoLineDialog'
 import { setupSidePanelResize } from './ui/sidePanelResize'
 import { DryRunSession, isDryRunMainLocation, type DryRunState } from './ttl/dryRun'
 import { createBrowserDialogAdapter, cancelActiveTtlDialog } from './ui/ttlDialog'
+import { createFileExternalWatcher } from './ui/fileExternalWatch'
 import { buildFlowchart } from './ttl/flowchart'
 
 const appSettings = loadAppSettings()
@@ -60,6 +61,13 @@ app.innerHTML = `
   </div>
   <main class="main-layout">
     <section class="editor-pane">
+      <div id="file-external-banner" class="file-external-banner" hidden>
+        <span class="file-external-banner-message"></span>
+        <div class="file-external-banner-actions">
+          <button type="button" class="file-external-banner-btn" data-action="dismiss"></button>
+          <button type="button" class="file-external-banner-btn primary" data-action="reload">再読み込み</button>
+        </div>
+      </div>
       <div id="editor"></div>
     </section>
     <div class="pane-resizer" id="pane-resizer" title="サイドパネル幅を変更"></div>
@@ -114,6 +122,7 @@ function syncUiFromTab(tab: EditorTab, options?: { keepDryRun?: boolean }): void
   updateCursorPosition()
   schedulePersistWorkspaceSession()
   if (options?.keepDryRun) refreshDryRunHighlight()
+  fileWatcher.refreshBanner()
 }
 
 function updateStatusBar(tab: EditorTab): void {
@@ -449,7 +458,79 @@ tabManager.setOnTabClosed((closedTabId) => {
   const related = isDryRunRelatedTab(closedTabId)
   if (closedTabId === dryRunOriginTabId) dryRunOriginTabId = null
   if ((dryRunActive || dryRunRunPromise !== null) && related) stopDryRun()
+  fileWatcher.clearTab(closedTabId)
   schedulePersistWorkspaceSession()
+})
+
+const fileExternalBannerEl = document.querySelector<HTMLDivElement>('#file-external-banner')!
+const fileExternalBannerMessageEl = fileExternalBannerEl.querySelector<HTMLSpanElement>('.file-external-banner-message')!
+const fileExternalBannerDismissBtn = fileExternalBannerEl.querySelector<HTMLButtonElement>('[data-action="dismiss"]')!
+const fileExternalBannerReloadBtn = fileExternalBannerEl.querySelector<HTMLButtonElement>('[data-action="reload"]')!
+
+function reloadTabFromDisk(tab: EditorTab, bytes: Uint8Array): void {
+  if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
+  const loaded = tab.docSettings.loadFromBytes(bytes)
+  if (tab.id === tabManager.activeTab?.id) {
+    editor.setValue(loaded.text)
+    tab.editorState = editor.getState()
+    setEncodingSelect(tab.docSettings.encoding)
+    setNewlineSelect(tab.docSettings.newline)
+    updateStatusBar(tab)
+    clearAnalysisCache()
+    runAnalysisNow(loaded.text)
+    updateCursorPosition()
+  } else {
+    tab.editorState = editor.createState(loaded.text)
+  }
+  tab.savedContent = loaded.text
+  tabManager.notifyContentChanged()
+  schedulePersistWorkspaceSession()
+}
+
+const fileWatcher = createFileExternalWatcher({
+  getTabs: () => tabManager.allTabs,
+  getActiveTabId: () => tabManager.activeTab?.id ?? null,
+  isTabDirty: (tab) => tabManager.isTabDirty(tab),
+  readFileAsBytes,
+  onReloadTab: reloadTabFromDisk,
+  onPendingChange: (tabId, pending) => tabManager.setExternalChangePending(tabId, pending),
+  onBannerUpdate(info) {
+    if (!info) {
+      fileExternalBannerEl.hidden = true
+      return
+    }
+    fileExternalBannerEl.hidden = false
+    fileExternalBannerEl.dataset.tabId = info.tabId
+    if (info.dirty) {
+      fileExternalBannerMessageEl.textContent = `「${info.fileName}」が他のプログラムで更新されました。未保存の変更があります。`
+      fileExternalBannerDismissBtn.textContent = '編集を続ける'
+    } else {
+      fileExternalBannerMessageEl.textContent = `「${info.fileName}」が他のプログラムで更新されました。`
+      fileExternalBannerDismissBtn.textContent = '後で'
+    }
+  },
+})
+
+fileExternalBannerReloadBtn.addEventListener('click', () => {
+  const tabId = fileExternalBannerEl.dataset.tabId
+  if (!tabId) return
+  const tab = tabManager.allTabs.find((t) => t.id === tabId)
+  if (!tab) return
+  if (tabManager.isTabDirty(tab)) {
+    if (
+      !confirm(
+        `「${tab.fileName}」を再読み込みすると、エディタ内の未保存の変更は失われます。\n\n再読み込みしますか？`,
+      )
+    ) {
+      return
+    }
+  }
+  void fileWatcher.reloadTab(tabId)
+})
+
+fileExternalBannerDismissBtn.addEventListener('click', () => {
+  const tabId = fileExternalBannerEl.dataset.tabId
+  if (tabId) fileWatcher.dismissBanner(tabId)
 })
 
 let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -544,8 +625,14 @@ async function openFile(
     activate: true,
   })
 
-  if (tab) syncUiFromTab(tab, dryRunKeepOptions())
-  else schedulePersistWorkspaceSession()
+  if (tab) {
+    syncUiFromTab(tab, dryRunKeepOptions())
+    if (fileHandle) {
+      void fileHandle.getFile().then((file) => {
+        fileWatcher.markDiskSynced(tab.id, bytes, file)
+      })
+    }
+  } else schedulePersistWorkspaceSession()
 }
 
 async function handleOpen() {
@@ -595,6 +682,7 @@ async function handleSave() {
     if (!confirm(`${warning}\n\nこのまま保存しますか？`)) return
   }
 
+  fileWatcher.setSaving(tab.id, true)
   try {
     if (tab.fileHandle && 'createWritable' in tab.fileHandle) {
       const writable = await tab.fileHandle.createWritable()
@@ -617,10 +705,21 @@ async function handleSave() {
     tabManager.setActiveFileName(tab.fileName)
     syncUiFromTab(tab, dryRunKeepOptions())
     persistWorkspaceSession()
+
+    if (tab.fileHandle) {
+      try {
+        const file = await tab.fileHandle.getFile()
+        fileWatcher.markDiskSynced(tab.id, bytes, file)
+      } catch {
+        fileWatcher.markDiskSynced(tab.id, bytes)
+      }
+    }
   } catch (err) {
     if (isUserCancelError(err)) return
     const message = err instanceof Error ? err.message : String(err)
     alert(`保存に失敗しました。\n${message}`)
+  } finally {
+    fileWatcher.setSaving(tab.id, false)
   }
 }
 

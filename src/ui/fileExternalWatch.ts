@@ -51,10 +51,6 @@ export function createFileExternalWatcher(deps: FileExternalWatchDeps): FileExte
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let polling = false
 
-  function getState(tabId: string): TabWatchState | undefined {
-    return states.get(tabId)
-  }
-
   function setPending(tabId: string, pending: boolean, state?: TabWatchState) {
     const s = state ?? states.get(tabId)
     if (!s) return
