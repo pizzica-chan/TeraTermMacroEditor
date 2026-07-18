@@ -1,4 +1,8 @@
-import type { DryRunDialogAdapter } from '../ttl/dryRun'
+import type { DryRunBranchAssumptionPrompt, DryRunDialogAdapter } from '../ttl/dryRun'
+import {
+  cancelActiveDryRunBranchDialog,
+  showDryRunBranchAssumptionDialog,
+} from './dryRunBranchDialog'
 
 type PendingResolver<T> = (value: T) => void
 
@@ -58,6 +62,7 @@ function waitForDialog<T>(setup: (resolve: PendingResolver<T | null>) => void): 
 
 export function cancelActiveTtlDialog(): void {
   activeCancel?.()
+  cancelActiveDryRunBranchDialog()
 }
 
 export function createBrowserDialogAdapter(): DryRunDialogAdapter {
@@ -223,6 +228,10 @@ export function createBrowserDialogAdapter(): DryRunDialogAdapter {
         overlay.querySelector('[data-action="ok"]')!.addEventListener('click', () => finish({ ok: true, path: input.value }))
         input.focus()
       })
+    },
+
+    branchAssumption(options: DryRunBranchAssumptionPrompt) {
+      return showDryRunBranchAssumptionDialog(options)
     },
 
     cancel() {

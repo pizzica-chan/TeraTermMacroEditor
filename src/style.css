@@ -1764,3 +1764,126 @@ body {
 .ttl-dialog-btn.primary:hover {
   background: var(--accent-hover);
 }
+
+/* ドライラン: 未確定 if 分岐（TTL yesnobox とは別デザイン） */
+.dryrun-branch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1110;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: rgba(0, 40, 80, 0.45);
+}
+
+.dryrun-branch-dialog {
+  width: min(460px, 94vw);
+  padding: 18px 18px 14px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 2px solid color-mix(in srgb, var(--accent, #4a9eff) 55%, var(--border-color));
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+.dryrun-branch-badge {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--bg-primary);
+  background: color-mix(in srgb, var(--accent, #4a9eff) 85%, #333);
+}
+
+.dryrun-branch-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.dryrun-branch-lead {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.dryrun-branch-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.dryrun-branch-location {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-family: var(--mono-font, monospace);
+  color: var(--text-secondary);
+}
+
+.dryrun-branch-condition-label {
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.dryrun-branch-condition {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.dryrun-branch-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.dryrun-branch-btn {
+  min-width: 120px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dryrun-branch-btn.primary {
+  border-color: color-mix(in srgb, var(--accent, #4a9eff) 70%, var(--border-color));
+  background: color-mix(in srgb, var(--accent, #4a9eff) 22%, var(--bg-primary));
+}
+
+.dryrun-branch-btn:hover {
+  filter: brightness(1.06);
+}
+
+.dryrun-branch-cancel {
+  display: block;
+  width: 100%;
+  padding: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.dryrun-branch-cancel:hover {
+  color: var(--text-primary);
+}

@@ -1,0 +1,81 @@
+; ============================================================
+; 動作確認用: ドライランの未確定 if 分岐（True/False ダイアログ）
+; ============================================================
+;
+; 【開き方】ファイル → 開く でこのファイルを選択
+;
+; 【ドライランの手順】
+;   1. F5 またはツールバーのドライラン開始
+;   2. result が分からない if に到達すると「ドライラン（エディタ）」バッジ付きの
+;      専用ダイアログが出る（TTL の yesnobox とは別 UI）
+;   3. 「真（then に進む）」/「偽（then をスキップ）」を選ぶと、その実行中だけ分岐が決まる
+;   4. 同じ行に再び来たときは同じ選択が再利用される
+;
+; 【yesnobox との見分け】
+;   ・yesnobox … タイトルはマクロ側の文字列 / 「はい」「いいえ」
+;   ・分岐の仮定 … 「ドライラン（エディタ）」バッジ / 真・偽ボタン
+;
+; 【前提タブの分岐仮定とは別】
+;   前提タブの True/False は送信データ・静的解析用。
+;   ここで出るダイアログはドライラン専用で、タブには保存されない。
+;
+; 【ケースの並び】
+;   A〜E は yesnobox より前（result 未確定）→ 分岐ダイアログが出る。
+;   ケース B は最後に配置（yesnobox で result 確定 → 分岐ダイアログなし）。
+;
+; ============================================================
+
+; --- ケース A: ブロック if + else（未確定 → 分岐ダイアログ）---
+
+if result <> 0 then
+ sendln 'case-a-then'
+else
+ sendln 'case-a-else'
+endif
+; True  → case-a-then / False → case-a-else
+
+
+; --- ケース C: 単行 if（別行なので A とは別にダイアログ）---
+
+if result <> 0 then sendln 'case-c-single-line'
+; True  → case-c-single-line / False → 送信なし
+
+
+; --- ケース D: elseif（if が False のとき elseif も未確定なら再度ダイアログ）---
+
+if result = 1 then
+ sendln 'case-d-eq1'
+elseif result = 2 then
+ sendln 'case-d-eq2'
+else
+ sendln 'case-d-other'
+endif
+; 例: if=False → elseif で True → case-d-eq2
+
+
+; --- ケース E: 対照（リテラル条件 = ダイアログ不要）---
+
+if 1 then
+ sendln 'case-e-always'
+endif
+; 常に case-e-always
+
+
+; --- ケース B: yesnobox 後の if（分岐ダイアログは出ない）---
+; ここで初めて result が確定する。以降の if result は自動判定。
+
+messagebox '次は yesnobox です。はい/いいえで result が決まります。' 'ケース B'
+
+yesnobox '続行しますか？' '確認'
+
+if result = 1 then
+ sendln 'case-b-yes'
+else
+ sendln 'case-b-no'
+endif
+; はい → case-b-yes / いいえ → case-b-no（yesnobox のみ）
+
+
+messagebox 'ドライラン確認が終わったらこのメッセージが出ます。' '完了'
+
+end

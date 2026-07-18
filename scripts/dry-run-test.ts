@@ -955,5 +955,125 @@ console.log('\n=== 63. strlen/strscan/str2int/ifdefined result ===')
   assert(sends[4]?.payload === 'arr', 'dry run ifdefined str array', sends[4]?.payload)
 }
 
+console.log('\n=== 64. indeterminate if branch assumption (True) ===')
+{
+  const state = await runDryRun({
+    source: `if result <> 0\nsend 'picked'\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'branch', value: true }]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  const flow = state.events.find((e) => e.message.includes('分岐を仮定'))
+  assert(sends[0]?.payload === 'picked', 'branch true runs then', sends[0])
+  assert(flow?.message.includes('真（then に進む）'), 'logs branch true assumption', flow?.message)
+}
+
+console.log('\n=== 65. indeterminate if branch assumption (False → else) ===')
+{
+  const state = await runDryRun({
+    source: `if result <> 0\nsend 'yes'\nelse\nsend 'no'\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'branch', value: false }]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  assert(sends[0]?.payload === 'no', 'branch false runs else', sends[0])
+}
+
+console.log('\n=== 66. yesnobox result does not prompt branch assumption ===')
+{
+  const state = await runDryRun({
+    source: `yesnobox 'ok?' 't'\nif result = 1\nsend 'ok'\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'yesno', value: true }]),
+  })
+  const sends = eventsOfKind(state.events, 'send')
+  const branchFlow = state.events.some((e) => e.message.includes('分岐を仮定'))
+  assert(sends[0]?.payload === 'ok', 'yesnobox result resolves if without branch dialog', sends[0])
+  assert(!branchFlow, 'no branch assumption after yesnobox', branchFlow)
+}
+
+console.log('\n=== 67. branch assumption is per dry-run session only ===')
+{
+  let branchCalls = 0
+  const adapter: DryRunDialogAdapter = {
+    ...createMockDialogAdapter([{ type: 'branch', value: true }, { type: 'branch', value: false }]),
+    async branchAssumption() {
+      branchCalls++
+      return branchCalls === 1
+    },
+  }
+  const macro = `if result <> 0\nsend 'hit'\nendif\nend`
+  const first = await runDryRun({ source: macro, dialogAdapter: adapter })
+  const second = await runDryRun({ source: macro, dialogAdapter: adapter })
+  assert(branchCalls === 2, 'branch dialog on each new dry run', branchCalls)
+  assert(eventsOfKind(first.events, 'send')[0]?.payload === 'hit', 'first run true sends', first.events)
+  assert(eventsOfKind(second.events, 'send').length === 0, 'second run false skips send', second.events)
+}
+
+console.log('\n=== 68. elseif prompts branch per indeterminate arm ===')
+{
+  const branchLines: string[] = []
+  const adapter: DryRunDialogAdapter = {
+    ...createMockDialogAdapter([{ type: 'branch', value: false }, { type: 'branch', value: true }]),
+    async branchAssumption(opts) {
+      branchLines.push(opts.conditionText)
+      return branchLines.length === 1 ? false : true
+    },
+    cancel() {},
+  }
+  const state = await runDryRun({
+    source: `if result = 1 then
+sendln 'd1'
+elseif result = 2 then
+sendln 'd2'
+else
+sendln 'd-other'
+endif
+end`,
+    dialogAdapter: adapter,
+  })
+  const sends = eventsOfKind(state.events, 'send').map((e) => e.payload)
+  assert(branchLines.length === 2, 'if and elseif each prompt', branchLines)
+  assert(sends[0] === 'd2', 'elseif true arm runs', sends)
+}
+
+console.log('\n=== 69. sample verify macro flow (A/C/D/E + yesnobox B) ===')
+{
+  const macro = `if result <> 0 then
+sendln 'case-a-then'
+else
+sendln 'case-a-else'
+endif
+if result <> 0 then sendln 'case-c-single-line'
+if result = 1 then
+sendln 'case-d-eq1'
+elseif result = 2 then
+sendln 'case-d-eq2'
+else
+sendln 'case-d-other'
+endif
+if 1 then
+sendln 'case-e-always'
+endif
+yesnobox 'continue?' 'confirm'
+if result = 1 then
+sendln 'case-b-yes'
+else
+sendln 'case-b-no'
+endif
+end`
+  const state = await runDryRun({
+    source: macro,
+    dialogAdapter: createMockDialogAdapter([
+      { type: 'branch', value: true },
+      { type: 'branch', value: true },
+      { type: 'branch', value: false },
+      { type: 'branch', value: true },
+      { type: 'yesno', value: true },
+    ]),
+  })
+  const sends = eventsOfKind(state.events, 'send').map((e) => e.payload)
+  const branchCount = state.events.filter((e) => e.message.includes('分岐を仮定')).length
+  assert(branchCount === 4, 'four branch dialogs before yesnobox', branchCount)
+  assert(sends.join(',') === 'case-a-then,case-c-single-line,case-d-eq2,case-e-always,case-b-yes', 'sample path sends', sends)
+}
+
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)
 if (failed > 0) process.exit(1)

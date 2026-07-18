@@ -41,6 +41,8 @@ import {
   type MacroEnvironment,
   type RuntimeScalar,
 } from './evaluator'
+import { extractIfConditionText } from './branchAssumptions'
+import { formatDryRunBranchFlowMessage } from './dryRunBranchCopy'
 import {
   findIfThenTailStart,
   findLabelLineIndex,
@@ -131,6 +133,12 @@ export function isDryRunMainLocation(location: string | undefined): boolean {
   return location !== undefined && /^L\d+$/.test(location)
 }
 
+export interface DryRunBranchAssumptionPrompt {
+  location: string
+  command: string
+  conditionText: string
+}
+
 export interface DryRunDialogAdapter {
   yesno(message: string, title: string): Promise<boolean | null>
   /** true=OK, false=キャンセル/Escape */
@@ -139,6 +147,8 @@ export interface DryRunDialogAdapter {
   list(title: string, items: string[]): Promise<number | null>
   filename(title: string, filter: string, defaultPath: string): Promise<{ ok: boolean; path: string } | null>
   dirname(title: string, defaultPath: string): Promise<{ ok: boolean; path: string } | null>
+  /** 未確定 if/elseif/while/until — TTL yesnobox とは別 UI */
+  branchAssumption(options: DryRunBranchAssumptionPrompt): Promise<boolean | null>
   cancel(): void
 }
 
@@ -164,20 +174,6 @@ const BLOCK_PAIRS: Record<string, string> = {
 const MAX_LOOP_ITERATIONS = 256
 /** Tera Term include ネスト上限（公式） */
 const MAX_INCLUDE_DEPTH = 9
-
-function parseLoopWhileCondition(line: string, lineIdx: number, env: Env): boolean | undefined {
-  const tokens = tokenizeLine(line, lineIdx + 1)
-  let off = tokens[0]?.kind === 'label' ? 1 : 0
-  const loopPos = tokens.findIndex(
-    (t, i) => i >= off && t.kind === 'identifier' && t.text.toLowerCase() === 'loop',
-  )
-  if (loopPos < 0) return undefined
-  const whilePos = tokens.findIndex(
-    (t, i) => i > loopPos && t.kind === 'identifier' && t.text.toLowerCase() === 'while',
-  )
-  if (whilePos < 0) return undefined
-  return evalBoolExpr(tokens.slice(whilePos + 1), env)
-}
 
 function isInfiniteDoLoop(line: string, lineIdx: number): boolean {
   const tokens = tokenizeLine(line, lineIdx + 1)
@@ -224,6 +220,8 @@ interface ExecOptions {
   loopFrame?: { variable: string; value: number; index: number; total: number }
   callStack: CallFrame[]
   loopControl?: { breakRequested: boolean; continueRequested: boolean }
+  /** 当該ドライラン実行のみ有効な未確定分岐の True/False */
+  dryRunBranchAssumptions?: Map<string, boolean>
 }
 
 interface StmtResult {
@@ -283,6 +281,19 @@ function evalTokenValue(token: Token | undefined, env: Env): RuntimeScalar | und
   return undefined
 }
 
+/** ドライラン時点で断定できない条件オペランド（未更新のシステム変数・未代入変数） */
+function evalResolvableDryRunConditionToken(token: Token | undefined, env: Env): RuntimeScalar | undefined {
+  const v = evalTokenValue(token, env)
+  if (!v) return undefined
+  if (v.kind === 'int' && v.origin === 'system-default') return undefined
+  if (v.kind === 'str' && v.origin === 'system-default') return undefined
+  return v
+}
+
+export function dryRunBranchAssumptionKey(lineNum: number, locationPrefix?: string): string {
+  return `${locationPrefix ?? ''}\0${lineNum}`
+}
+
 function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefined {
   const first = tokens[start]
   if (!first) return undefined
@@ -334,24 +345,31 @@ function scalarCompare(lhs: RuntimeScalar | undefined, op: string, rhs: RuntimeS
   return undefined
 }
 
-function evalBoolExpr(tokens: Token[], env: Env): boolean | undefined {
+function evalBoolExpr(
+  tokens: Token[],
+  env: Env,
+  resolveToken: (token: Token | undefined, env: Env) => RuntimeScalar | undefined = evalTokenValue,
+): boolean | undefined {
   if (tokens.length === 0) return undefined
   if (tokens[0]?.kind === 'identifier' && tokens[0].text.toLowerCase() === 'not') {
-    const inner = evalBoolExpr(tokens.slice(1), env)
+    const inner = evalBoolExpr(tokens.slice(1), env, resolveToken)
     return inner === undefined ? undefined : !inner
   }
   for (let j = 1; j < tokens.length; j++) {
     const op = tokens[j]
     if (op?.kind !== 'operator' || !['=', '<>', '<', '>', '<=', '>='].includes(op.text)) continue
-    const lhs = evalTokenValue(tokens[j - 1], env)
-    const rhs = evalTokenValue(tokens[j + 1], env)
+    const lhs = resolveToken(tokens[j - 1], env)
+    const rhs = resolveToken(tokens[j + 1], env)
     const cmp = scalarCompare(lhs, op.text, rhs)
-    if (cmp === undefined) return undefined
+    if (cmp === undefined) {
+      if (lhs && rhs && lhs.kind !== rhs.kind) return false
+      return undefined
+    }
     const andOr = tokens[j + 2]
     if (andOr?.kind === 'identifier') {
       const lo = andOr.text.toLowerCase()
       if (lo === 'and' || lo === 'or') {
-        const rest = evalBoolExpr(tokens.slice(j + 3), env)
+        const rest = evalBoolExpr(tokens.slice(j + 3), env, resolveToken)
         if (rest === undefined) return undefined
         return lo === 'and' ? cmp && rest : cmp || rest
       }
@@ -359,11 +377,32 @@ function evalBoolExpr(tokens: Token[], env: Env): boolean | undefined {
     return cmp
   }
   if (tokens.length === 1) {
-    const v = evalTokenValue(tokens[0], env)
+    const v = resolveToken(tokens[0], env)
     if (v?.kind === 'int') return v.value !== 0
     if (v?.kind === 'str') return v.value !== ''
   }
   return undefined
+}
+
+/** ドライランでユーザー入力なしに断定できる条件か（シミュレート済みの値は利用可） */
+export function tryEvalResolvableDryRunCondition(
+  line: string,
+  lineIdx: number,
+  env: Env,
+  cmd: string,
+): boolean | undefined {
+  const tokens = tokenizeLine(line, lineIdx + 1)
+  let off = tokens[0]?.kind === 'label' ? 1 : 0
+  let condEnd = tokens.length
+  if (cmd === 'if' || cmd === 'elseif') {
+    const thenIdx = tokens.findIndex(
+      (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
+    )
+    condEnd = thenIdx >= 0 ? thenIdx : tokens.length
+  } else if (cmd !== 'while' && cmd !== 'until') {
+    return undefined
+  }
+  return evalBoolExpr(tokens.slice(off + 1, condEnd), env, evalResolvableDryRunConditionToken)
 }
 
 function resolveStringToken(token: Token | undefined, env: Env): string {
@@ -628,19 +667,6 @@ function findBlockEnd(lines: string[], startIdx: number, open: string, close: st
   return lines.length - 1
 }
 
-function tryEvalCondition(line: string, lineIdx: number, env: Env, cmd: string): boolean | undefined {
-  const tokens = tokenizeLine(line, lineIdx + 1)
-  let off = tokens[0]?.kind === 'label' ? 1 : 0
-  let condEnd = tokens.length
-  if (cmd === 'if' || cmd === 'elseif') {
-    const thenIdx = tokens.findIndex((t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then')
-    condEnd = thenIdx >= 0 ? thenIdx : tokens.length
-  } else if (cmd !== 'while' && cmd !== 'until') {
-    return undefined
-  }
-  return evalBoolExpr(tokens.slice(off + 1, condEnd), env)
-}
-
 function resolveIncludeEffectiveRaw(tokens: Token[], offset: number, env: Env): string | undefined {
   const argStart = offset + 1
   if (argStart >= tokens.length) return undefined
@@ -769,6 +795,111 @@ export class DryRunSession {
     return 'ok'
   }
 
+  private async resolveDryRunBoolExprTokens(
+    condTokens: Token[],
+    lineNum: number,
+    env: Env,
+    cmd: string,
+    execOpts: ExecOptions,
+    conditionText: string,
+  ): Promise<boolean | undefined> {
+    const resolved = evalBoolExpr(condTokens, env, evalResolvableDryRunConditionToken)
+    if (resolved !== undefined) return resolved
+
+    const key = dryRunBranchAssumptionKey(lineNum, execOpts.locationPrefix)
+    const cached = execOpts.dryRunBranchAssumptions?.get(key)
+    if (cached !== undefined) return cached
+
+    const location = formatLocation(lineNum, execOpts.locationPrefix)
+
+    this.patchState({
+      status: 'waiting-dialog',
+      currentLine: lineNum,
+      currentLocation: location,
+    })
+
+    const choice = await this.opts.dialogAdapter.branchAssumption({
+      location,
+      command: cmd,
+      conditionText,
+    })
+
+    if (this.stopped) {
+      this.abortRun()
+      return undefined
+    }
+
+    if (choice === null) {
+      this.stopped = true
+      this.patchState({ status: 'stopped' })
+      return undefined
+    }
+
+    if (!execOpts.dryRunBranchAssumptions) {
+      execOpts.dryRunBranchAssumptions = new Map()
+    }
+    execOpts.dryRunBranchAssumptions.set(key, choice)
+
+    this.pushEvent({
+      kind: 'flow',
+      line: lineNum,
+      location,
+      command: cmd,
+      message: formatDryRunBranchFlowMessage(cmd, choice),
+      detail: conditionText,
+    })
+    this.finishDialog()
+    return choice
+  }
+
+  private async resolveDryRunCondition(
+    line: string,
+    lineIdx: number,
+    lineNum: number,
+    env: Env,
+    cmd: string,
+    execOpts: ExecOptions,
+  ): Promise<boolean | undefined> {
+    const tokens = tokenizeLine(line, lineIdx + 1)
+    let off = tokens[0]?.kind === 'label' ? 1 : 0
+    let condEnd = tokens.length
+    if (cmd === 'if' || cmd === 'elseif') {
+      const thenIdx = tokens.findIndex(
+        (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
+      )
+      condEnd = thenIdx >= 0 ? thenIdx : tokens.length
+    } else if (cmd !== 'while' && cmd !== 'until') {
+      return undefined
+    }
+    const conditionText = extractIfConditionText(line, lineIdx, cmd)
+    return this.resolveDryRunBoolExprTokens(
+      tokens.slice(off + 1, condEnd),
+      lineNum,
+      env,
+      cmd,
+      execOpts,
+      conditionText || '（条件）',
+    )
+  }
+
+  private async resolveLoopWhileCondition(
+    loopLine: string,
+    lineIdx: number,
+    env: Env,
+    execOpts: ExecOptions,
+  ): Promise<boolean | undefined> {
+    const lineNum = lineIdx + 1
+    const tokens = tokenizeLine(loopLine, lineNum)
+    let off = tokens[0]?.kind === 'label' ? 1 : 0
+    const whilePos = tokens.findIndex(
+      (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'while',
+    )
+    if (whilePos < 0) return undefined
+    const condTokens = tokens.slice(whilePos + 1)
+    const conditionText = condTokens.map((t) => t.text).join(' ').trim() || '（条件）'
+    return this.resolveDryRunBoolExprTokens(condTokens, lineNum, env, 'while', execOpts, conditionText)
+  }
+
   private async processSingleLineIf(
     env: Env,
     lines: string[],
@@ -780,7 +911,17 @@ export class DryRunSession {
     tailStart: number,
     execOpts: ExecOptions,
   ): Promise<StmtResult> {
-    const cond = evalBoolExpr(tokens.slice(offset + 1, condEnd), env)
+    const condTokens = tokens.slice(offset + 1, condEnd)
+    const conditionText = condTokens.map((t) => t.text).join(' ').trim() || '（条件）'
+    const cond = await this.resolveDryRunBoolExprTokens(
+      condTokens,
+      lineNum,
+      env,
+      'if',
+      execOpts,
+      conditionText,
+    )
+    if (cond === undefined && this.stopped) return { nextIdx: lineIdx, stopAll: true }
     if (cond === true) {
       const tailCmd = tokens[tailStart]?.kind === 'identifier' ? tokens[tailStart]!.text.toLowerCase() : ''
       if (tailCmd === 'break') {
@@ -1356,7 +1497,11 @@ export class DryRunSession {
       }
 
       if (kw === 'if' || kw === 'elseif') {
-        const condResult = tryEvalCondition(lines[cursor]!, cursor, env, kw)
+        const lineNum = cursor + 1
+        const condResult = await this.resolveDryRunCondition(lines[cursor]!, cursor, lineNum, env, kw, execOpts)
+        if (condResult === undefined && this.stopped) {
+          return { nextIdx: endIdx, stopAll: true }
+        }
         let nextSibling = endIdx
         for (let i = cursor + 1; i <= endIdx; i++) {
           const k = lineKeyword(lines[i]!, i)
@@ -1649,7 +1794,8 @@ export class DryRunSession {
       const loopControl = { breakRequested: false, continueRequested: false }
       let iterations = 0
       while (!this.stopped) {
-        const cond = tryEvalCondition(lines[lineIdx]!, lineIdx, env, 'while')
+        const cond = await this.resolveDryRunCondition(line, lineIdx, lineNum, env, 'while', execOpts)
+        if (cond === undefined && this.stopped) return { nextIdx: endIdx, stopAll: true }
         if (cond !== true) break
         if (++iterations > MAX_LOOP_ITERATIONS) {
           this.pushEvent({
@@ -1692,7 +1838,8 @@ export class DryRunSession {
         if (run === 'stopAll') return { nextIdx: endIdx, stopAll: true }
         if (run === 'stopInclude') return { nextIdx: endIdx, stopInclude: true }
         if (hasWhile) {
-          const whileCond = parseLoopWhileCondition(loopLine, endIdx, env)
+          const whileCond = await this.resolveLoopWhileCondition(loopLine, endIdx, env, execOpts)
+          if (whileCond === undefined && this.stopped) return { nextIdx: endIdx, stopAll: true }
           if (whileCond !== true) break
         }
       }
@@ -1719,7 +1866,8 @@ export class DryRunSession {
         if (action === 'stopInclude') return { nextIdx: endIdx, stopInclude: true }
         if (action === 'break') break
         if (action === 'continue') continue
-        const cond = tryEvalCondition(lines[lineIdx]!, lineIdx, env, 'until')
+        const cond = await this.resolveDryRunCondition(line, lineIdx, lineNum, env, 'until', execOpts)
+        if (cond === undefined && this.stopped) return { nextIdx: endIdx, stopAll: true }
         if (cond === true) break
       }
       return { nextIdx: endIdx }
@@ -1772,6 +1920,7 @@ export function createMockDialogAdapter(
     | { type: 'list'; index: number }
     | { type: 'filename'; ok: boolean; path: string }
     | { type: 'dirname'; ok: boolean; path: string }
+    | { type: 'branch'; value: boolean }
   >,
 ): DryRunDialogAdapter {
   let i = 0
@@ -1817,6 +1966,12 @@ export function createMockDialogAdapter(
       const r = next()
       if (r.type !== 'dirname') throw new Error(`expected dirname, got ${r.type}`)
       return { ok: r.ok, path: r.path }
+    },
+    async branchAssumption() {
+      if (cancelled) return null
+      const r = next()
+      if (r.type !== 'branch') throw new Error(`expected branch, got ${r.type}`)
+      return r.value
     },
     cancel() {
       cancelled = true
