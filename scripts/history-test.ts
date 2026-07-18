@@ -24,7 +24,7 @@ function mkState(doc = '') {
   })
 }
 
-function insertAtEnd(state: EditorState, text: string): number {
+function insertAtEnd(state: EditorState): number {
   return state.doc.length
 }
 

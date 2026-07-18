@@ -1,4 +1,4 @@
-import { buildDryRunPlainTextForCopy, createMockDialogAdapter, DryRunSession, isDryRunMainLocation, runDryRun, type DryRunDialogAdapter } from '../src/ttl/dryRun'
+import { buildDryRunPlainTextForCopy, createMockDialogAdapter, DryRunSession, isDryRunMainLocation, runDryRun, type DryRunDialogAdapter, type DryRunEvent, type DryRunEventKind } from '../src/ttl/dryRun'
 import { SAMPLE_MACRO } from '../src/editor/createEditor'
 import type { IncludeResolver } from '../src/ttl/analyzer'
 import { includeLoopIterationBindingKey } from '../src/ttl/includeRefs'
@@ -16,7 +16,7 @@ function assert(cond: boolean, label: string, detail?: unknown): void {
   }
 }
 
-function eventsOfKind(events: { kind: string }[], kind: string) {
+function eventsOfKind(events: DryRunEvent[], kind: DryRunEventKind) {
   return events.filter((e) => e.kind === kind)
 }
 
