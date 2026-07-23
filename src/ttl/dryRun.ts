@@ -482,20 +482,21 @@ function buildWaitReceiveEvent(
   }
 }
 
-function isKnownStringValue(v: RuntimeScalar): v is RuntimeScalar & { kind: 'str' } {
+/** ドライラン実行時点で利用可能な文字列か（inputbox / wait のシミュレート結果を含む） */
+function isDryRunResolvableStringValue(v: RuntimeScalar): v is RuntimeScalar & { kind: 'str' } {
   if (v.kind !== 'str') return false
-  if (v.origin === 'user-input' || v.origin === 'match-received' || v.origin === 'dialog-result') return false
+  if (v.origin === 'dialog-result') return false
   if (v.hasUnresolvedParts) return false
   if (!v.value && v.hint) return false
   return true
 }
 
-function resolveKnownString(token: Token | undefined, env: Env): string | undefined {
+function resolveDryRunString(token: Token | undefined, env: Env): string | undefined {
   if (!token) return undefined
   if (token.kind === 'string') return unquoteString(token.text)
   if (token.kind === 'identifier') {
     const v = env.get(token.text.toLowerCase())
-    if (v?.kind === 'str' && isKnownStringValue(v)) return v.value
+    if (v?.kind === 'str' && isDryRunResolvableStringValue(v)) return v.value
   }
   return undefined
 }
@@ -506,7 +507,7 @@ function createStaticCtx(tokens: Token[], offset: number, env: Env): StaticValue
       return tokens[offset + rel]
     },
     resolveString(rel) {
-      return resolveKnownString(tokens[offset + rel], env)
+      return resolveDryRunString(tokens[offset + rel], env)
     },
     resolveInt(rel) {
       return evalIntExpr(tokens, offset + rel, env)
@@ -515,7 +516,7 @@ function createStaticCtx(tokens: Token[], offset: number, env: Env): StaticValue
       const tok = tokens[offset + rel]
       if (tok?.kind !== 'identifier') return undefined
       const v = env.get(tok.text.toLowerCase())
-      if (v?.kind === 'str' && isKnownStringValue(v)) return v.value
+      if (v?.kind === 'str' && isDryRunResolvableStringValue(v)) return v.value
       return undefined
     },
     resolveGroupedString(rel) {
@@ -526,7 +527,7 @@ function createStaticCtx(tokens: Token[], offset: number, env: Env): StaticValue
         if (lit !== undefined) return lit
         if (tok.kind === 'identifier') {
           const v = env.get(tok.text.toLowerCase())
-          if (v?.kind === 'str' && isKnownStringValue(v)) return v.value
+          if (v?.kind === 'str' && isDryRunResolvableStringValue(v)) return v.value
         }
         return undefined
       })

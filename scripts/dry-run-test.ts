@@ -1075,5 +1075,52 @@ end`
   assert(sends.join(',') === 'case-a-then,case-c-single-line,case-d-eq2,case-e-always,case-b-yes', 'sample path sends', sends)
 }
 
+console.log('\n=== 70. inputbox + str2int result ===')
+{
+  const okState = await runDryRun({
+    source: `inputbox 'num' 'title' ''\nstr2int val inputstr\nif result = 1 then\nsendln val\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: '42' }]),
+  })
+  const okSends = eventsOfKind(okState.events, 'send')
+  assert(okSends[0]?.payload === '42', 'inputbox str2int success sets result=1', okSends[0]?.payload)
+
+  const ngState = await runDryRun({
+    source: `inputbox 'num' 'title' ''\nstr2int val inputstr\nif result = 0 then\nsendln 'bad'\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: 'abc' }]),
+  })
+  const ngSends = eventsOfKind(ngState.events, 'send')
+  assert(ngSends[0]?.payload === 'bad', 'inputbox str2int failure sets result=0', ngSends[0]?.payload)
+
+  const hexState = await runDryRun({
+    source: `inputbox '' ''\nstr2int val inputstr\nif result = 1 then\nsendln val\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: '0x7b' }]),
+  })
+  assert(eventsOfKind(hexState.events, 'send')[0]?.payload === '123', 'inputbox hex str2int', eventsOfKind(hexState.events, 'send')[0]?.payload)
+
+  const prefixState = await runDryRun({
+    source: `inputbox '' ''\nstr2int val inputstr\nif result = 1 then\nsendln val\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: '123abc' }]),
+  })
+  assert(eventsOfKind(prefixState.events, 'send')[0]?.payload === '123', 'inputbox partial numeric prefix', eventsOfKind(prefixState.events, 'send')[0]?.payload)
+
+  const copyState = await runDryRun({
+    source: `inputbox '' ''\ns = inputstr\nstr2int val s\nif result = 1 then\nsendln val\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: '17' }]),
+  })
+  assert(eventsOfKind(copyState.events, 'send')[0]?.payload === '17', 'copied user-input str2int', eventsOfKind(copyState.events, 'send')[0]?.payload)
+
+  const earlyState = await runDryRun({
+    source: `str2int val inputstr\nif result = 1 then\nsendln val\nendif\ninputbox '' ''\nend`,
+    dialogAdapter: createMockDialogAdapter([{ type: 'input', value: '9' }]),
+  })
+  assert(eventsOfKind(earlyState.events, 'send').length === 0, 'str2int before inputbox does not send', eventsOfKind(earlyState.events, 'send'))
+
+  const waitState = await runDryRun({
+    source: `prompt = '42'\nwait prompt\nstr2int val matchstr\nif result = 1 then\nsendln val\nendif\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  assert(eventsOfKind(waitState.events, 'send')[0]?.payload === '42', 'match-received matchstr str2int', eventsOfKind(waitState.events, 'send')[0]?.payload)
+}
+
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)
 if (failed > 0) process.exit(1)
