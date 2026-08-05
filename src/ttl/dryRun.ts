@@ -8,7 +8,7 @@ import {
   resolveStaticLiteralPart,
   tokenGapBefore,
 } from './argOperands'
-import { getCommandOutputEffect } from './commandOutputs'
+import { commandOutputHint, getCommandOutputEffect } from './commandOutputs'
 import {
   extractIncludeArgText,
   includeDynamicBindingKey,
@@ -1105,9 +1105,9 @@ export class DryRunSession {
         const tok = tokens[slot.index]
         if (tok?.kind !== 'identifier') continue
         if (slot.type === 'integer') {
-          setScalar(env, tok.text, { kind: 'int', value: 0, hint: `（${cmd} の出力 / 実行時）` })
+          setScalar(env, tok.text, { kind: 'int', value: 0, hint: commandOutputHint(cmd) })
         } else {
-          setScalar(env, tok.text, { kind: 'str', value: '', hint: `（${cmd} の出力 / 実行時）` })
+          setScalar(env, tok.text, { kind: 'str', value: '', hint: commandOutputHint(cmd) })
         }
       }
       for (const sys of effect.systemVariables ?? []) {
@@ -1152,7 +1152,7 @@ export class DryRunSession {
       format = resolveDryRunString(formatTok, env)
       if (format === undefined) {
         // 書式自体が未解決 → 成功/失敗も実行時まで不明なので result は触らない
-        setScalar(env, dest.text, { kind: 'str', value: '', hint: `（${cmd} の出力 / 実行時）` })
+        setScalar(env, dest.text, { kind: 'str', value: '', hint: commandOutputHint(cmd) })
         this.pushEvent({
           kind: 'flow',
           line: lineNum,
@@ -1169,7 +1169,7 @@ export class DryRunSession {
     if (tzTok) {
       timezone = resolveDryRunString(tzTok, env)
       if (timezone === undefined) {
-        setScalar(env, dest.text, { kind: 'str', value: '', hint: `（${cmd} の出力 / 実行時）` })
+        setScalar(env, dest.text, { kind: 'str', value: '', hint: commandOutputHint(cmd) })
         this.pushEvent({
           kind: 'flow',
           line: lineNum,

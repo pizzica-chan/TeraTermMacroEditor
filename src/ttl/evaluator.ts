@@ -15,7 +15,7 @@ import {
   resolveStaticLiteralPart,
   tokenGapBefore,
 } from './argOperands'
-import { getCommandOutputEffect } from './commandOutputs'
+import { commandOutputHint, getCommandOutputEffect, isCommandOutputHint, REGEX_MATCH_HINT } from './commandOutputs'
 import {
   tryStaticIntegerCommand,
   tryStaticResultCommand,
@@ -128,7 +128,7 @@ function isUnresolvedOperand(v: RuntimeScalar): boolean {
   if (v.kind !== 'str') return false
   if (v.hasUnresolvedParts) return true
   if (isRuntimeOrigin(v.origin)) return true
-  if (v.hint !== undefined && v.hint.includes('実行時')) return true
+  if (v.hint !== undefined && isCommandOutputHint(v.hint)) return true
   return v.value === '' && v.hint !== undefined
 }
 
@@ -710,13 +710,13 @@ function applyCommandOutputEffects(cmd: string, tokens: Token[], env: Env): bool
       setScalar(env, tok.text, {
         kind: 'int',
         value: 0,
-        hint: `（${cmd} の出力 / 実行時）`,
+        hint: commandOutputHint(cmd),
       })
     } else {
       setScalar(env, tok.text, {
         kind: 'str',
         value: '',
-        hint: `（${cmd} の出力 / 実行時）`,
+        hint: commandOutputHint(cmd),
       })
     }
   }
@@ -738,7 +738,7 @@ function applyCommandOutputEffects(cmd: string, tokens: Token[], env: Env): bool
         origin,
         hint:
           sys.name === 'matchstr' || sys.name.startsWith('groupmatchstr')
-            ? '（正規表現マッチ / 実行時）'
+            ? REGEX_MATCH_HINT
             : undefined,
       })
     }

@@ -78,7 +78,7 @@ strconcat CMD time_now_str
 sendln CMD`
 const evalResult = evaluateTTL(gettimeSrc)
 const sendPayload = evalResult.sendEntries[0]?.payload ?? ''
-assert(sendPayload.includes('実行時'), 'gettime placeholder preserved after strconcat', sendPayload)
+assert(sendPayload.includes('の出力'), 'gettime command-output placeholder preserved after strconcat', sendPayload)
 
 const strcopySrc = `strcopy 'tera term' 6 4 substr\nsend substr`
 const strcopyEval = evaluateTTL(strcopySrc)

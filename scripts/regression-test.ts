@@ -64,7 +64,7 @@ assert(ifEval.sendEntries.length === 1 && ifEval.sendEntries[0]?.payload === 'ye
 
 console.log('\n=== D. include / gettime / strcopy（既存） ===')
 const gettime = `gettime t "%Y"\nstrconcat t 'x'\nsendln t`
-assert(evaluateTTL(gettime).sendEntries[0]?.payload.includes('実行時'), 'gettime runtime placeholder')
+assert(evaluateTTL(gettime).sendEntries[0]?.payload.includes('の出力'), 'gettime command-output placeholder')
 
 const strcopy = `strcopy 'abc' 2 2 s\nsend s`
 assert(evaluateTTL(strcopy).sendEntries[0]?.payload === 'bc', 'strcopy eval')

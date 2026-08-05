@@ -14,6 +14,19 @@ export interface CommandOutputEffect {
   systemVariables?: { name: string; type: OutputVarType }[]
 }
 
+/** 未解決のコマンド出力プレースホルダ（表示用） */
+export function commandOutputHint(cmd: string): string {
+  return `（${cmd} の出力）`
+}
+
+/** matchstr / groupmatchstr の未解決プレースホルダ */
+export const REGEX_MATCH_HINT = '（正規表現マッチ）'
+
+/** ヒント文字列がコマンド出力／正規表現マッチのプレースホルダか */
+export function isCommandOutputHint(hint: string): boolean {
+  return hint.includes('の出力') || hint.includes('正規表現マッチ')
+}
+
 function intOut1(...cmds: string[]): Record<string, CommandOutputEffect> {
   const out: Record<string, CommandOutputEffect> = {}
   for (const cmd of cmds) {
