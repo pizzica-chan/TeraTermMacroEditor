@@ -149,12 +149,48 @@ export interface DryRunBranchAssumptionPrompt {
   conditionText: string
 }
 
+/** listbox キーワード引数（公式 Manual 5 / 5.3+） */
+export interface ListboxKeywords {
+  /** 'dblclick=on' — ダブルクリックで項目確定 */
+  dblclick: boolean
+  /** 'minmaxbutton=on' — 最小化/最大化ボタン */
+  minmaxbutton: boolean
+  /** 'minimize=on' — 最小化状態で表示 */
+  minimize: boolean
+  /** 'maximize=on' — 最大化状態で表示 */
+  maximize: boolean
+  /** 'listboxsize=WxH' の W（文字数）。省略時 26 */
+  listboxWidth: number
+  /** 'listboxsize=WxH' の H（文字数＝行数目安）。省略時 6 */
+  listboxHeight: number
+}
+
+export const DEFAULT_LISTBOX_KEYWORDS: ListboxKeywords = {
+  dblclick: false,
+  minmaxbutton: false,
+  minimize: false,
+  maximize: false,
+  listboxWidth: 26,
+  listboxHeight: 6,
+}
+
 export interface DryRunDialogAdapter {
   yesno(message: string, title: string): Promise<boolean | null>
   /** true=OK, false=キャンセル/Escape */
   message(message: string, title: string): Promise<boolean>
   input(message: string, title: string, defaultValue: string, password: boolean): Promise<string | null>
-  list(title: string, items: string[]): Promise<number | null>
+  /**
+   * listbox: message / title / 配列項目。
+   * selected は 0 オリジンの初期選択（省略時は未選択）。
+   * keywords は公式キーワード引数（省略時はデフォルト）。
+   */
+  list(
+    message: string,
+    title: string,
+    items: string[],
+    selected?: number,
+    keywords?: ListboxKeywords,
+  ): Promise<number | null>
   filename(title: string, filter: string, defaultPath: string): Promise<{ ok: boolean; path: string } | null>
   dirname(title: string, defaultPath: string): Promise<{ ok: boolean; path: string } | null>
   /** 未確定 if/elseif/while/until — TTL yesnobox とは別 UI */
@@ -311,7 +347,11 @@ export function dryRunBranchAssumptionKey(lineNum: number, locationPrefix?: stri
   return `${locationPrefix ?? ''}\0${lineNum}`
 }
 
-function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefined {
+function evalIntExprAt(
+  tokens: Token[],
+  start: number,
+  env: Env,
+): { value: number; next: number } | undefined {
   const first = tokens[start]
   if (!first) return undefined
   let value = evalTokenValue(first, env)
@@ -331,7 +371,11 @@ function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefin
     else break
     i += 2
   }
-  return value?.kind === 'int' ? value.value : undefined
+  return { value: value.value, next: i }
+}
+
+function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefined {
+  return evalIntExprAt(tokens, start, env)?.value
 }
 
 function evalBoolExpr(
@@ -399,6 +443,111 @@ function collectStringArgs(tokens: Token[], start: number, env: Env): string[] {
     args.push(parts.join(''))
   }
   return args
+}
+
+/** 空白区切りの論理引数を 1 個だけ消費（'a'#13 は 1 引数） */
+function collectOneStringArg(
+  tokens: Token[],
+  start: number,
+  env: Env,
+): { value: string; next: number } | null {
+  const parts: string[] = []
+  let i = start
+  let consumed = false
+  while (i < tokens.length) {
+    if (consumed && tokenGapBefore(tokens, i)) break
+    const next = consumeOperand(tokens, i)
+    if (next === null) break
+    parts.push(resolveOperandSlice(tokens, i, env))
+    consumed = true
+    i = next
+  }
+  if (!consumed) return null
+  return { value: parts.join(''), next: i }
+}
+
+/** listbox の <string array>（公式: 全要素を表示。未代入は空文字列） */
+function collectStringArrayItems(env: Env, name: string): string[] | undefined {
+  const arr = env.get(name.toLowerCase())
+  if (!arr || arr.kind !== 'array') return undefined
+  const items: string[] = []
+  for (let i = 0; i < arr.size; i++) {
+    const el = arr.elements.get(i)
+    if (el?.kind === 'str') items.push(el.value)
+    else if (el?.kind === 'int') items.push(String(el.value))
+    else items.push('')
+  }
+  return items
+}
+
+/** 公式キーワード文字列（'dblclick=on' / 'listboxsize=60x20' 等）を反映 */
+export function applyListboxKeyword(raw: string, into: ListboxKeywords): void {
+  const eq = raw.indexOf('=')
+  if (eq <= 0) return
+  const key = raw.slice(0, eq).trim().toLowerCase()
+  const val = raw.slice(eq + 1).trim()
+  const valLower = val.toLowerCase()
+  if (key === 'dblclick') {
+    into.dblclick = valLower === 'on'
+  } else if (key === 'minmaxbutton') {
+    into.minmaxbutton = valLower === 'on'
+  } else if (key === 'minimize') {
+    into.minimize = valLower === 'on'
+  } else if (key === 'maximize') {
+    into.maximize = valLower === 'on'
+  } else if (key === 'listboxsize') {
+    const size = /^(\d+)\s*[xX]\s*(\d+)$/.exec(val)
+    if (size) {
+      into.listboxWidth = Number(size[1])
+      into.listboxHeight = Number(size[2])
+    }
+  }
+}
+
+/**
+ * listbox <message> <title> <string array> [<selected>] [<keyword>...]
+ * @see https://teratermproject.github.io/manual/5/en/macro/command/listbox.html
+ *
+ * <selected> 省略時: 公式 Parameters は「何も選択されない」、Remarks は「デフォルト 0」と矛盾。
+ * 本実装は Parameters に合わせ selected を undefined とする（UI は先頭へフォーカスするが未確定）。
+ */
+function parseListboxArgs(
+  tokens: Token[],
+  offset: number,
+  env: Env,
+): { message: string; title: string; items: string[]; selected?: number; keywords: ListboxKeywords } {
+  let i = offset + 1
+  const messageArg = collectOneStringArg(tokens, i, env)
+  const message = messageArg?.value ?? ''
+  if (messageArg) i = messageArg.next
+
+  const titleArg = collectOneStringArg(tokens, i, env)
+  const title = titleArg?.value ?? '選択'
+  if (titleArg) i = titleArg.next
+
+  let items: string[] = []
+  const arrayTok = tokens[i]
+  if (arrayTok?.kind === 'identifier') {
+    items = collectStringArrayItems(env, arrayTok.text) ?? []
+    i += 1
+  }
+
+  let selected: number | undefined
+  const selectedExpr = evalIntExprAt(tokens, i, env)
+  if (selectedExpr) {
+    selected = selectedExpr.value
+    i = selectedExpr.next
+  }
+
+  const keywords: ListboxKeywords = { ...DEFAULT_LISTBOX_KEYWORDS }
+  while (i < tokens.length) {
+    const kwArg = collectOneStringArg(tokens, i, env)
+    if (!kwArg) break
+    applyListboxKeyword(kwArg.value, keywords)
+    i = kwArg.next
+  }
+
+  return { message, title, items, selected, keywords }
 }
 
 function formatWaitPatternLabel(pattern: string): string {
@@ -1321,9 +1470,21 @@ export class DryRunSession {
     }
 
     if (cmd === 'listbox') {
-      const title = args[0] ?? '選択'
-      const items = args.slice(1)
-      const selected = await this.opts.dialogAdapter.list(title, items)
+      // 公式: listbox <message> <title> <string array> [<selected>] [keyword...]
+      const {
+        message,
+        title,
+        items,
+        selected: initialSelected,
+        keywords,
+      } = parseListboxArgs(tokens, offset, env)
+      const selected = await this.opts.dialogAdapter.list(
+        message,
+        title,
+        items,
+        initialSelected,
+        keywords,
+      )
       if (this.stopped) {
         this.abortRun()
         return
@@ -1337,7 +1498,7 @@ export class DryRunSession {
         location: formatLocation(lineNum, execOpts.locationPrefix),
         command: cmd,
         message: resultIndex >= 0 ? `listbox: #${resultIndex} ${item}` : 'listbox: キャンセル',
-        detail: title,
+        detail: message || title,
       })
       this.finishDialog()
       return

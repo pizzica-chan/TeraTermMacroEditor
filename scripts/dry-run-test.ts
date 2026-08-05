@@ -1,4 +1,4 @@
-import { buildDryRunPlainTextForCopy, createMockDialogAdapter, DryRunSession, isDryRunMainLocation, runDryRun, type DryRunDialogAdapter, type DryRunEvent, type DryRunEventKind } from '../src/ttl/dryRun'
+import { applyListboxKeyword, buildDryRunPlainTextForCopy, createMockDialogAdapter, DEFAULT_LISTBOX_KEYWORDS, DryRunSession, isDryRunMainLocation, runDryRun, type DryRunDialogAdapter, type DryRunEvent, type DryRunEventKind, type ListboxKeywords } from '../src/ttl/dryRun'
 import { SAMPLE_MACRO } from '../src/editor/createEditor'
 import type { IncludeResolver } from '../src/ttl/analyzer'
 import { includeLoopIterationBindingKey } from '../src/ttl/includeRefs'
@@ -317,13 +317,127 @@ console.log('\n=== 23. end inside while stops macro ===')
 
 console.log('\n=== 24. listbox 0-based index and cancel ===')
 {
+  // 公式: listbox <message> <title> <string array> [<selected>]
+  // https://teratermproject.github.io/manual/5/en/macro/command/listbox.html
   const adapter = createMockDialogAdapter([{ type: 'list', index: 1 }])
   const picked = await runDryRun({
-    source: `listbox 'title' 'a' 'b' 'c'\nif result=1\nsend 'banana'\nendif\nend`,
+    source: `strdim msg 3
+msg[0] = 'バナナ'
+msg[1] = 'りんご'
+msg[2] = 'みかん'
+listbox '好きな食べ物を選んでください' 'あなたへの問い' msg
+if result=1
+send 'banana'
+endif
+end`,
     dialogAdapter: adapter,
   })
   const sends = eventsOfKind(picked.events, 'send')
   assert(sends[0]?.payload === 'banana', 'listbox result 1 selects second item (0-based)', sends)
+  const listEvent = eventsOfKind(picked.events, 'dialog').find((e) => e.command === 'listbox')
+  assert(listEvent?.message === 'listbox: #1 りんご', 'listbox event shows selected array item', listEvent)
+
+  // 公式解説サンプル: strdim 4 で未代入スロットは空文字列として表示される
+  let capturedItems: string[] | undefined
+  const emptySlotAdapter: DryRunDialogAdapter = {
+    ...createMockDialogAdapter([{ type: 'list', index: 3 }]),
+    async list(_message, _title, items) {
+      capturedItems = items
+      return 3
+    },
+    cancel() {},
+  }
+  const emptySlot = await runDryRun({
+    source: `strdim msg 4
+msg[0] = 'バナナ'
+msg[1] = 'りんご'
+msg[2] = 'みかん'
+listbox '好きな食べ物を選んでください' 'あなたへの問い' msg
+if result=3
+send 'empty'
+endif
+end`,
+    dialogAdapter: emptySlotAdapter,
+  })
+  assert(
+    capturedItems?.join('|') === 'バナナ|りんご|みかん|',
+    'listbox shows all array slots including empty trailing',
+    capturedItems,
+  )
+  assert(
+    eventsOfKind(emptySlot.events, 'send')[0]?.payload === 'empty',
+    'listbox can select empty slot index',
+    eventsOfKind(emptySlot.events, 'send'),
+  )
+
+  let capturedSelected: number | undefined
+  const selectedAdapter: DryRunDialogAdapter = {
+    ...createMockDialogAdapter([{ type: 'list', index: 6 }]),
+    async list(_message, _title, _items, selected) {
+      capturedSelected = selected
+      return 6
+    },
+    cancel() {},
+  }
+  await runDryRun({
+    source: `strdim msg 7
+msg[0] = '晴れ'
+msg[1] = '曇り'
+msg[2] = '雨'
+msg[3] = '風'
+msg[4] = '雪'
+msg[5] = '霧'
+msg[6] = '分かりません'
+listbox '今日の天気はどうですか?' 'あなたへの問い' msg 6
+end`,
+    dialogAdapter: selectedAdapter,
+  })
+  assert(capturedSelected === 6, 'listbox passes optional selected index', capturedSelected)
+
+  let exprSelected: number | undefined
+  let exprKeywords: ListboxKeywords | undefined
+  const exprAdapter: DryRunDialogAdapter = {
+    ...createMockDialogAdapter([{ type: 'list', index: 2 }]),
+    async list(_message, _title, _items, selected, keywords) {
+      exprSelected = selected
+      exprKeywords = keywords
+      return 2
+    },
+    cancel() {},
+  }
+  await runDryRun({
+    source: `strdim msg 4
+msg[0] = 'a'
+msg[1] = 'b'
+msg[2] = 'c'
+msg[3] = 'd'
+base = 1
+listbox 'm' 't' msg base+1 'dblclick=on'
+end`,
+    dialogAdapter: exprAdapter,
+  })
+  assert(exprSelected === 2, 'listbox selected evaluates integer expression', exprSelected)
+  assert(exprKeywords?.dblclick === true, 'listbox keywords after int expression', exprKeywords)
+
+  let litExprSelected: number | undefined
+  const litExprAdapter: DryRunDialogAdapter = {
+    ...createMockDialogAdapter([{ type: 'list', index: 2 }]),
+    async list(_m, _t, _i, selected) {
+      litExprSelected = selected
+      return 2
+    },
+    cancel() {},
+  }
+  await runDryRun({
+    source: `strdim msg 3
+msg[0] = 'a'
+msg[1] = 'b'
+msg[2] = 'c'
+listbox 'm' 't' msg 1+1
+end`,
+    dialogAdapter: litExprAdapter,
+  })
+  assert(litExprSelected === 2, 'listbox selected evaluates 1+1 literal expression', litExprSelected)
 
   const cancelAdapter: DryRunDialogAdapter = {
     ...createMockDialogAdapter([]),
@@ -333,11 +447,105 @@ console.log('\n=== 24. listbox 0-based index and cancel ===')
     cancel() {},
   }
   const cancelled = await runDryRun({
-    source: `listbox 'title' 'a'\nif result=-1\nsend 'cancelled'\nendif\nend`,
+    source: `strdim msg 1
+msg[0] = 'a'
+listbox 'title' '確認' msg
+if result=-1
+send 'cancelled'
+endif
+end`,
     dialogAdapter: cancelAdapter,
   })
   const cancelSends = eventsOfKind(cancelled.events, 'send')
   assert(cancelSends[0]?.payload === 'cancelled', 'listbox cancel sets result=-1', cancelSends)
+}
+
+console.log('\n=== 24b. listbox keyword parameters ===')
+{
+  // https://teratermproject.github.io/manual/5/en/macro/command/listbox.html
+  const parsed: ListboxKeywords = { ...DEFAULT_LISTBOX_KEYWORDS }
+  applyListboxKeyword('dblclick=on', parsed)
+  applyListboxKeyword('minmaxbutton=on', parsed)
+  applyListboxKeyword('minimize=on', parsed)
+  applyListboxKeyword('maximize=on', parsed)
+  applyListboxKeyword('listboxsize=70x10', parsed)
+  assert(parsed.dblclick === true, 'applyListboxKeyword dblclick')
+  assert(parsed.minmaxbutton === true, 'applyListboxKeyword minmaxbutton')
+  assert(parsed.minimize === true, 'applyListboxKeyword minimize')
+  assert(parsed.maximize === true, 'applyListboxKeyword maximize')
+  assert(parsed.listboxWidth === 70 && parsed.listboxHeight === 10, 'applyListboxKeyword listboxsize', parsed)
+
+  let capturedKeywords: ListboxKeywords | undefined
+  let capturedSelected: number | undefined
+  const keywordAdapter: DryRunDialogAdapter = {
+    ...createMockDialogAdapter([{ type: 'list', index: 0 }]),
+    async list(_message, _title, _items, selected, keywords) {
+      capturedSelected = selected
+      capturedKeywords = keywords
+      return 0
+    },
+    cancel() {},
+  }
+  await runDryRun({
+    source: `strdim msg 2
+msg[0] = 'a'
+msg[1] = 'b'
+listbox 'm' 't' msg 1 'listboxsize=70x10' 'dblclick=on' 'minmaxbutton=on'
+end`,
+    dialogAdapter: keywordAdapter,
+  })
+  assert(capturedSelected === 1, 'listbox keeps selected before keywords', capturedSelected)
+  assert(capturedKeywords?.dblclick === true, 'listbox passes dblclick=on', capturedKeywords)
+  assert(capturedKeywords?.minmaxbutton === true, 'listbox passes minmaxbutton=on', capturedKeywords)
+  assert(
+    capturedKeywords?.listboxWidth === 70 && capturedKeywords?.listboxHeight === 10,
+    'listbox passes listboxsize=70x10',
+    capturedKeywords,
+  )
+
+  let orderKeywords: ListboxKeywords | undefined
+  const orderAdapter: DryRunDialogAdapter = {
+    ...createMockDialogAdapter([{ type: 'list', index: 0 }]),
+    async list(_m, _t, _i, _s, keywords) {
+      orderKeywords = keywords
+      return 0
+    },
+    cancel() {},
+  }
+  await runDryRun({
+    source: `strdim msg 1
+msg[0] = 'a'
+listbox 'm' 't' msg 'maximize=on' 'minimize=on' 'listboxsize=10x20'
+end`,
+    dialogAdapter: orderAdapter,
+  })
+  assert(orderKeywords?.maximize === true, 'listbox keyword order: maximize without selected', orderKeywords)
+  assert(orderKeywords?.minimize === true, 'listbox keyword order: minimize without selected', orderKeywords)
+  assert(
+    orderKeywords?.listboxWidth === 10 && orderKeywords?.listboxHeight === 20,
+    'listbox keyword order: listboxsize without selected',
+    orderKeywords,
+  )
+  assert(orderKeywords?.dblclick === false, 'listbox default dblclick remains off', orderKeywords)
+
+  // 公式 Parameters: selected 省略時は未選択（Remarks の「デフォルト 0」とは採らない）
+  let omittedSelected: number | undefined = -999
+  const omittedAdapter: DryRunDialogAdapter = {
+    ...createMockDialogAdapter([{ type: 'list', index: 0 }]),
+    async list(_m, _t, _i, selected) {
+      omittedSelected = selected
+      return 0
+    },
+    cancel() {},
+  }
+  await runDryRun({
+    source: `strdim msg 1
+msg[0] = 'a'
+listbox 'm' 't' msg
+end`,
+    dialogAdapter: omittedAdapter,
+  })
+  assert(omittedSelected === undefined, 'listbox omits selected when arg absent (Parameters)', omittedSelected)
 }
 
 console.log('\n=== 25. break in do loop errors ===')

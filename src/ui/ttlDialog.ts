@@ -1,4 +1,9 @@
-import type { DryRunBranchAssumptionPrompt, DryRunDialogAdapter } from '../ttl/dryRun'
+import type {
+  DryRunBranchAssumptionPrompt,
+  DryRunDialogAdapter,
+  ListboxKeywords,
+} from '../ttl/dryRun'
+import { DEFAULT_LISTBOX_KEYWORDS } from '../ttl/dryRun'
 import {
   cancelActiveDryRunBranchDialog,
   showDryRunBranchAssumptionDialog,
@@ -59,6 +64,82 @@ function waitForDialog<T>(setup: (resolve: PendingResolver<T | null>) => void): 
     setup(finish)
     activeCancel = () => finish(null)
   })
+}
+
+function createListboxOverlay(
+  title: string,
+  bodyHtml: string,
+  actionsHtml: string,
+  keywords: ListboxKeywords,
+): HTMLElement {
+  closeActive()
+  const showWindowButtons = keywords.minmaxbutton || keywords.minimize || keywords.maximize
+  const windowButtons = showWindowButtons
+    ? `
+      <div class="ttl-dialog-window-btns">
+        <button type="button" class="ttl-dialog-window-btn" data-action="minimize" title="最小化" aria-label="最小化">_</button>
+        <button type="button" class="ttl-dialog-window-btn" data-action="maximize" title="最大化" aria-label="最大化">□</button>
+      </div>
+    `
+    : ''
+  const dialogClass = [
+    'ttl-dialog',
+    'ttl-dialog-listbox',
+    keywords.maximize ? 'is-maximized' : '',
+    keywords.minimize ? 'is-minimized' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  const overlay = document.createElement('div')
+  overlay.className = 'ttl-dialog-overlay'
+  overlay.innerHTML = `
+    <div class="${dialogClass}" role="dialog" aria-label="${escapeAttr(title)}">
+      <div class="ttl-dialog-titlebar">
+        <h3 class="ttl-dialog-title">${escapeHtml(title)}</h3>
+        ${windowButtons}
+      </div>
+      <div class="ttl-dialog-body">${bodyHtml}</div>
+      <div class="ttl-dialog-actions">${actionsHtml}</div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+  activeOverlay = overlay
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) activeCancel?.()
+  })
+
+  const dialog = overlay.querySelector<HTMLElement>('.ttl-dialog')!
+  const syncWindowButtonsVisibility = () => {
+    const btns = overlay.querySelector('.ttl-dialog-window-btns')
+    if (!btns) return
+    const show =
+      keywords.minmaxbutton ||
+      keywords.minimize ||
+      keywords.maximize ||
+      dialog.classList.contains('is-minimized')
+    btns.classList.toggle('is-hidden', !show)
+  }
+  syncWindowButtonsVisibility()
+
+  overlay.querySelector('[data-action="minimize"]')?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    dialog.classList.add('is-minimized')
+    dialog.classList.remove('is-maximized')
+    syncWindowButtonsVisibility()
+  })
+  overlay.querySelector('[data-action="maximize"]')?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    if (dialog.classList.contains('is-minimized')) {
+      dialog.classList.remove('is-minimized')
+      if (keywords.maximize) dialog.classList.add('is-maximized')
+    } else {
+      dialog.classList.toggle('is-maximized')
+    }
+    syncWindowButtonsVisibility()
+  })
+
+  return overlay
 }
 
 export function cancelActiveTtlDialog(): void {
@@ -152,30 +233,89 @@ export function createBrowserDialogAdapter(): DryRunDialogAdapter {
       })
     },
 
-    list(title, items) {
+    list(message, title, items, selected, keywordsInput) {
+      const keywords = { ...DEFAULT_LISTBOX_KEYWORDS, ...keywordsInput }
       return waitForDialog<number>((resolve) => {
+        let highlighted =
+          selected !== undefined && selected >= 0 && selected < items.length ? selected : undefined
+
         const listHtml = items
-          .map(
-            (item, idx) =>
-              `<button type="button" class="ttl-dialog-list-item" data-index="${idx}">${escapeHtml(item)}</button>`,
-          )
+          .map((item, idx) => {
+            const isSelected = highlighted === idx
+            const cls = isSelected ? 'ttl-dialog-list-item is-selected' : 'ttl-dialog-list-item'
+            const label = item === '' ? '（空）' : item
+            return `<button type="button" class="${cls}" data-index="${idx}">${escapeHtml(label)}</button>`
+          })
           .join('')
-        const overlay = createOverlay(
-          title,
-          `<div class="ttl-dialog-list">${listHtml || '<p class="ttl-dialog-message">（項目なし）</p>'}</div>`,
-          `<button type="button" class="ttl-dialog-btn" data-action="cancel">キャンセル</button>`,
-        )
-        overlay.querySelector('[data-action="cancel"]')!.addEventListener('click', () => resolve(null))
-        for (const btn of overlay.querySelectorAll<HTMLButtonElement>('.ttl-dialog-list-item')) {
-          btn.addEventListener('click', () => resolve(Number(btn.dataset.index)))
+        const body = `
+          <p class="ttl-dialog-message">${escapeHtml(message)}</p>
+          <div class="ttl-dialog-list" style="width:${keywords.listboxWidth}ch;height:${keywords.listboxHeight * 1.8}em;max-height:none">${
+            listHtml || '<p class="ttl-dialog-message">（項目なし）</p>'
+          }</div>
+        `
+        const actions = keywords.dblclick
+          ? `
+            <button type="button" class="ttl-dialog-btn" data-action="cancel">キャンセル</button>
+            <button type="button" class="ttl-dialog-btn primary" data-action="ok">OK</button>
+          `
+          : `<button type="button" class="ttl-dialog-btn" data-action="cancel">キャンセル</button>`
+
+        const overlay = createListboxOverlay(title, body, actions, keywords)
+        const listEl = overlay.querySelector<HTMLElement>('.ttl-dialog-list')!
+        const okBtn = overlay.querySelector<HTMLButtonElement>('[data-action="ok"]')
+
+        const setHighlight = (index: number) => {
+          highlighted = index
+          for (const btn of overlay.querySelectorAll<HTMLButtonElement>('.ttl-dialog-list-item')) {
+            btn.classList.toggle('is-selected', Number(btn.dataset.index) === index)
+          }
+          if (okBtn) okBtn.disabled = false
         }
+
+        const confirm = (index: number | undefined) => {
+          if (index === undefined || index < 0 || index >= items.length) return
+          resolve(index)
+        }
+
+        overlay.querySelector('[data-action="cancel"]')!.addEventListener('click', () => resolve(null))
+        okBtn?.addEventListener('click', () => confirm(highlighted))
+        if (okBtn && highlighted === undefined) okBtn.disabled = true
+
+        for (const btn of overlay.querySelectorAll<HTMLButtonElement>('.ttl-dialog-list-item')) {
+          btn.addEventListener('click', () => {
+            const index = Number(btn.dataset.index)
+            if (keywords.dblclick) {
+              setHighlight(index)
+              btn.focus()
+            } else {
+              resolve(index)
+            }
+          })
+          btn.addEventListener('dblclick', (e) => {
+            if (!keywords.dblclick) return
+            e.preventDefault()
+            confirm(Number(btn.dataset.index))
+          })
+        }
+
         overlay.addEventListener('keydown', (e) => {
           if (e.key === 'Escape') {
             e.preventDefault()
             resolve(null)
+          } else if (e.key === 'Enter' && keywords.dblclick) {
+            e.preventDefault()
+            confirm(highlighted)
           }
         })
-        overlay.querySelector<HTMLButtonElement>('.ttl-dialog-list-item')?.focus()
+
+        // 最大化時はリストを伸縮（インライン幅・高さより優先）
+        if (keywords.maximize) {
+          listEl.style.width = ''
+          listEl.style.height = ''
+        }
+
+        const focusIdx = highlighted ?? 0
+        overlay.querySelector<HTMLButtonElement>(`.ttl-dialog-list-item[data-index="${focusIdx}"]`)?.focus()
       })
     },
 
