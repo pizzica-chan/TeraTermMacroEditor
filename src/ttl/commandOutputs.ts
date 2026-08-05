@@ -1,5 +1,7 @@
 /** Tera Term マクロ v5: コマンドが変数・result に書き込む仕様 */
 
+import { commandSetsResult } from './resultCommandMeta'
+
 export type OutputVarType = 'integer' | 'string'
 
 export interface OutputVariableSlot {
@@ -69,7 +71,6 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
     'uptime',
     'rotateleft',
     'rotateright',
-    'findfirst',
     'getmodemstatus',
   ),
   ...strOut1(
@@ -128,7 +129,13 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
   },
   findnext: {
     variables: [{ index: 2, type: 'string' }],
-    setsResult: true,
+  },
+  findfirst: {
+    // findfirst <dir handle> <file name> <strvar>
+    variables: [
+      { index: 1, type: 'integer' },
+      { index: 3, type: 'string' },
+    ],
   },
   getpassword: {
     variables: [{ index: 3, type: 'string' }],
@@ -164,6 +171,8 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
   crc16file: { variables: [{ index: 1, type: 'integer' }], setsResult: true },
   crc32file: { variables: [{ index: 1, type: 'integer' }], setsResult: true },
   ...resultOnly(
+    // setsResult は getCommandOutputEffect が RESULT_COMMAND_META から付与する。
+    // ここは他に出力スロットが無いコマンドのプレースホルダ登録用。
     'strlen',
     'strlength',
     'strcompare',
@@ -178,26 +187,34 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
     'listbox',
     'bplusrecv',
     'xmodemrecv',
-    'findclose',
+    'connect',
+    'cygconnect',
+    'testlink',
+    'exec',
+    'wait',
+    'waitln',
+    'waitregex',
+    'wait4all',
+    'waitn',
+    'waitevent',
+    'yesnobox',
   ),
-  // setsResult を伴う出力（intOut1/strOut1 の上書き）
-  str2int: { variables: [{ index: 1, type: 'integer' }], setsResult: true },
-  str2code: { variables: [{ index: 1, type: 'integer' }], setsResult: true },
-  getmodemstatus: { variables: [{ index: 1, type: 'integer' }], setsResult: true },
-  getttdir: { variables: [{ index: 1, type: 'string' }], setsResult: true },
-  getspecialfolder: { variables: [{ index: 1, type: 'string' }], setsResult: true },
-  clipb2var: { variables: [{ index: 1, type: 'string' }], setsResult: true },
-  loginfo: { variables: [{ index: 1, type: 'string' }], setsResult: true },
+  // 出力変数 + result（setsResult は getCommandOutputEffect で付与）
+  // intOut1/strOut1 と衝突するコマンドはここに再定義する（後勝ちスプレッドで variables が消えないように）
+  str2int: { variables: [{ index: 1, type: 'integer' }] },
+  str2code: { variables: [{ index: 1, type: 'integer' }] },
+  getmodemstatus: { variables: [{ index: 1, type: 'integer' }] },
+  getttdir: { variables: [{ index: 1, type: 'string' }] },
+  getspecialfolder: { variables: [{ index: 1, type: 'string' }] },
+  clipb2var: { variables: [{ index: 1, type: 'string' }] },
+  loginfo: { variables: [{ index: 1, type: 'string' }] },
   sprintf: {
-    setsResult: true,
     systemVariables: [{ name: 'inputstr', type: 'string' }],
   },
   recvln: {
-    setsResult: true,
     systemVariables: [{ name: 'inputstr', type: 'string' }],
   },
   waitrecv: {
-    setsResult: true,
     systemVariables: [{ name: 'inputstr', type: 'string' }],
   },
   inputbox: {
@@ -207,24 +224,25 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
     systemVariables: [{ name: 'inputstr', type: 'string' }],
   },
   filenamebox: {
-    setsResult: true,
     systemVariables: [{ name: 'inputstr', type: 'string' }],
   },
   dirnamebox: {
-    setsResult: true,
     systemVariables: [{ name: 'inputstr', type: 'string' }],
   },
-  yesnobox: { setsResult: true },
-  messagebox: { setsResult: true },
-  statusbox: { setsResult: true },
   strmatch: {
-    setsResult: true,
     systemVariables: [{ name: 'matchstr', type: 'string' }, ...GROUPMATCH_SYSTEM_VARS],
   },
 }
 
 export function getCommandOutputEffect(cmd: string): CommandOutputEffect | undefined {
-  return COMMAND_OUTPUT_EFFECTS[cmd.toLowerCase()]
+  const key = cmd.toLowerCase()
+  const base = COMMAND_OUTPUT_EFFECTS[key]
+  const setsResult = commandSetsResult(key)
+  if (!base && !setsResult) return undefined
+  if (!base) return { setsResult: true }
+  // setsResult は RESULT_COMMAND_META のみを正とする（base 内の古い setsResult は無視）
+  const { setsResult: _ignored, ...rest } = base
+  return setsResult ? { ...rest, setsResult: true } : { ...rest }
 }
 
 export function getOutputVariableIndices(cmd: string): ReadonlySet<number> {

@@ -243,6 +243,22 @@ function setScalar(env: Env, name: string, value: RuntimeScalar): void {
   env.set(name.toLowerCase(), value)
 }
 
+function setResult(
+  env: Env,
+  setBy: string,
+  value: number,
+  origin: 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default',
+  extra?: { hint?: string },
+): void {
+  setScalar(env, 'result', {
+    kind: 'int',
+    value,
+    origin,
+    setBy: setBy.toLowerCase(),
+    hint: extra?.hint,
+  })
+}
+
 function setArrayElement(env: Env, name: string, index: number, value: RuntimeScalar): void {
   const key = name.toLowerCase()
   let arr = env.get(key)
@@ -509,7 +525,7 @@ function applyStaticCommandEffects(
     const destTok = tokens[str2intResult.destIndex]
     if (destTok?.kind === 'identifier') {
       setScalar(env, destTok.text, { kind: 'int', value: str2intResult.value, origin: 'literal' })
-      setScalar(env, 'result', { kind: 'int', value: str2intResult.result, origin: 'literal' })
+      setResult(env, cmd, str2intResult.result, 'literal')
       return true
     }
   }
@@ -527,23 +543,15 @@ function applyStaticCommandEffects(
   if (resultOnlyStringCmds.has(cmd)) {
     const args = collectStringArgs(tokens, offset + 1, env)
     if (cmd === 'strcompare' && args.length >= 2) {
-      setScalar(env, 'result', {
-        kind: 'int',
-        value: computeStrcompare(args[0]!, args[1]!),
-        origin: 'literal',
-      })
+      setResult(env, cmd, computeStrcompare(args[0]!, args[1]!), 'literal')
       return true
     }
     if ((cmd === 'strlen' || cmd === 'strlength') && args.length >= 1) {
-      setScalar(env, 'result', { kind: 'int', value: computeStrlen(args[0]!), origin: 'literal' })
+      setResult(env, cmd, computeStrlen(args[0]!), 'literal')
       return true
     }
     if (cmd === 'strscan' && args.length >= 2) {
-      setScalar(env, 'result', {
-        kind: 'int',
-        value: computeStrscan(args[0]!, args[1]!),
-        origin: 'literal',
-      })
+      setResult(env, cmd, computeStrscan(args[0]!, args[1]!), 'literal')
       return true
     }
   }
@@ -556,7 +564,7 @@ function applyStaticCommandEffects(
         ifdefinedName: nameTok.text,
       })
       if (resultVal !== undefined) {
-        setScalar(env, 'result', { kind: 'int', value: resultVal, origin: 'literal' })
+        setResult(env, cmd, resultVal, 'literal')
         return true
       }
     }
@@ -564,7 +572,7 @@ function applyStaticCommandEffects(
 
   const resultVal = tryStaticResultCommand(cmd, staticCtx)
   if (resultVal !== undefined) {
-    setScalar(env, 'result', { kind: 'int', value: resultVal, origin: 'literal' })
+    setResult(env, cmd, resultVal, 'literal')
     return true
   }
 
@@ -1023,7 +1031,7 @@ export class DryRunSession {
 
     if (cmd === 'recvln') {
       this.pushEvent(buildWaitReceiveEvent(cmd, [], lineNum, execOpts.locationPrefix))
-      setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+      setResult(env, cmd, 1, 'literal')
       setScalar(env, 'inputstr', { kind: 'str', value: '〈受信行〉', origin: 'match-received' })
       return
     }
@@ -1043,7 +1051,7 @@ export class DryRunSession {
         message: `waitrecv: 部分一致「${formatWaitPatternLabel(sub)}」 len=${lenLabel} pos=${posLabel}`,
         payload: sub || undefined,
       })
-      setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+      setResult(env, cmd, 1, 'literal')
       setScalar(env, 'inputstr', {
         kind: 'str',
         value: sub || '〈受信行〉',
@@ -1073,7 +1081,7 @@ export class DryRunSession {
           : 'match-received'
       setScalar(env, 'matchstr', { kind: 'str', value: matchstrValue, origin: matchOrigin })
 
-      setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+      setResult(env, cmd, 1, 'literal')
       return
     }
 
@@ -1086,6 +1094,7 @@ export class DryRunSession {
         command: cmd,
         message: `${cmd}${args ? `: ${args}` : ''}（ドライラン: 通信なし）`,
       })
+      if (cmd === 'connect') setResult(env, cmd, 0, 'dialog-result')
       return
     }
 
@@ -1116,7 +1125,15 @@ export class DryRunSession {
         if (sys.type === 'integer') setScalar(env, sys.name, { kind: 'int', value: 0, origin })
         else setScalar(env, sys.name, { kind: 'str', value: '', origin })
       }
-      if (effect.setsResult) setScalar(env, 'result', { kind: 'int', value: 0, origin: 'dialog-result' })
+      if (effect.setsResult) {
+        const skipResult =
+          cmd === 'getver' &&
+          (() => {
+            const cmdIdx = tokens.findIndex((t) => t.kind === 'identifier' && t.text.toLowerCase() === 'getver')
+            return cmdIdx >= 0 && tokens[cmdIdx + 2] === undefined
+          })()
+        if (!skipResult) setResult(env, cmd, 0, 'dialog-result')
+      }
       if (!DIALOG_COMMANDS.has(cmd)) {
         this.pushEvent({
           kind: 'flow',
@@ -1187,7 +1204,7 @@ export class DryRunSession {
 
     if (formatted.ok) {
       setScalar(env, dest.text, { kind: 'str', value: formatted.value, origin: 'literal' })
-      setScalar(env, 'result', { kind: 'int', value: 0, origin: 'literal' })
+      setResult(env, cmd, 0, 'literal')
       const note = formatted.timezoneNote ? ` / ${formatted.timezoneNote}` : ''
       this.pushEvent({
         kind: 'flow',
@@ -1201,7 +1218,7 @@ export class DryRunSession {
 
     // result=1: 長すぎて未格納 / result=2: 書式不正で未格納（公式: 宛先は更新しない）
     env.delete(destKey)
-    setScalar(env, 'result', { kind: 'int', value: formatted.result, origin: 'literal' })
+    setResult(env, cmd, formatted.result, 'literal')
     this.pushEvent({
       kind: 'warning',
       line: lineNum,
@@ -1238,7 +1255,7 @@ export class DryRunSession {
         return
       }
       const yes = answer === true
-      setScalar(env, 'result', { kind: 'int', value: yes ? 1 : 0, origin: 'dialog-result' })
+      setResult(env, cmd, yes ? 1 : 0, 'dialog-result')
       this.pushEvent({
         kind: 'dialog',
         line: lineNum,
@@ -1259,7 +1276,9 @@ export class DryRunSession {
         this.abortRun()
         return
       }
-      setScalar(env, 'result', { kind: 'int', value: ok ? 1 : 0, origin: 'dialog-result' })
+      // 公式 messagebox は result を更新しない。ドライランのみダイアログ応答を result に載せる
+      // （静的解析の RESULT_COMMAND_META には含めない）
+      setResult(env, cmd, ok ? 1 : 0, 'dialog-result')
       this.pushEvent({
         kind: 'dialog',
         line: lineNum,
@@ -1309,7 +1328,7 @@ export class DryRunSession {
         return
       }
       const resultIndex = selected === null ? -1 : selected
-      setScalar(env, 'result', { kind: 'int', value: resultIndex, origin: 'dialog-result' })
+      setResult(env, cmd, resultIndex, 'dialog-result')
       const item = resultIndex >= 0 ? (items[resultIndex] ?? '') : ''
       this.pushEvent({
         kind: 'dialog',
@@ -1333,7 +1352,7 @@ export class DryRunSession {
         return
       }
       const filePick = picked ?? { ok: false, path: '' }
-      setScalar(env, 'result', { kind: 'int', value: filePick.ok ? 1 : 0, origin: 'dialog-result' })
+      setResult(env, cmd, filePick.ok ? 1 : 0, 'dialog-result')
       setScalar(env, 'inputstr', { kind: 'str', value: filePick.path, origin: 'user-input' })
       this.pushEvent({
         kind: 'dialog',
@@ -1356,7 +1375,7 @@ export class DryRunSession {
         return
       }
       const dirPick = picked ?? { ok: false, path: '' }
-      setScalar(env, 'result', { kind: 'int', value: dirPick.ok ? 1 : 0, origin: 'dialog-result' })
+      setResult(env, cmd, dirPick.ok ? 1 : 0, 'dialog-result')
       setScalar(env, 'inputstr', { kind: 'str', value: dirPick.path, origin: 'user-input' })
       this.pushEvent({
         kind: 'dialog',

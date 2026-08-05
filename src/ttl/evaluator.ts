@@ -16,6 +16,7 @@ import {
   tokenGapBefore,
 } from './argOperands'
 import { commandOutputHint, getCommandOutputEffect, isCommandOutputHint, REGEX_MATCH_HINT } from './commandOutputs'
+import { formatResultSetByNote } from './resultCommandMeta'
 import {
   tryStaticIntegerCommand,
   tryStaticResultCommand,
@@ -46,7 +47,14 @@ import {
 export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
 
 export type RuntimeScalar =
-  | { kind: 'int'; value: number; origin?: ValueOrigin; hint?: string }
+  | {
+      kind: 'int'
+      value: number
+      origin?: ValueOrigin
+      hint?: string
+      /** result 等: 値を設定した直前のコマンド名 */
+      setBy?: string
+    }
   | {
       kind: 'str'
       value: string
@@ -652,7 +660,7 @@ function applyStaticCommandEffects(
     const destTok = tokens[str2intResult.destIndex]
     if (destTok?.kind === 'identifier') {
       setScalar(env, destTok.text, { kind: 'int', value: str2intResult.value, origin: 'literal' })
-      setScalar(env, 'result', { kind: 'int', value: str2intResult.result, origin: 'literal' })
+      setResult(env, cmd, str2intResult.result, 'literal')
       return true
     }
   }
@@ -676,7 +684,7 @@ function applyStaticCommandEffects(
     ifdefinedName,
   })
   if (resultVal !== undefined) {
-    setScalar(env, 'result', { kind: 'int', value: resultVal, origin: 'literal' })
+    setResult(env, cmd, resultVal, 'literal')
     return true
   }
 
@@ -685,6 +693,23 @@ function applyStaticCommandEffects(
 
 function setScalar(env: Env, name: string, value: RuntimeScalar) {
   env.set(name.toLowerCase(), value)
+}
+
+/** システム変数 result を設定し、設定元コマンドを記録する */
+function setResult(
+  env: Env,
+  setBy: string,
+  value: number,
+  origin: ValueOrigin,
+  extra?: { hint?: string },
+): void {
+  setScalar(env, 'result', {
+    kind: 'int',
+    value,
+    origin,
+    setBy: setBy.toLowerCase(),
+    hint: extra?.hint,
+  })
 }
 
 function setArrayElement(env: Env, name: string, index: number, value: RuntimeScalar) {
@@ -746,8 +771,15 @@ function applyCommandOutputEffects(cmd: string, tokens: Token[], env: Env): bool
   }
 
   if (effect.setsResult) {
+    // 公式: getver は <version> 省略時 result を変更しない
+    if (cmd === 'getver') {
+      const cmdIdx = tokens.findIndex((t) => t.kind === 'identifier' && t.text.toLowerCase() === 'getver')
+      if (cmdIdx >= 0 && tokens[cmdIdx + 2] === undefined) {
+        return applied
+      }
+    }
     applied = true
-    setScalar(env, 'result', { kind: 'int', value: 0, origin: 'dialog-result' })
+    setResult(env, cmd, 0, 'dialog-result')
   }
 
   return applied
@@ -850,14 +882,14 @@ const WAIT_RECEIVE_COMMANDS = new Set(['wait', 'waitln', 'waitregex', 'wait4all'
 
 function applyWaitReceiveEffects(env: Env, tokens: Token[], offset: number, cmd: string): boolean {
   if (cmd === 'recvln') {
-    setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+    setResult(env, cmd, 1, 'literal')
     setScalar(env, 'inputstr', { kind: 'str', value: '〈受信行〉', origin: 'match-received' })
     return true
   }
   if (cmd === 'waitrecv') {
     const parsed = parseWaitPatternAt(tokens, offset + 1, env)
     const sub = parsed?.pattern ?? ''
-    setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+    setResult(env, cmd, 1, 'literal')
     setScalar(env, 'inputstr', {
       kind: 'str',
       value: sub || '〈受信行〉',
@@ -883,7 +915,7 @@ function applyWaitReceiveEffects(env: Env, tokens: Token[], offset: number, cmd:
       ? 'literal'
       : 'match-received'
   setScalar(env, 'matchstr', { kind: 'str', value: matchstrValue, origin })
-  setScalar(env, 'result', { kind: 'int', value: 1, origin: 'literal' })
+  setResult(env, cmd, 1, 'literal')
   return true
 }
 
@@ -1824,7 +1856,9 @@ function resolveVarHover(name: string, env: Env): HoverInfo {
       name,
       type: 'integer',
       display: v.hint,
-      note: '実行時に決定されます',
+      note: v.setBy
+        ? formatResultSetByNote(v.setBy)
+        : '実行時に決定されます',
       valueKind: 'runtime',
       isSystem,
     }
@@ -1835,7 +1869,9 @@ function resolveVarHover(name: string, env: Env): HoverInfo {
       name,
       type: 'integer',
       display: v.hint ?? '（実行時）',
-      note: '実行時に決定されます（静的には断定できません）',
+      note: v.setBy
+        ? `${formatResultSetByNote(v.setBy)}（静的には断定できません）`
+        : '実行時に決定されます（静的には断定できません）',
       valueKind: 'runtime',
       isSystem,
     }
@@ -1854,11 +1890,17 @@ function resolveVarHover(name: string, env: Env): HoverInfo {
   }
 
   if (v.kind === 'int') {
+    const note =
+      key === 'result' && v.setBy
+        ? formatResultSetByNote(v.setBy)
+        : isSystem && meta
+          ? `システム変数 — ${meta.description}`
+          : undefined
     return {
       name,
       type: 'integer',
       display: String(v.value),
-      note: isSystem && meta ? `システム変数 — ${meta.description}` : undefined,
+      note,
       valueKind: 'known',
       isSystem,
     }

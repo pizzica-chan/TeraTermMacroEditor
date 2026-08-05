@@ -160,7 +160,7 @@ export const SYSTEM_VARIABLE_META: Record<string, SystemVariableMeta> = {
   },
   result: {
     description: 'コマンドの成否・戻り値',
-    setBy: 'wait / yesnobox / strlen / gettime など各コマンド',
+    setBy: '直前に result を更新したコマンド（ホバーで詳細）',
     defaultHint: '0（初期値）',
   },
   inputstr: {
