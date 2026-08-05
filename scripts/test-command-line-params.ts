@@ -8,6 +8,10 @@ import {
   formatParamcntHoverNote,
   formatParamNHoverNote,
   formatParamsIndexHoverNote,
+  isCommandLineParamIdentifier,
+  macroArgvFromDialogFields,
+  sourceUsesCommandLineParams,
+  sourcesUseCommandLineParams,
   synthesizeCommandLine,
 } from '../src/ttl/commandLineParams.ts'
 import { evaluateTTL, initMacroEnvironment } from '../src/ttl/evaluator.ts'
@@ -162,5 +166,34 @@ assert.ok(formatParamcntHoverNote(false).includes('未指定'))
   const v = env.get('paramcnt')
   assert.equal(v?.kind === 'int' ? v.origin : null, 'system-default')
 }
+
+// ── 参照検出（ドライラン引数ダイアログ表示判定） ──
+assert.equal(isCommandLineParamIdentifier('param1'), true)
+assert.equal(isCommandLineParamIdentifier('param9'), true)
+assert.equal(isCommandLineParamIdentifier('param10'), false)
+assert.equal(isCommandLineParamIdentifier('paramcnt'), true)
+assert.equal(isCommandLineParamIdentifier('params'), true)
+assert.equal(isCommandLineParamIdentifier('inputstr'), false)
+assert.equal(sourceUsesCommandLineParams('sendln "hello"\n'), false)
+assert.equal(sourceUsesCommandLineParams('; param1 is comment\nsendln "x"\n'), false)
+assert.equal(sourceUsesCommandLineParams('send param1\n'), true)
+assert.equal(sourceUsesCommandLineParams('if paramcnt=0 then\nend\n'), true)
+assert.equal(sourceUsesCommandLineParams('send params[2]\n'), true)
+assert.equal(sourcesUseCommandLineParams(['sendln "a"', 'send param2']), true)
+assert.equal(sourcesUseCommandLineParams(['sendln "a"', 'sendln "b"']), false)
+// 識別子判定と検出正規表現の集合が一致すること
+for (const name of ['paramcnt', 'params', 'param1', 'param5', 'param9']) {
+  assert.equal(isCommandLineParamIdentifier(name), true)
+  assert.equal(sourceUsesCommandLineParams(`send ${name}\n`), true, name)
+}
+assert.equal(isCommandLineParamIdentifier('param10'), false)
+assert.equal(sourceUsesCommandLineParams('send param10\n'), false)
+assert.equal(sourceUsesCommandLineParams('send param0\n'), false)
+
+// ── ダイアログ入力 → argv ──
+assert.equal(macroArgvFromDialogFields('', ''), undefined)
+assert.deepEqual(macroArgvFromDialogFields('a.ttl', 'u p'), ['a.ttl', 'u', 'p'])
+assert.deepEqual(macroArgvFromDialogFields('C:\\x\\a.ttl', ''), ['a.ttl'])
+assert.deepEqual(macroArgvFromDialogFields('', 'onlyArg'), ['', 'onlyArg'])
 
 console.log('command-line-params: ok')

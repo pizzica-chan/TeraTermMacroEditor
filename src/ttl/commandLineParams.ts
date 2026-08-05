@@ -7,6 +7,7 @@
  *
  * エディタ既定（方針 A）: 起動引数未指定なら paramcnt=0・param* 空・params[0] 未設定。
  * ファイル名を常に入れる挙動（方針 B）は dryRun オプション等で後から opt-in する。
+ * ドライランの引数入力 UI は、マクロがこれらの変数を参照するときだけ出す。
  */
 
 /** 構造化した起動引数（params[0]/params[1]/params[2..] に対応） */
@@ -193,4 +194,56 @@ export function getParamsArrayMeta(): { description: string; setBy: string; defa
 
 export function isUnspecifiedCommandLine(snapshot: CommandLineParamsSnapshot): boolean {
   return !snapshot.specified
+}
+
+/** 起動引数系システム変数の識別子か（param1〜9 / paramcnt / params） */
+export function isCommandLineParamIdentifier(name: string): boolean {
+  const lower = name.toLowerCase()
+  return lower === 'paramcnt' || lower === 'params' || /^param[1-9]$/.test(lower)
+}
+
+/**
+ * ソースがコマンドライン系システム変数を参照しているか。
+ * ドライラン開始時の引数入力ダイアログ表示判定に使う。
+ *
+ * 簡易スキャン（tokenize 循環回避）:
+ * - 行末 `;` 以降をコメントとして落とす（文字列中の `;` は誤る）
+ * - 文字列リテラル内の `param1` 等もヒットしうる（誤ってダイアログが出ても空開始で方針 A）
+ * - 未リンク include 内のみの参照は検出しない
+ */
+export function sourceUsesCommandLineParams(source: string): boolean {
+  const lines = source.split(/\r?\n/)
+  for (const line of lines) {
+    const code = line.replace(/;.*$/, '')
+    // isCommandLineParamIdentifier と同じ集合（param10 等は含めない）
+    const re = /\b(paramcnt|params|param[1-9])\b/gi
+    let match: RegExpExecArray | null
+    while ((match = re.exec(code)) !== null) {
+      if (isCommandLineParamIdentifier(match[1]!)) return true
+    }
+  }
+  return false
+}
+
+export function sourcesUseCommandLineParams(sources: Iterable<string>): boolean {
+  for (const source of sources) {
+    if (sourceUsesCommandLineParams(source)) return true
+  }
+  return false
+}
+
+/**
+ * ドライラン引数ダイアログの入力から MacroArgvInput を作る。
+ * 両方空なら undefined（方針 A・未指定）。
+ */
+export function macroArgvFromDialogFields(
+  fileName: string,
+  argsText: string,
+): MacroArgvInput | undefined {
+  const file = fileName.trim()
+  const args = argsText.trim() ? argsText.trim().split(/\s+/).filter(Boolean) : []
+  if (!file && args.length === 0) return undefined
+  if (file) return [basenameMacroFile(file), ...args]
+  // ファイル名空・引数あり: 空の params[1] スロットを残す
+  return ['', ...args]
 }

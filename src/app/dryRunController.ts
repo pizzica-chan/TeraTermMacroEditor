@@ -18,6 +18,11 @@ import {
   formatAnalysisLimitationWarning,
   hasAnalysisLimitations,
 } from '../ttl/analysisLimitations'
+import {
+  sourcesUseCommandLineParams,
+  type MacroArgvInput,
+} from '../ttl/commandLineParams'
+import { showDryRunMacroArgvDialog } from '../ui/dryRunMacroArgvDialog'
 
 export interface DryRunControllerHost {
   allTabs: () => readonly EditorTab[]
@@ -46,12 +51,14 @@ export function createDryRunController(host: DryRunControllerHost) {
   let dryRunSession: DryRunSession | null = null
   let dryRunRunPromise: Promise<DryRunState> | null = null
   let dryRunActive = false
+  /** 引数ダイアログ表示中など、セッション開始前の再入防止 */
+  let dryRunStarting = false
   let dryRunRunId = 0
   let dryRunOriginTabId: string | null = null
   let dryRunSnapshot: DryRunSnapshot | null = null
 
   function isDryRunInProgress(): boolean {
-    return dryRunActive || dryRunRunPromise !== null
+    return dryRunActive || dryRunRunPromise !== null || dryRunStarting
   }
 
   function dryRunKeepOptions(): { keepDryRun: true } | undefined {
@@ -247,6 +254,7 @@ export function createDryRunController(host: DryRunControllerHost) {
   }
 
   function stopDryRun(): void {
+    dryRunStarting = false
     dryRunActive = false
     dryRunRunPromise = null
     dryRunSnapshot = null
@@ -268,80 +276,139 @@ export function createDryRunController(host: DryRunControllerHost) {
   }
 
   async function startDryRun(): Promise<void> {
-    if (dryRunActive || dryRunRunPromise) return
-    const tab = host.getActiveTab()
-    const currentSource = host.getEditorValue()
-    if (tab) {
-      host.syncTabIncludeBindings(tab, currentSource)
-      const limitations = host.collectAnalysisLimitations(tab, currentSource)
-      const dryRunLimitations: AnalysisLimitations = {
-        unassumedBranches: [],
-        unlinkedIncludes: limitations.unlinkedIncludes,
-      }
-      if (
-        hasAnalysisLimitations(dryRunLimitations) &&
-        !confirm(
-          `${formatAnalysisLimitationWarning(dryRunLimitations)}\n\n` +
-            'タブ未指定の include はドライランで実行できません。\n' +
-            'このままドライランを開始しますか？',
-        )
-      ) {
-        return
-      }
-    }
-    dryRunActive = true
-    const runId = ++dryRunRunId
-    dryRunSnapshot = tab ? host.snapshotDryRunContext(tab) : null
-    const sourceSnapshot =
-      tab && dryRunSnapshot
-        ? dryRunSnapshot.contents.get(tab.id) ?? host.getEditorValue()
-        : host.getEditorValue()
-    const resolver =
-      tab && dryRunSnapshot
-        ? host.createIncludeResolver(tab, dryRunSnapshot)
-        : tab
-          ? host.createIncludeResolver(tab)
-          : undefined
-
-    dryRunOriginTabId = tab?.id ?? null
+    if (dryRunActive || dryRunRunPromise || dryRunStarting) return
+    dryRunStarting = true
     host.setDryRunToolbarState(true)
-    host.setDryRunLocked(true)
-    host.showDryRunTab()
-    host.updateDryRun({ status: 'running', currentLine: 1, events: [] })
-
-    const session = new DryRunSession({
-      source: sourceSnapshot,
-      includeResolver: resolver,
-      dialogAdapter: host.dialogAdapter,
-      onStateChange(state) {
-        if (runId !== dryRunRunId) return
-        host.updateDryRun(state)
-        applyDryRunExecutionHighlight(state)
-        if (state.status === 'finished' || state.status === 'stopped' || state.status === 'error') {
-          host.setDryRunToolbarState(false)
-        }
-      },
-      async yieldEveryLine() {
-        await new Promise((r) => setTimeout(r, 0))
-      },
-    })
-
-    dryRunSession = session
-    dryRunRunPromise = session.run()
     try {
-      await dryRunRunPromise
-    } finally {
-      if (runId === dryRunRunId) {
-        dryRunRunPromise = null
-        dryRunSession = null
-        dryRunActive = false
-        dryRunSnapshot = null
-        host.setDryRunToolbarState(false)
-        host.clearExecutionLine()
-        host.setDryRunLocked(false)
-        host.runAnalysisNow(host.getEditorValue())
-        host.updateCursorPosition()
+      const tab = host.getActiveTab()
+      const currentSource = host.getEditorValue()
+      if (tab) {
+        host.syncTabIncludeBindings(tab, currentSource)
+        const limitations = host.collectAnalysisLimitations(tab, currentSource)
+        const dryRunLimitations: AnalysisLimitations = {
+          unassumedBranches: [],
+          unlinkedIncludes: limitations.unlinkedIncludes,
+        }
+        if (
+          hasAnalysisLimitations(dryRunLimitations) &&
+          !confirm(
+            `${formatAnalysisLimitationWarning(dryRunLimitations)}\n\n` +
+              'タブ未指定の include はドライランで実行できません。\n' +
+              'このままドライランを開始しますか？',
+          )
+        ) {
+          return
+        }
       }
+
+      // 検出専用（ダイアログ表示判定）。実行用スナップショットはダイアログ後に取り直す
+      const detectionSource = host.getEditorValue()
+      const detectionSnapshot = tab ? host.snapshotDryRunContext(tab) : null
+      if (tab && detectionSnapshot) {
+        detectionSnapshot.contents.set(tab.id, detectionSource)
+      }
+      const detectionSources: string[] = detectionSnapshot
+        ? [...detectionSnapshot.contents.values()]
+        : [detectionSource]
+
+      let macroArgv: MacroArgvInput | undefined
+      if (sourcesUseCommandLineParams(detectionSources)) {
+        const argvChoice = await showDryRunMacroArgvDialog()
+        if (argvChoice.action === 'cancel') return
+        macroArgv = argvChoice.macroArgv
+      }
+
+      // ダイアログ表示中の編集を反映してから実行用スナップショットを固定
+      const originTab = tab
+      const stillOnOrigin = !!(originTab && host.getActiveTab()?.id === originTab.id)
+      const launchSource = stillOnOrigin ? host.getEditorValue() : undefined
+      if (originTab) {
+        if (stillOnOrigin && launchSource !== undefined) {
+          host.syncTabIncludeBindings(originTab, launchSource)
+        }
+        dryRunSnapshot = host.snapshotDryRunContext(originTab)
+        if (stillOnOrigin && launchSource !== undefined) {
+          dryRunSnapshot.contents.set(originTab.id, launchSource)
+        }
+      } else {
+        dryRunSnapshot = null
+      }
+
+      dryRunActive = true
+      const runId = ++dryRunRunId
+      try {
+        const sourceSnapshot =
+          originTab && dryRunSnapshot
+            ? dryRunSnapshot.contents.get(originTab.id) ?? host.getEditorValue()
+            : host.getEditorValue()
+        const resolver =
+          originTab && dryRunSnapshot
+            ? host.createIncludeResolver(originTab, dryRunSnapshot)
+            : originTab
+              ? host.createIncludeResolver(originTab)
+              : undefined
+
+        dryRunOriginTabId = originTab?.id ?? null
+        host.setDryRunLocked(true)
+        host.showDryRunTab()
+        host.updateDryRun({ status: 'running', currentLine: 1, events: [] })
+
+        const session = new DryRunSession({
+          source: sourceSnapshot,
+          includeResolver: resolver,
+          macroArgv,
+          dialogAdapter: host.dialogAdapter,
+          onStateChange(state) {
+            if (runId !== dryRunRunId) return
+            host.updateDryRun(state)
+            applyDryRunExecutionHighlight(state)
+            if (state.status === 'finished' || state.status === 'stopped' || state.status === 'error') {
+              host.setDryRunToolbarState(false)
+            }
+          },
+          async yieldEveryLine() {
+            await new Promise((r) => setTimeout(r, 0))
+          },
+        })
+
+        dryRunSession = session
+        dryRunRunPromise = session.run()
+        // セッション開始後は starting を解除（以降は dryRunActive / runPromise でガード）
+        dryRunStarting = false
+        try {
+          await dryRunRunPromise
+        } finally {
+          if (runId === dryRunRunId) {
+            dryRunRunPromise = null
+            dryRunSession = null
+            dryRunActive = false
+            dryRunSnapshot = null
+            host.setDryRunToolbarState(false)
+            host.clearExecutionLine()
+            host.setDryRunLocked(false)
+            host.runAnalysisNow(host.getEditorValue())
+            host.updateCursorPosition()
+          }
+        }
+      } catch (err) {
+        // Session 生成前の例外で dryRunActive が残らないようにする
+        if (runId === dryRunRunId) {
+          dryRunRunPromise = null
+          dryRunSession = null
+          dryRunActive = false
+          dryRunSnapshot = null
+          host.setDryRunToolbarState(false)
+          host.clearExecutionLine()
+          host.setDryRunLocked(false)
+        }
+        throw err
+      }
+    } finally {
+      if (dryRunStarting) {
+        // ダイアログキャンセル等でセッション未開始のときツールバーを戻す
+        host.setDryRunToolbarState(false)
+      }
+      dryRunStarting = false
     }
   }
 

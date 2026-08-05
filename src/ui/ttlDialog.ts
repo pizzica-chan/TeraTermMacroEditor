@@ -3,6 +3,7 @@ import {
   cancelActiveDryRunBranchDialog,
   showDryRunBranchAssumptionDialog,
 } from './dryRunBranchDialog'
+import { cancelActiveDryRunMacroArgvDialog } from './dryRunMacroArgvDialog'
 
 type PendingResolver<T> = (value: T) => void
 
@@ -63,6 +64,7 @@ function waitForDialog<T>(setup: (resolve: PendingResolver<T | null>) => void): 
 export function cancelActiveTtlDialog(): void {
   activeCancel?.()
   cancelActiveDryRunBranchDialog()
+  cancelActiveDryRunMacroArgvDialog()
 }
 
 export function createBrowserDialogAdapter(): DryRunDialogAdapter {
