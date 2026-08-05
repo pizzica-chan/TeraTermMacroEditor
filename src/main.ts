@@ -9,43 +9,21 @@ import {
   setStatusMessage,
   setDryRunToolbarState,
 } from './ui/toolbar'
-import { TabManager, MAX_TABS, type EditorTab } from './ui/tabManager'
-import { analyzeTTL, collectIncludeCrossTabVarContext, type IncludeResolver, type VariableInfo } from './ttl/analyzer'
-import {
-  findIncludeRefs,
-  includeDynamicBindingKey,
-  isIncludeRefLinked,
-  migrateIncludeBindings,
-  normalizeIncludePath,
-  resolveIncludeBindingTabId,
-  resolveIncludePathBindingKey,
-  resolveLoopIncludeBindingKey,
-  type IncludeResolveContext,
-} from './ttl/includeRefs'
+import { TabManager, type EditorTab } from './ui/tabManager'
+import { findIncludeRefs } from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
-import { setIncludeResolver, setIncludeCrossTabContext, setAnalysisCache, clearAnalysisCache } from './ttl/analysisContext'
-import { evaluateTTL } from './ttl/evaluator'
-import {
-  collectIndeterminateIfBranches,
-  branchAssumptionsFromRecord,
-  pruneBranchAssumptions,
-} from './ttl/branchAssumptions'
-import {
-  formatAnalysisLimitationWarning,
-  hasAnalysisLimitations,
-  type AnalysisLimitations,
-} from './ttl/analysisLimitations'
-import { DocumentSettings } from './text/documentSettings'
+import { clearAnalysisCache } from './ttl/analysisContext'
 import type { TextEncoding, NewlineType } from './text/types'
 import { ENCODING_LABELS, NEWLINE_LABELS } from './text/types'
-import { createDefaultDocumentSettings, loadAppSettings, saveAppSettings } from './storage/appSettings'
+import { loadAppSettings, saveAppSettings } from './storage/appSettings'
 import { loadWorkspaceSession, saveWorkspaceSession } from './storage/sessionState'
 import { showGotoLineDialog } from './ui/gotoLineDialog'
 import { setupSidePanelResize } from './ui/sidePanelResize'
-import { DryRunSession, isDryRunMainLocation, type DryRunState } from './ttl/dryRun'
 import { createBrowserDialogAdapter, cancelActiveTtlDialog } from './ui/ttlDialog'
 import { createFileExternalWatcher, bytesFingerprint } from './ui/fileExternalWatch'
-import { buildFlowchart } from './ttl/flowchart'
+import { createAnalysisCoordinator } from './app/analysisCoordinator'
+import { createDryRunController } from './app/dryRunController'
+import { createWorkspaceFileService, readFileAsBytes } from './app/workspaceFileService'
 
 const appSettings = loadAppSettings()
 let isDark = appSettings.isDark
@@ -112,297 +90,22 @@ function getActiveTab(): EditorTab {
   return tab
 }
 
-function syncUiFromTab(tab: EditorTab, options?: { keepDryRun?: boolean }): void {
-  if (!options?.keepDryRun && (dryRunActive || dryRunRunPromise !== null)) stopDryRun()
-  setEncodingSelect(tab.docSettings.encoding)
-  setNewlineSelect(tab.docSettings.newline)
-  updateStatusBar(tab)
-  clearAnalysisCache()
-  runAnalysisNow(editor.getValue())
-  updateCursorPosition()
-  schedulePersistWorkspaceSession()
-  if (options?.keepDryRun) refreshDryRunHighlight()
-  fileWatcher.refreshBanner()
-}
-
 function updateStatusBar(tab: EditorTab): void {
   setStatusMessage(`${ENCODING_LABELS[tab.docSettings.encoding]} / ${NEWLINE_LABELS[tab.docSettings.newline]}`)
-}
-
-function resolveLinkedTabContent(linkedTabId: string | undefined): string | null {
-  if (!linkedTabId) return null
-  const linkedTab = tabManager.allTabs.find((t) => t.id === linkedTabId)
-  if (!linkedTab) return null
-  return tabManager.getTabContent(linkedTab)
-}
-
-interface DryRunSnapshot {
-  contents: Map<string, string>
-  bindings: Map<string, Record<string, string>>
-}
-
-/** ドライラン起点からリンク先タブの内容・バインディングを起動時点で固定する */
-function snapshotDryRunContext(originTab: EditorTab): DryRunSnapshot {
-  const contents = new Map<string, string>()
-  const bindings = new Map<string, Record<string, string>>()
-  const visit = (tab: EditorTab) => {
-    if (!contents.has(tab.id)) {
-      contents.set(tab.id, tabManager.getTabContent(tab))
-      bindings.set(tab.id, { ...tab.includeBindings })
-    }
-    for (const tabId of Object.values(bindings.get(tab.id)!)) {
-      const linked = tabManager.allTabs.find((t) => t.id === tabId)
-      if (linked) visit(linked)
-    }
-  }
-  visit(originTab)
-  return { contents, bindings }
-}
-
-function createIncludeResolver(tab: EditorTab, dryRunSnapshot?: DryRunSnapshot): IncludeResolver {
-  const readContent = (tabId: string): string | null => {
-    if (dryRunSnapshot) return dryRunSnapshot.contents.get(tabId) ?? null
-    return resolveLinkedTabContent(tabId)
-  }
-
-  const tabBindings = () => dryRunSnapshot?.bindings.get(tab.id) ?? tab.includeBindings
-
-  const resolveTabId = (bindingKey: string, rawArg?: string, effectiveRaw?: string) =>
-    resolveIncludeBindingTabId(tabBindings(), bindingKey, rawArg, effectiveRaw)
-
-  const resolveByKey = (bindingKey: string, rawArg?: string, effectiveRaw?: string) => {
-    const tabId = resolveTabId(bindingKey, rawArg, effectiveRaw)
-    return tabId ? readContent(tabId) : null
-  }
-
-  return {
-    resolve(path: string) {
-      return resolveByKey(normalizeIncludePath(path))
-    },
-    resolveDynamic(rawArg: string, context?: IncludeResolveContext) {
-      const bindingKey =
-        context?.loopValue !== undefined && context.line !== undefined
-          ? resolveLoopIncludeBindingKey(context.line, context.loopValue, context.effectiveRaw)
-          : includeDynamicBindingKey(rawArg)
-      return resolveByKey(bindingKey, rawArg, context?.effectiveRaw)
-    },
-    getLinkedTabId(bindingKey: string, rawArg?: string, effectiveRaw?: string) {
-      return resolveTabId(bindingKey, rawArg, effectiveRaw)
-    },
-    resolverForLinkedTab(tabId: string) {
-      if (tabId === tab.id) return null
-      const linkedTab = tabManager.allTabs.find((t) => t.id === tabId)
-      return linkedTab ? createIncludeResolver(linkedTab, dryRunSnapshot) : null
-    },
-    getBranchAssumptions(tabId: string) {
-      // 分岐仮定は静的表示専用。ドライラン用スナップショットには混入させない。
-      if (dryRunSnapshot) return undefined
-      const linkedTab = tabManager.allTabs.find((t) => t.id === tabId)
-      return linkedTab
-        ? branchAssumptionsFromRecord(linkedTab.branchAssumptions)
-        : undefined
-    },
-  }
-}
-
-function collectAnalysisLimitations(
-  originTab: EditorTab,
-  originSource: string,
-  originBranches?: ReturnType<typeof collectIndeterminateIfBranches>,
-): AnalysisLimitations {
-  const limitations: AnalysisLimitations = {
-    unassumedBranches: [],
-    unlinkedIncludes: [],
-  }
-  const visited = new Set<string>()
-  const queue: Array<{ tab: EditorTab; source: string }> = [
-    { tab: originTab, source: originSource },
-  ]
-
-  while (queue.length > 0) {
-    const current = queue.shift()!
-    if (visited.has(current.tab.id)) continue
-    visited.add(current.tab.id)
-
-    const refs = findIncludeRefs(current.source)
-    for (const ref of refs) {
-      if (!isIncludeRefLinked(ref, current.tab.includeBindings)) {
-        limitations.unlinkedIncludes.push({
-          sourceName: current.tab.fileName,
-          line: ref.line,
-          raw: ref.raw,
-        })
-      }
-    }
-
-    const branches =
-      current.tab.id === originTab.id && originBranches
-        ? originBranches
-        : collectIndeterminateIfBranches(
-            current.source,
-            evaluateTTL(current.source, {
-              includeResolver: createIncludeResolver(current.tab),
-            }).beforeLine,
-          )
-    for (const branch of branches) {
-      if (current.tab.branchAssumptions?.[String(branch.line)] === undefined) {
-        limitations.unassumedBranches.push({
-          sourceName: current.tab.fileName,
-          line: branch.line,
-          conditionText: branch.conditionText,
-        })
-      }
-    }
-
-    for (const linkedTabId of new Set(Object.values(current.tab.includeBindings))) {
-      const linkedTab = tabManager.allTabs.find((tab) => tab.id === linkedTabId)
-      if (!linkedTab || visited.has(linkedTab.id)) continue
-      queue.push({
-        tab: linkedTab,
-        source: tabManager.getTabContent(linkedTab),
-      })
-    }
-  }
-
-  return limitations
-}
-
-function syncTabIncludeBindings(tab: EditorTab, source: string): void {
-  const migrated = migrateIncludeBindings(source, tab.includeBindings)
-  if (migrated !== tab.includeBindings) {
-    tab.includeBindings = migrated
-    editor.notifyIncludeGraphChanged()
-    schedulePersistWorkspaceSession()
-  }
-}
-
-function getIncludeCrossTabContext(tab: EditorTab): {
-  externallyDeclared: Map<string, VariableInfo>
-  externallyUsed: Set<string>
-} {
-  const externallyDeclared = new Map<string, VariableInfo>()
-  const externallyUsed = new Set<string>()
-
-  for (const parentTab of tabManager.allTabs) {
-    if (parentTab.id === tab.id) continue
-    const includesThis = Object.values(parentTab.includeBindings).includes(tab.id)
-    if (!includesThis) continue
-
-    const ctx = collectIncludeCrossTabVarContext(
-      tabManager.getTabContent(parentTab),
-      createIncludeResolver(parentTab),
-      tab.id,
-    )
-    for (const [key, info] of ctx.externallyDeclared) {
-      if (!externallyDeclared.has(key)) externallyDeclared.set(key, info)
-    }
-    for (const name of ctx.externallyUsed) externallyUsed.add(name)
-  }
-
-  return { externallyDeclared, externallyUsed }
-}
-
-let analysisTimer: ReturnType<typeof setTimeout> | null = null
-const ANALYSIS_DEBOUNCE_MS = 250
-
-function buildFlowchartForActiveTab(text: string) {
-  const tab = tabManager.activeTab
-  if (!tab) return null
-  const resolver = createIncludeResolver(tab)
-  return buildFlowchart(text, {
-    sourceId: tab.id,
-    sourceName: tab.fileName,
-    includeResolver: resolver,
-    getSourceName: (sourceId) =>
-      tabManager.allTabs.find((candidate) => candidate.id === sourceId)?.fileName,
-    showDetailedWaits: flowchartShowDetailedWaits,
-    showAssignments: flowchartShowAssignments,
-  })
-}
-
-function refreshFlowchart(): void {
-  sidePanel.updateFlowchart(buildFlowchartForActiveTab(editor.getValue()))
-}
-
-function runAnalysisImmediate(text: string): void {
-  const tab = tabManager.activeTab
-  if (tab) syncTabIncludeBindings(tab, text)
-
-  const resolver = tab ? createIncludeResolver(tab) : undefined
-  const crossTab = tab ? getIncludeCrossTabContext(tab) : undefined
-  setIncludeResolver(resolver)
-  setIncludeCrossTabContext(crossTab)
-
-  const result = analyzeTTL(text, {
-    includeResolver: resolver,
-    externallyUsedNames: crossTab?.externallyUsed,
-    externallyDeclaredVars: crossTab?.externallyDeclared,
-  })
-  const evaluationForBranches = evaluateTTL(text, {
-    includeResolver: resolver,
-  })
-  const indeterminateBranches = collectIndeterminateIfBranches(text, evaluationForBranches.beforeLine)
-
-  if (tab) {
-    const validLines = new Set(indeterminateBranches.map((b) => b.line))
-    tab.branchAssumptions = pruneBranchAssumptions(tab.branchAssumptions ?? {}, validLines)
-  }
-
-  const branchAssumptions = tab ? branchAssumptionsFromRecord(tab.branchAssumptions) : new Map<number, boolean>()
-  const evaluation =
-    branchAssumptions.size > 0
-      ? evaluateTTL(text, {
-          includeResolver: resolver,
-          branchAssumptions,
-        })
-      : evaluationForBranches
-
-  if (editor.getValue() !== text) return
-
-  const analysisLimitations = tab
-    ? collectAnalysisLimitations(tab, text, indeterminateBranches)
-    : { unassumedBranches: [], unlinkedIncludes: [] }
-  editor.setBranchAssumptionDecorations(
-    [...branchAssumptions].map(([line, value]) => ({ line, value })),
-  )
-  setAnalysisCache(text, result, evaluation)
-  editor.notifyAnalysisCacheChanged()
-
-  sidePanel.update({
-    analysis: result,
-    sendEntries: evaluation.sendEntries,
-    indeterminateBranches,
-    branchAssumptions: tab?.branchAssumptions ?? {},
-    analysisLimitations,
-  })
-  sidePanel.updateFlowchart(buildFlowchartForActiveTab(text))
-  refreshIncludePanel(text, { readOnly: isDryRunInProgress() })
-}
-
-function runAnalysis(text: string, immediate = false): void {
-  if (immediate) {
-    if (analysisTimer) {
-      clearTimeout(analysisTimer)
-      analysisTimer = null
-    }
-    runAnalysisImmediate(text)
-    return
-  }
-  if (analysisTimer) clearTimeout(analysisTimer)
-  analysisTimer = setTimeout(() => {
-    analysisTimer = null
-    runAnalysisImmediate(text)
-  }, ANALYSIS_DEBOUNCE_MS)
-}
-
-function runAnalysisNow(text: string): void {
-  runAnalysis(text, true)
 }
 
 function buildTabNameMap(): Record<string, string> {
   const map: Record<string, string> = {}
   for (const t of tabManager.allTabs) map[t.id] = t.fileName
   return map
+}
+
+function refreshIncludeDecorations(refs: ReturnType<typeof findIncludeRefs>, tab: EditorTab) {
+  editor.setIncludeDecorations({
+    refs,
+    bindings: tab.includeBindings,
+    tabNames: buildTabNameMap(),
+  })
 }
 
 function refreshIncludePanel(text?: string, options?: { readOnly?: boolean }) {
@@ -419,14 +122,14 @@ function refreshIncludePanel(text?: string, options?: { readOnly?: boolean }) {
       if (tabId) tab.includeBindings[path] = tabId
       else delete tab.includeBindings[path]
       editor.notifyIncludeGraphChanged()
-      runAnalysisNow(editor.getValue())
+      analysis.runAnalysisNow(editor.getValue())
       schedulePersistWorkspaceSession()
     },
     onGotoLine(line) {
       editor.gotoLine(line)
     },
     onOpenLinkedTab(tabId) {
-      if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
+      dryRun.stopIfRunning()
       tabManager.switchTab(tabId)
     },
   })
@@ -434,13 +137,85 @@ function refreshIncludePanel(text?: string, options?: { readOnly?: boolean }) {
   refreshIncludeDecorations(refs, tab)
 }
 
-function refreshIncludeDecorations(refs: ReturnType<typeof findIncludeRefs>, tab: EditorTab) {
-  editor.setIncludeDecorations({
-    refs,
-    bindings: tab.includeBindings,
-    tabNames: buildTabNameMap(),
-  })
+function syncUiFromTab(tab: EditorTab, options?: { keepDryRun?: boolean }): void {
+  if (!options?.keepDryRun) dryRun.stopIfRunning()
+  setEncodingSelect(tab.docSettings.encoding)
+  setNewlineSelect(tab.docSettings.newline)
+  updateStatusBar(tab)
+  clearAnalysisCache()
+  analysis.runAnalysisNow(editor.getValue())
+  updateCursorPosition()
+  schedulePersistWorkspaceSession()
+  if (options?.keepDryRun) dryRun.refreshDryRunHighlight()
+  fileWatcher.refreshBanner()
 }
+
+let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function persistWorkspaceSession(): void {
+  tabManager.flushEditorState()
+  saveWorkspaceSession(tabManager.buildSession())
+}
+
+function schedulePersistWorkspaceSession(): void {
+  if (sessionSaveTimer) clearTimeout(sessionSaveTimer)
+  sessionSaveTimer = setTimeout(() => {
+    sessionSaveTimer = null
+    persistWorkspaceSession()
+  }, 500)
+}
+
+const includeHost = {
+  get allTabs() {
+    return tabManager.allTabs
+  },
+  getTabContent(tab: EditorTab) {
+    return tabManager.getTabContent(tab)
+  },
+}
+
+// analysis / dryRun は相互参照するため、先にプレースホルダ相当の遅延束縛で生成する
+const analysis = createAnalysisCoordinator({
+  includeHost,
+  getActiveTab: () => tabManager.activeTab,
+  getEditorValue: () => editor.getValue(),
+  isEditorValue: (text) => editor.getValue() === text,
+  notifyIncludeGraphChanged: () => editor.notifyIncludeGraphChanged(),
+  setBranchAssumptionDecorations: (items) => editor.setBranchAssumptionDecorations(items),
+  notifyAnalysisCacheChanged: () => editor.notifyAnalysisCacheChanged(),
+  updateSidePanel: (payload) => sidePanel.update(payload),
+  updateFlowchart: (model) => sidePanel.updateFlowchart(model),
+  refreshIncludePanel: (text, options) => refreshIncludePanel(text, options),
+  isDryRunInProgress: () => dryRun.isDryRunInProgress(),
+  schedulePersistWorkspaceSession,
+  flowchartShowDetailedWaits: () => flowchartShowDetailedWaits,
+  flowchartShowAssignments: () => flowchartShowAssignments,
+})
+
+const dryRunDialogAdapter = createBrowserDialogAdapter()
+
+const dryRun = createDryRunController({
+  allTabs: () => tabManager.allTabs,
+  getActiveTab: () => tabManager.activeTab,
+  getEditorValue: () => editor.getValue(),
+  switchTab: (tabId, options) => tabManager.switchTab(tabId, options),
+  gotoLine: (line) => editor.gotoLine(line),
+  setExecutionLine: (line, waiting) => editor.setExecutionLine(line, waiting),
+  clearExecutionLine: () => editor.clearExecutionLine(),
+  setDryRunLocked: (locked) => editor.setDryRunLocked(locked),
+  setDryRunToolbarState,
+  showDryRunTab: () => sidePanel.showTab('dryrun'),
+  updateDryRun: (state) => sidePanel.updateDryRun(state),
+  setStatusMessage,
+  cancelActiveDialog: cancelActiveTtlDialog,
+  syncTabIncludeBindings: (tab, source) => analysis.syncTabIncludeBindings(tab, source),
+  collectAnalysisLimitations: (tab, source) => analysis.collectAnalysisLimitations(tab, source),
+  snapshotDryRunContext: (originTab) => analysis.snapshotDryRunContext(originTab),
+  createIncludeResolver: (tab, snapshot) => analysis.createIncludeResolver(tab, snapshot),
+  runAnalysisNow: (text) => analysis.runAnalysisNow(text),
+  updateCursorPosition,
+  dialogAdapter: dryRunDialogAdapter,
+})
 
 const tabManager = new TabManager(
   editor,
@@ -451,13 +226,11 @@ const tabManager = new TabManager(
   },
 )
 tabManager.setKeepDryRunOnUserSwitch(() => {
-  if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
+  dryRun.stopIfRunning()
   return false
 })
 tabManager.setOnTabClosed((closedTabId) => {
-  const related = isDryRunRelatedTab(closedTabId)
-  if (closedTabId === dryRunOriginTabId) dryRunOriginTabId = null
-  if ((dryRunActive || dryRunRunPromise !== null) && related) stopDryRun()
+  dryRun.onTabClosed(closedTabId)
   fileWatcher.clearTab(closedTabId)
   schedulePersistWorkspaceSession()
 })
@@ -468,7 +241,7 @@ const fileExternalBannerDismissBtn = fileExternalBannerEl.querySelector<HTMLButt
 const fileExternalBannerReloadBtn = fileExternalBannerEl.querySelector<HTMLButtonElement>('[data-action="reload"]')!
 
 function reloadTabFromDisk(tab: EditorTab, bytes: Uint8Array): void {
-  if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
+  dryRun.stopIfRunning()
   const loaded = tab.docSettings.loadFromBytes(bytes)
   if (tab.id === tabManager.activeTab?.id) {
     editor.setValue(loaded.text)
@@ -477,7 +250,7 @@ function reloadTabFromDisk(tab: EditorTab, bytes: Uint8Array): void {
     setNewlineSelect(tab.docSettings.newline)
     updateStatusBar(tab)
     clearAnalysisCache()
-    runAnalysisNow(loaded.text)
+    analysis.runAnalysisNow(loaded.text)
     updateCursorPosition()
   } else {
     tab.editorState = editor.createState(loaded.text)
@@ -560,23 +333,20 @@ window.addEventListener('focus', () => {
   scheduleFileWatchPoll()
 })
 
-let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null
-
-function persistWorkspaceSession(): void {
-  tabManager.flushEditorState()
-  saveWorkspaceSession(tabManager.buildSession())
-}
-
-function schedulePersistWorkspaceSession(): void {
-  if (sessionSaveTimer) clearTimeout(sessionSaveTimer)
-  sessionSaveTimer = setTimeout(() => {
-    sessionSaveTimer = null
-    persistWorkspaceSession()
-  }, 500)
+function updateCursorPosition() {
+  const pos = editor.view.state.selection.main.head
+  const line = editor.view.state.doc.lineAt(pos)
+  const col = pos - line.from + 1
+  const el = document.querySelector('#status-position')
+  if (el) el.textContent = `Ln ${line.number}, Col ${col}`
+  if (!dryRun.isDryRunInProgress()) {
+    const tab = tabManager.activeTab
+    sidePanel.setFlowchartActiveLocation(tab ? `${tab.id}:L${line.number}` : undefined)
+  }
 }
 
 editor.onChange((text) => {
-  if (!isDryRunInProgress()) {
+  if (!dryRun.isDryRunInProgress()) {
     tabManager.activeTab?.docSettings.markDirty()
   }
   tabManager.notifyContentChanged()
@@ -584,229 +354,43 @@ editor.onChange((text) => {
   if (tab && tabManager.hasExternalChangePending(tab)) {
     fileWatcher.refreshBanner()
   }
-  runAnalysis(text)
+  analysis.runAnalysis(text)
   updateCursorPosition()
   schedulePersistWorkspaceSession()
 })
 
-function updateCursorPosition() {
-  const pos = editor.view.state.selection.main.head
-  const line = editor.view.state.doc.lineAt(pos)
-  const col = pos - line.from + 1
-  const statusEl = document.querySelector('#status-position')
-  if (statusEl) statusEl.textContent = `Ln ${line.number}, Col ${col}`
-  if (!isDryRunInProgress()) {
-    const tab = tabManager.activeTab
-    sidePanel.setFlowchartActiveLocation(tab ? `${tab.id}:L${line.number}` : undefined)
-  }
-}
-
 editor.view.dom.addEventListener('keyup', updateCursorPosition)
 editor.view.dom.addEventListener('click', updateCursorPosition)
 
-function handleNewTab() {
-  if (!tabManager.canAddTab()) {
-    alert(`タブは最大 ${MAX_TABS} 個まで開けます。`)
-    return
-  }
-  if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
-  tabManager.addTab({ fileName: '未保存', docSettings: createDefaultDocumentSettings(), activate: true })
-}
-
-function handleNew() {
-  handleNewTab()
-}
-
-async function readFileAsBytes(file: File): Promise<Uint8Array> {
-  const buffer = await file.arrayBuffer()
-  return new Uint8Array(buffer)
-}
-
-async function openFile(
-  bytes: Uint8Array,
-  fileName: string,
-  fileHandle: FileSystemFileHandle | null,
-  options?: { ifAlreadyOpen?: 'switch' | 'skip'; sourceFile?: File },
-) {
-  let existing: EditorTab | undefined
-  if (fileHandle) {
-    for (const tab of tabManager.allTabs) {
-      if (!tab.fileHandle) continue
-      if (
-        tab.fileHandle === fileHandle ||
-        (tab.fileHandle.isSameEntry && (await tab.fileHandle.isSameEntry(fileHandle)))
-      ) {
-        existing = tab
-        break
-      }
-    }
-  }
-  if (existing) {
-    if (options?.ifAlreadyOpen === 'skip') return
-    tabManager.switchTab(existing.id, dryRunKeepOptions())
+const files = createWorkspaceFileService({
+  getActiveTab,
+  allTabs: () => tabManager.allTabs,
+  canAddTab: () => tabManager.canAddTab(),
+  addTab: (options) => tabManager.addTab(options),
+  switchTab: (tabId, options) => tabManager.switchTab(tabId, options),
+  getEditorValue: () => editor.getValue(),
+  setEditorValue: (text) => editor.setValue(text),
+  getEditorState: () => editor.getState(),
+  createEditorState: (text) => editor.createState(text),
+  markTabSaved: () => tabManager.markTabSaved(),
+  setActiveFileName: (name) => tabManager.setActiveFileName(name),
+  notifyContentChanged: () => tabManager.notifyContentChanged(),
+  hasExternalChangePending: (tab) => tabManager.hasExternalChangePending(tab),
+  dryRunKeepOptions: () => dryRun.dryRunKeepOptions(),
+  stopDryRunIfRunning: () => dryRun.stopIfRunning(),
+  syncUiFromTab,
+  runAnalysisNow: (text) => analysis.runAnalysisNow(text),
+  updateStatusBar,
+  setEncodingSelect,
+  setNewlineSelect,
+  persistWorkspaceSession,
+  schedulePersistWorkspaceSession,
+  markDiskSynced: (tabId, bytes, file) => fileWatcher.markDiskSynced(tabId, bytes, file),
+  setSaving: (tabId, saving) => fileWatcher.setSaving(tabId, saving),
+  pollFileWatcherNow: () => {
     void fileWatcher.pollNow()
-    return
-  }
-
-  const docSettings = new DocumentSettings()
-  const loaded = docSettings.loadFromBytes(bytes)
-  const editorState = editor.createState(loaded.text)
-
-  const tab = tabManager.addTab({
-    fileName,
-    editorState,
-    docSettings,
-    fileHandle,
-    activate: true,
-  })
-
-  if (tab) {
-    syncUiFromTab(tab, dryRunKeepOptions())
-    if (fileHandle) {
-      if (options?.sourceFile) {
-        fileWatcher.markDiskSynced(tab.id, bytes, options.sourceFile)
-      } else {
-        void fileHandle.getFile().then((file) => {
-          fileWatcher.markDiskSynced(tab.id, bytes, file)
-        })
-      }
-    }
-  } else schedulePersistWorkspaceSession()
-}
-
-async function handleOpen() {
-  try {
-    if (typeof window.showOpenFilePicker === 'function') {
-      const [handle] = await window.showOpenFilePicker({
-        types: [{ description: 'Tera Term Macro', accept: { 'text/plain': ['.ttl', '.txt'] } }],
-        multiple: false,
-      })
-      const file = await handle.getFile()
-      const bytes = await readFileAsBytes(file)
-      await openFile(bytes, handle.name, handle, { sourceFile: file })
-    } else {
-      const input = document.createElement('input')
-      input.type = 'file'
-      input.accept = '.ttl,.txt'
-      input.onchange = async () => {
-        const file = input.files?.[0]
-        if (!file) return
-        const bytes = await readFileAsBytes(file)
-        await openFile(bytes, file.name, null)
-      }
-      input.click()
-    }
-  } catch {
-    // user cancelled
-  }
-}
-
-function toBufferSource(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
-}
-
-async function writeBytes(writable: FileSystemWritableFileStream, bytes: Uint8Array) {
-  await writable.write(toBufferSource(bytes))
-  await writable.close()
-}
-
-function isUserCancelError(err: unknown): boolean {
-  return err instanceof DOMException && err.name === 'AbortError'
-}
-
-async function handleSave() {
-  const tab = getActiveTab()
-  const { bytes, warning } = tab.docSettings.prepareSave(editor.getValue())
-  if (warning) {
-    if (!confirm(`${warning}\n\nこのまま保存しますか？`)) return
-  }
-
-  if (tabManager.hasExternalChangePending(tab)) {
-    if (
-      !confirm(
-        `「${tab.fileName}」はディスク上で他のプログラムにより更新されています（↻）。\n\n` +
-          `保存すると、ディスクの変更内容は失われ、エディタの内容が書き込まれます。\n\n保存しますか？`,
-      )
-    ) {
-      return
-    }
-  }
-
-  fileWatcher.setSaving(tab.id, true)
-  try {
-    if (tab.fileHandle && 'createWritable' in tab.fileHandle) {
-      const writable = await tab.fileHandle.createWritable()
-      await writeBytes(writable, bytes)
-    } else if (typeof window.showSaveFilePicker === 'function') {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: tab.fileName === '未保存' ? 'macro.ttl' : tab.fileName,
-        types: [{ description: 'Tera Term Macro', accept: { 'text/plain': ['.ttl'] } }],
-      })
-      const writable = await handle.createWritable()
-      await writeBytes(writable, bytes)
-      tab.fileHandle = handle
-      tab.fileName = handle.name
-    } else {
-      downloadFile(bytes, tab.fileName === '未保存' ? 'macro.ttl' : tab.fileName)
-      return
-    }
-
-    tabManager.markTabSaved()
-    tabManager.setActiveFileName(tab.fileName)
-    syncUiFromTab(tab, dryRunKeepOptions())
-    persistWorkspaceSession()
-
-    if (tab.fileHandle) {
-      // 保存直後の getFile() はキャッシュで古い場合があるため、書き込みバイトで同期する
-      fileWatcher.markDiskSynced(tab.id, bytes)
-    }
-  } catch (err) {
-    if (isUserCancelError(err)) return
-    const message = err instanceof Error ? err.message : String(err)
-    alert(`保存に失敗しました。\n${message}`)
-  } finally {
-    fileWatcher.setSaving(tab.id, false)
-  }
-}
-
-function downloadFile(bytes: Uint8Array, filename: string) {
-  const blob = new Blob([toBufferSource(bytes)])
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-  const tab = getActiveTab()
-  tab.fileName = filename
-  tab.fileHandle = null
-  tabManager.markTabSaved()
-  tabManager.setActiveFileName(filename)
-  persistWorkspaceSession()
-}
-
-function handleEncodingChange(encoding: TextEncoding) {
-  const tab = getActiveTab()
-  const { text, warning } = tab.docSettings.changeEncoding(editor.getValue(), encoding)
-  if (text !== editor.getValue()) {
-    editor.setValue(text)
-    runAnalysisNow(text)
-  }
-  tab.editorState = editor.getState()
-  setEncodingSelect(encoding)
-  updateStatusBar(tab)
-  tabManager.notifyContentChanged()
-  saveAppSettings({ defaultEncoding: encoding })
-  if (warning) alert(warning)
-}
-
-function handleNewlineChange(newline: NewlineType) {
-  const tab = getActiveTab()
-  tab.docSettings.changeNewline(editor.getValue(), newline)
-  setNewlineSelect(newline)
-  updateStatusBar(tab)
-  saveAppSettings({ defaultNewline: newline })
-}
+  },
+})
 
 function handleThemeToggle() {
   applyTheme(!isDark)
@@ -823,309 +407,6 @@ function handleGotoLine() {
   })
 }
 
-let dryRunSession: DryRunSession | null = null
-let dryRunRunId = 0
-let dryRunActive = false
-let dryRunRunPromise: Promise<DryRunState> | null = null
-let dryRunClearedState: DryRunState | null = null
-let dryRunOriginTabId: string | null = null
-let dryRunSnapshot: DryRunSnapshot | null = null
-const dryRunDialogAdapter = createBrowserDialogAdapter()
-
-function isDryRunInProgress(): boolean {
-  return dryRunActive || dryRunRunPromise !== null
-}
-
-function dryRunKeepOptions(): { keepDryRun: true } | undefined {
-  return isDryRunInProgress() ? { keepDryRun: true } : undefined
-}
-
-function getDryRunOriginTab(): EditorTab | null {
-  if (!dryRunOriginTabId) return null
-  return tabManager.allTabs.find((t) => t.id === dryRunOriginTabId) ?? null
-}
-
-/** ドライラン起点から include バインディングを辿って到達できるタブ ID */
-function collectDryRunLinkedTabIds(originTab: EditorTab): Set<string> {
-  const linked = new Set<string>()
-  const queue: EditorTab[] = [originTab]
-  while (queue.length > 0) {
-    const tab = queue.pop()!
-    const bindings = getBindingsForTab(tab)
-    for (const tabId of Object.values(bindings)) {
-      if (linked.has(tabId)) continue
-      linked.add(tabId)
-      const next = tabManager.allTabs.find((t) => t.id === tabId)
-      if (next) queue.push(next)
-    }
-  }
-  return linked
-}
-
-function getBindingsForTab(tab: EditorTab): Record<string, string> {
-  if (isDryRunInProgress() && dryRunSnapshot) {
-    return dryRunSnapshot.bindings.get(tab.id) ?? tab.includeBindings
-  }
-  return tab.includeBindings
-}
-
-function isDryRunRelatedTab(closedTabId: string): boolean {
-  if (closedTabId === dryRunOriginTabId) return true
-  const origin = getDryRunOriginTab()
-  if (!origin) return false
-  return collectDryRunLinkedTabIds(origin).has(closedTabId)
-}
-
-function findTabForLocationPrefixInTab(prefix: string, tab: EditorTab): EditorTab | null {
-  const bindings = getBindingsForTab(tab)
-  const directBinding = bindings[prefix]
-  if (directBinding) {
-    return tabManager.allTabs.find((t) => t.id === directBinding) ?? null
-  }
-  const fromBindingKey = resolveIncludeBindingTabId(bindings, prefix)
-  if (fromBindingKey) {
-    return tabManager.allTabs.find((t) => t.id === fromBindingKey) ?? null
-  }
-
-  const normalized = normalizeIncludePath(prefix)
-
-  const fromStatic = resolveIncludeBindingTabId(bindings, normalized, undefined, normalized)
-  if (fromStatic) {
-    return tabManager.allTabs.find((t) => t.id === fromStatic) ?? null
-  }
-
-  const loopSuffix = /^(.+)@([a-zA-Z_]\w*)=(-?\d+)$/.exec(prefix)
-  if (loopSuffix) {
-    const [, rawPart, , valueStr] = loopSuffix
-    const loopValue = Number(valueStr)
-    const dynamicKey = includeDynamicBindingKey(rawPart!)
-    const fromDynamic = resolveIncludeBindingTabId(bindings, dynamicKey, rawPart, rawPart)
-    if (fromDynamic) {
-      return tabManager.allTabs.find((t) => t.id === fromDynamic) ?? null
-    }
-    const pathKey = resolveIncludePathBindingKey(rawPart!)
-    if (pathKey) {
-      const fromPath = resolveIncludeBindingTabId(bindings, pathKey, rawPart, rawPart)
-      if (fromPath) {
-        return tabManager.allTabs.find((t) => t.id === fromPath) ?? null
-      }
-    }
-    for (const [key, tabId] of Object.entries(bindings)) {
-      if (key.startsWith('@loop:L') && key.endsWith(`:${loopValue}`)) {
-        return tabManager.allTabs.find((t) => t.id === tabId) ?? null
-      }
-    }
-  } else {
-    const dynamicKey = includeDynamicBindingKey(prefix)
-    const fromDynamic = resolveIncludeBindingTabId(bindings, dynamicKey, prefix, prefix)
-    if (fromDynamic) {
-      return tabManager.allTabs.find((t) => t.id === fromDynamic) ?? null
-    }
-    const pathKey = resolveIncludePathBindingKey(prefix)
-    if (pathKey) {
-      const fromPath = resolveIncludeBindingTabId(bindings, pathKey, prefix, prefix)
-      if (fromPath) {
-        return tabManager.allTabs.find((t) => t.id === fromPath) ?? null
-      }
-    }
-  }
-
-  return null
-}
-
-function findTabForLocationPrefix(prefix: string, contextTab: EditorTab | null): EditorTab | null {
-  const directTab = tabManager.allTabs.find((tab) => tab.id === prefix)
-  if (directTab) return directTab
-  if (!contextTab) return null
-
-  const normalized = normalizeIncludePath(prefix)
-  const fromContext = findTabForLocationPrefixInTab(prefix, contextTab)
-  if (fromContext) return fromContext
-
-  for (const tabId of collectDryRunLinkedTabIds(contextTab)) {
-    const linkedTab = tabManager.allTabs.find((t) => t.id === tabId)
-    if (!linkedTab) continue
-    const fromLinked = findTabForLocationPrefixInTab(prefix, linkedTab)
-    if (fromLinked) return fromLinked
-  }
-
-  const matches = tabManager.allTabs.filter(
-    (tab) => tab.fileName === prefix || tab.fileName === normalized,
-  )
-  return matches.length === 1 ? matches[0]! : null
-}
-
-function dryRunLocationMatchesActiveTab(location: string | undefined): boolean {
-  if (!location) return false
-  const tab = tabManager.activeTab
-  if (!tab) return false
-  if (isDryRunMainLocation(location)) {
-    return tab.id === dryRunOriginTabId
-  }
-  const prefixed = /^(.*):L\d+$/.exec(location)
-  if (!prefixed) return false
-  const contextTab = getDryRunOriginTab() ?? tab
-  const targetTab = findTabForLocationPrefix(prefixed[1]!, contextTab)
-  return targetTab?.id === tab.id
-}
-
-function gotoTtlLocation(location: string, contextTab: EditorTab | null): boolean {
-  const keepDryRun = dryRunKeepOptions()
-  const mainMatch = /^L(\d+)$/.exec(location)
-  if (mainMatch) {
-    if (contextTab && tabManager.activeTab?.id !== contextTab.id) {
-      tabManager.switchTab(contextTab.id, keepDryRun)
-    }
-    editor.gotoLine(Number(mainMatch[1]))
-    refreshDryRunHighlight()
-    return true
-  }
-  const prefixed = /^(.*):L(\d+)$/.exec(location)
-  if (!prefixed) return false
-  const [, prefix, lineStr] = prefixed
-  const targetTab = findTabForLocationPrefix(prefix!, contextTab)
-  if (targetTab) {
-    tabManager.switchTab(targetTab.id, keepDryRun)
-    editor.gotoLine(Number(lineStr))
-    refreshDryRunHighlight()
-    return true
-  }
-  return false
-}
-
-function gotoSendLocation(location: string): void {
-  if (!gotoTtlLocation(location, tabManager.activeTab)) {
-    setStatusMessage('送信データの参照先タブを特定できません')
-  }
-}
-
-function gotoDryRunLocation(location: string): void {
-  gotoTtlLocation(location, getDryRunOriginTab() ?? tabManager.activeTab)
-}
-
-function gotoFlowchartLocation(location: string): void {
-  if (!gotoTtlLocation(location, tabManager.activeTab)) {
-    setStatusMessage('フローチャートの参照先タブを特定できません')
-  }
-}
-
-function refreshDryRunHighlight(): void {
-  const session = dryRunSession
-  if (session) applyDryRunExecutionHighlight(session.getState())
-}
-
-function applyDryRunExecutionHighlight(state: DryRunState): void {
-  if (state.status === 'waiting-dialog' || state.status === 'running') {
-    if (dryRunLocationMatchesActiveTab(state.currentLocation)) {
-      editor.setExecutionLine(state.currentLine, state.status === 'waiting-dialog')
-    } else {
-      editor.clearExecutionLine()
-    }
-    return
-  }
-  if (state.status === 'finished' || state.status === 'stopped' || state.status === 'error') {
-    editor.clearExecutionLine()
-  }
-}
-
-function stopDryRun(): void {
-  dryRunActive = false
-  dryRunRunPromise = null
-  dryRunSnapshot = null
-  const session = dryRunSession
-  if (session) {
-    session.stop()
-    sidePanel.updateDryRun(session.getState())
-    cancelActiveTtlDialog()
-    dryRunSession = null
-  } else {
-    cancelActiveTtlDialog()
-  }
-  dryRunRunId++
-  setDryRunToolbarState(false)
-  editor.clearExecutionLine()
-  editor.setDryRunLocked(false)
-  runAnalysisNow(editor.getValue())
-  updateCursorPosition()
-}
-
-async function startDryRun(): Promise<void> {
-  if (dryRunActive || dryRunRunPromise) return
-  const tab = tabManager.activeTab
-  const currentSource = editor.getValue()
-  if (tab) {
-    syncTabIncludeBindings(tab, currentSource)
-    const limitations = collectAnalysisLimitations(tab, currentSource)
-    const dryRunLimitations: AnalysisLimitations = {
-      unassumedBranches: [],
-      unlinkedIncludes: limitations.unlinkedIncludes,
-    }
-    if (
-      hasAnalysisLimitations(dryRunLimitations)
-      && !confirm(
-        `${formatAnalysisLimitationWarning(dryRunLimitations)}\n\n`
-        + 'タブ未指定の include はドライランで実行できません。\n'
-        + 'このままドライランを開始しますか？',
-      )
-    ) {
-      return
-    }
-  }
-  dryRunActive = true
-  const runId = ++dryRunRunId
-  dryRunSnapshot = tab ? snapshotDryRunContext(tab) : null
-  const sourceSnapshot =
-    tab && dryRunSnapshot ? dryRunSnapshot.contents.get(tab.id) ?? editor.getValue() : editor.getValue()
-  const resolver =
-    tab && dryRunSnapshot
-      ? createIncludeResolver(tab, dryRunSnapshot)
-      : tab
-        ? createIncludeResolver(tab)
-        : undefined
-
-  dryRunOriginTabId = tab?.id ?? null
-  dryRunClearedState = null
-  setDryRunToolbarState(true)
-  editor.setDryRunLocked(true)
-  sidePanel.showTab('dryrun')
-  sidePanel.updateDryRun({ status: 'running', currentLine: 1, events: [] })
-
-  const session = new DryRunSession({
-    source: sourceSnapshot,
-    includeResolver: resolver,
-    dialogAdapter: dryRunDialogAdapter,
-    onStateChange(state) {
-      if (runId !== dryRunRunId) return
-      sidePanel.updateDryRun(state)
-      applyDryRunExecutionHighlight(state)
-      if (state.status === 'finished' || state.status === 'stopped' || state.status === 'error') {
-        setDryRunToolbarState(false)
-      }
-    },
-    async yieldEveryLine() {
-      await new Promise((r) => setTimeout(r, 0))
-    },
-  })
-
-  dryRunSession = session
-  dryRunRunPromise = session.run()
-  try {
-    await dryRunRunPromise
-  } finally {
-    if (runId === dryRunRunId) {
-      dryRunRunPromise = null
-      dryRunSession = null
-      dryRunActive = false
-      dryRunSnapshot = null
-      setDryRunToolbarState(false)
-      editor.clearExecutionLine()
-      editor.setDryRunLocked(false)
-      runAnalysisNow(editor.getValue())
-      updateCursorPosition()
-    }
-  }
-}
-
 function handleCloseTab() {
   const tab = tabManager.activeTab
   if (tab && tabManager.closeTab(tab.id)) {
@@ -1134,41 +415,42 @@ function handleCloseTab() {
 }
 
 createToolbar(document.querySelector('#toolbar')!, editor, {
-  onNew: handleNew,
-  onOpen: handleOpen,
-  onSave: handleSave,
+  onNew: () => files.handleNewTab(),
+  onOpen: () => {
+    void files.handleOpen()
+  },
+  onSave: () => {
+    void files.handleSave()
+  },
   onThemeToggle: handleThemeToggle,
-  onEncodingChange: handleEncodingChange,
-  onNewlineChange: handleNewlineChange,
+  onEncodingChange: (encoding: TextEncoding) => files.handleEncodingChange(encoding),
+  onNewlineChange: (newline: NewlineType) => files.handleNewlineChange(newline),
   onCloseTab: handleCloseTab,
   onGotoLine: handleGotoLine,
   onSwitchTab: (index) => tabManager.switchToIndex(index),
   onSwitchTabRelative: (delta) => tabManager.switchRelativeTab(delta),
   onDryRunStart: () => {
-    void startDryRun()
+    void dryRun.startDryRun()
   },
-  onDryRunStop: stopDryRun,
+  onDryRunStop: () => dryRun.stopDryRun(),
 })
 
-sidePanel.onGotoDryRunLocation(gotoDryRunLocation)
-sidePanel.onGotoSendLocation(gotoSendLocation)
-sidePanel.onGotoFlowchartLocation(gotoFlowchartLocation)
+sidePanel.onGotoDryRunLocation(dryRun.gotoDryRunLocation)
+sidePanel.onGotoSendLocation(dryRun.gotoSendLocation)
+sidePanel.onGotoFlowchartLocation(dryRun.gotoFlowchartLocation)
 sidePanel.onFlowchartDetailedWaitsChange((show) => {
   flowchartShowDetailedWaits = show
   saveAppSettings({ flowchartShowDetailedWaits: show })
-  refreshFlowchart()
+  sidePanel.updateFlowchart(analysis.buildFlowchartForActiveTab(editor.getValue()))
 })
 sidePanel.onFlowchartAssignmentsChange((show) => {
   flowchartShowAssignments = show
   saveAppSettings({ flowchartShowAssignments: show })
-  refreshFlowchart()
+  sidePanel.updateFlowchart(analysis.buildFlowchartForActiveTab(editor.getValue()))
 })
 
 sidePanel.onClearDryRun(() => {
-  if (dryRunActive || dryRunRunPromise !== null) stopDryRun()
-  dryRunOriginTabId = null
-  dryRunClearedState = { status: 'idle', currentLine: 0, events: [] }
-  sidePanel.updateDryRun(dryRunClearedState)
+  dryRun.clearDryRunPanel()
 })
 
 sidePanel.onBranchAssumptionChange((line, value) => {
@@ -1180,85 +462,12 @@ sidePanel.onBranchAssumptionChange((line, value) => {
   else next[key] = value
   tab.branchAssumptions = next
   schedulePersistWorkspaceSession()
-  runAnalysisNow(editor.getValue())
+  analysis.runAnalysisNow(editor.getValue())
 })
 
-document.querySelector('#tab-add')!.addEventListener('click', handleNewTab)
+document.querySelector('#tab-add')!.addEventListener('click', () => files.handleNewTab())
 
-function isOpenableFile(file: File): boolean {
-  return /\.(ttl|txt)$/i.test(file.name)
-}
-
-async function resolveDropFileEntry(
-  item: DataTransferItem,
-): Promise<{ file: File; fileHandle: FileSystemFileHandle | null } | null> {
-  if (item.kind !== 'file') return null
-  const file = item.getAsFile()
-  if (!file || !isOpenableFile(file)) return null
-
-  let fileHandle: FileSystemFileHandle | null = null
-  if (typeof item.getAsFileSystemHandle === 'function') {
-    try {
-      const handle = await item.getAsFileSystemHandle()
-      if (handle.kind === 'file') fileHandle = handle as FileSystemFileHandle
-    } catch {
-      // ハンドル取得不可時は内容のみ読み込む
-    }
-  }
-  return { file, fileHandle }
-}
-
-function setupFileDrop() {
-  const dropTarget = document.querySelector('#app')!
-
-  const showDrag = (on: boolean) => {
-    dropTarget.classList.toggle('file-drop-active', on)
-  }
-
-  dropTarget.addEventListener(
-    'dragover',
-    (e) => {
-      const de = e as DragEvent
-      if (!Array.from(de.dataTransfer?.items ?? []).some((item) => item.kind === 'file')) return
-      e.preventDefault()
-      showDrag(true)
-    },
-    true,
-  )
-
-  dropTarget.addEventListener('dragleave', (e) => {
-    if (e.currentTarget === dropTarget && !dropTarget.contains((e as DragEvent).relatedTarget as Node)) {
-      showDrag(false)
-    }
-  })
-
-  dropTarget.addEventListener(
-    'drop',
-    async (e) => {
-      const de = e as DragEvent
-      const items = Array.from(de.dataTransfer?.items ?? [])
-      if (items.every((item) => item.kind !== 'file')) return
-
-      e.preventDefault()
-      e.stopPropagation()
-      showDrag(false)
-
-      for (const item of items) {
-        const entry = await resolveDropFileEntry(item)
-        if (!entry) continue
-        if (!tabManager.canAddTab()) {
-          alert(`タブは最大 ${MAX_TABS} 個まで開けます。`)
-          break
-        }
-        const bytes = await readFileAsBytes(entry.file)
-        await openFile(bytes, entry.file.name, entry.fileHandle, { sourceFile: entry.file })
-      }
-    },
-    true,
-  )
-}
-
-setupFileDrop()
+files.setupFileDrop(document.querySelector('#app')!)
 
 function initWorkspace() {
   const session = loadWorkspaceSession()

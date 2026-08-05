@@ -26,6 +26,14 @@ import {
   type StaticValueContext,
 } from './staticCommandEval'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
+import {
+  BLOCK_PAIRS,
+  MAX_LOOP_ITERATIONS,
+  evalBoolExpr as evalBoolExprShared,
+  evalGuaranteedLiteralCondition,
+  findBlockEnd,
+  lineKeyword,
+} from './controlFlow'
 import { collectLabelLineMap, collectLabelNames, formatLabelRef, normalizeLabelName } from './labels'
 import {
   findLabelLineIndex,
@@ -89,16 +97,6 @@ export interface SendEntry {
 }
 
 type Env = Map<string, RuntimeValue>
-
-const BLOCK_PAIRS: Record<string, string> = {
-  if: 'endif',
-  while: 'endwhile',
-  for: 'next',
-  do: 'loop',
-  until: 'enduntil',
-}
-
-const MAX_LOOP_ITERATIONS = 256
 
 function forLoopIterationCount(start: number, end: number): number {
   return Math.abs(end - start) + 1
@@ -447,29 +445,8 @@ function evalConditionTokenValue(token: Token | undefined, env: Env): RuntimeSca
 
 /**
  * 到達不能判定と同様、リテラルだけで真と断定できる if 条件か。
- * 変数比較は未確定とする。
+ * 変数比較は未確定とする（controlFlow.evalGuaranteedLiteralCondition）。
  */
-function evalGuaranteedLiteralCondition(tokens: Token[]): boolean | undefined {
-  if (tokens.length === 1) {
-    const token = tokens[0]
-    if (token?.kind === 'number') {
-      const value = Number(token.text)
-      return Number.isFinite(value) ? value !== 0 : undefined
-    }
-    if (token?.kind === 'string') return unquoteString(token.text) !== ''
-    return undefined
-  }
-  if (
-    tokens.length === 2 &&
-    tokens[0]?.kind === 'identifier' &&
-    tokens[0].text.toLowerCase() === 'not'
-  ) {
-    const inner = evalGuaranteedLiteralCondition(tokens.slice(1))
-    return inner === undefined ? undefined : !inner
-  }
-  return undefined
-}
-
 function evalGuaranteedIfCondition(
   line: string,
   lineIdx: number,
@@ -985,12 +962,6 @@ function recordSend(
   })
 }
 
-function lineKeyword(line: string, lineIdx: number): string {
-  const tokens = tokenizeLine(line, lineIdx + 1)
-  let off = tokens[0]?.kind === 'label' ? 1 : 0
-  return tokens[off]?.kind === 'identifier' ? tokens[off]!.text.toLowerCase() : ''
-}
-
 function findNextIfSiblingLine(lines: string[], fromLineIdx: number, endIdx: number): number {
   for (let i = fromLineIdx + 1; i <= endIdx; i++) {
     const kw = lineKeyword(lines[i]!, i)
@@ -1000,74 +971,8 @@ function findNextIfSiblingLine(lines: string[], fromLineIdx: number, endIdx: num
   return endIdx
 }
 
-function scalarCompare(
-  lhs: RuntimeScalar | undefined,
-  op: string,
-  rhs: RuntimeScalar | undefined,
-): boolean | undefined {
-  if (!lhs || !rhs) return undefined
-  if (lhs.kind === 'str' && rhs.kind === 'str') {
-    if (op === '=') return lhs.value === rhs.value
-    if (op === '<>') return lhs.value !== rhs.value
-    return undefined
-  }
-  if (lhs.kind === 'int' && rhs.kind === 'int') {
-    switch (op) {
-      case '=':
-        return lhs.value === rhs.value
-      case '<>':
-        return lhs.value !== rhs.value
-      case '<':
-        return lhs.value < rhs.value
-      case '>':
-        return lhs.value > rhs.value
-      case '<=':
-        return lhs.value <= rhs.value
-      case '>=':
-        return lhs.value >= rhs.value
-      default:
-        return undefined
-    }
-  }
-  return undefined
-}
-
 function evalBoolExpr(tokens: Token[], env: Env): boolean | undefined {
-  if (tokens.length === 0) return undefined
-
-  if (tokens[0]?.kind === 'identifier' && tokens[0].text.toLowerCase() === 'not') {
-    const inner = evalBoolExpr(tokens.slice(1), env)
-    return inner === undefined ? undefined : !inner
-  }
-
-  for (let j = 1; j < tokens.length; j++) {
-    const op = tokens[j]
-    if (op?.kind !== 'operator' || !['=', '<>', '<', '>', '<=', '>='].includes(op.text)) continue
-
-    const lhs = evalConditionTokenValue(tokens[j - 1], env)
-    const rhs = evalConditionTokenValue(tokens[j + 1], env)
-    const cmp = scalarCompare(lhs, op.text, rhs)
-    if (cmp === undefined) return undefined
-
-    const andOr = tokens[j + 2]
-    if (andOr?.kind === 'identifier') {
-      const lo = andOr.text.toLowerCase()
-      if (lo === 'and' || lo === 'or') {
-        const rest = evalBoolExpr(tokens.slice(j + 3), env)
-        if (rest === undefined) return undefined
-        return lo === 'and' ? cmp && rest : cmp || rest
-      }
-    }
-    return cmp
-  }
-
-  if (tokens.length === 1) {
-    const v = evalConditionTokenValue(tokens[0], env)
-    if (v?.kind === 'int') return v.value !== 0
-    if (v?.kind === 'str') return v.value !== ''
-  }
-
-  return undefined
+  return evalBoolExprShared(tokens, env, evalConditionTokenValue)
 }
 
 function tryEvalCondition(line: string, lineIdx: number, env: Env, cmd: string): boolean | undefined {
@@ -1191,21 +1096,6 @@ function processIfChain(
   }
 
   return { nextIdx: endIdx }
-}
-
-function findBlockEnd(lines: string[], startIdx: number, open: string, close: string): number {
-  let depth = 1
-  for (let i = startIdx + 1; i < lines.length; i++) {
-    const tokens = tokenizeLine(lines[i]!, i + 1)
-    let off = tokens[0]?.kind === 'label' ? 1 : 0
-    const kw = tokens[off]?.kind === 'identifier' ? tokens[off]!.text.toLowerCase() : ''
-    if (kw === open) depth++
-    if (kw === close) {
-      depth--
-      if (depth === 0) return i
-    }
-  }
-  return lines.length - 1
 }
 
 interface CallFrame {

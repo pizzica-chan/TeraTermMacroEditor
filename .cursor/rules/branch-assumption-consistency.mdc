@@ -4,6 +4,8 @@ globs:
   - src/ttl/evaluator.ts
   - src/ttl/branchAssumptions.ts
   - src/ttl/analysisLimitations.ts
+  - src/app/analysisCoordinator.ts
+  - src/app/dryRunController.ts
   - src/main.ts
   - src/editor/branchAssumptionDecorations.ts
   - src/ui/sidePanel.ts
@@ -25,11 +27,16 @@ alwaysApply: false
 - 未仮定の条件が一つでも残る経路では、従来の保守的評価を維持する。
 - 行番号キーを include 先へ引き継がない。同じ Lx でも別ソース。リンク先自身の仮定だけを使う。
 - 親で選択した include 経路の代入は親 env、送信データ、ホバーへ反映する。
-- フロー図と `dryRun.ts` には仮定を適用しない。実行時条件と静的な仮定を混同しない。
+- フロー図と `dryRun.ts` / `dryRunController.ts` には仮定を適用しない。実行時条件と静的な仮定を混同しない。
 - エディタ表示には「仮定」であることを明記し、実行結果のように見せない。
 - 未確定分岐の True/False 選択 UI と include リンク UI は「前提」タブにまとめる（送信データ・ドライラン・フロー・変数タブには出さない）。
 - 前提タブと送信データタブでは未選択分岐とタブ未指定 include を警告する。
 - フローとドライラン開始時はタブ未指定 include だけを警告し、分岐仮定の選択状況は参照しない。
+
+## 実装の要点（配線）
+
+- `analysisCoordinator.ts` … `evaluateTTL` へ `branchAssumptions` を渡す経路、include 解決時のリンク先仮定、limitation 収集
+- `dryRunController.ts` … スナップショット／ドライラン開始に静的仮定を混入させない（実行時プロンプトのみ）
 
 ## 変更時の横展開確認
 

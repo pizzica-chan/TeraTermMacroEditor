@@ -30,6 +30,14 @@ import { formatSendPayloadForDisplay } from './sendText'
 import { collectLabelNames } from './labels'
 import { RESERVED, stripComments, tokenizeLine, unquoteString, type Token } from './tokenize'
 import {
+  BLOCK_PAIRS,
+  MAX_LOOP_ITERATIONS,
+  evalBoolExpr as evalBoolExprShared,
+  findBlockEnd,
+  lineKeyword,
+  type BoolExprScalar,
+} from './controlFlow'
+import {
   buildStringFromOperands,
   collectSendPayload,
   collectWaitPatterns,
@@ -163,15 +171,6 @@ export interface DryRunOptions {
 
 type Env = MacroEnvironment
 
-const BLOCK_PAIRS: Record<string, string> = {
-  if: 'endif',
-  while: 'endwhile',
-  for: 'next',
-  do: 'loop',
-  until: 'enduntil',
-}
-
-const MAX_LOOP_ITERATIONS = 256
 /** Tera Term include ネスト上限（公式） */
 const MAX_INCLUDE_DEPTH = 9
 
@@ -317,71 +316,12 @@ function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefin
   return value?.kind === 'int' ? value.value : undefined
 }
 
-function scalarCompare(lhs: RuntimeScalar | undefined, op: string, rhs: RuntimeScalar | undefined): boolean | undefined {
-  if (!lhs || !rhs) return undefined
-  if (lhs.kind === 'str' && rhs.kind === 'str') {
-    if (op === '=') return lhs.value === rhs.value
-    if (op === '<>') return lhs.value !== rhs.value
-    return undefined
-  }
-  if (lhs.kind === 'int' && rhs.kind === 'int') {
-    switch (op) {
-      case '=':
-        return lhs.value === rhs.value
-      case '<>':
-        return lhs.value !== rhs.value
-      case '<':
-        return lhs.value < rhs.value
-      case '>':
-        return lhs.value > rhs.value
-      case '<=':
-        return lhs.value <= rhs.value
-      case '>=':
-        return lhs.value >= rhs.value
-      default:
-        return undefined
-    }
-  }
-  return undefined
-}
-
 function evalBoolExpr(
   tokens: Token[],
   env: Env,
-  resolveToken: (token: Token | undefined, env: Env) => RuntimeScalar | undefined = evalTokenValue,
+  resolveToken: (token: Token | undefined, env: Env) => BoolExprScalar | undefined = evalTokenValue,
 ): boolean | undefined {
-  if (tokens.length === 0) return undefined
-  if (tokens[0]?.kind === 'identifier' && tokens[0].text.toLowerCase() === 'not') {
-    const inner = evalBoolExpr(tokens.slice(1), env, resolveToken)
-    return inner === undefined ? undefined : !inner
-  }
-  for (let j = 1; j < tokens.length; j++) {
-    const op = tokens[j]
-    if (op?.kind !== 'operator' || !['=', '<>', '<', '>', '<=', '>='].includes(op.text)) continue
-    const lhs = resolveToken(tokens[j - 1], env)
-    const rhs = resolveToken(tokens[j + 1], env)
-    const cmp = scalarCompare(lhs, op.text, rhs)
-    if (cmp === undefined) {
-      if (lhs && rhs && lhs.kind !== rhs.kind) return false
-      return undefined
-    }
-    const andOr = tokens[j + 2]
-    if (andOr?.kind === 'identifier') {
-      const lo = andOr.text.toLowerCase()
-      if (lo === 'and' || lo === 'or') {
-        const rest = evalBoolExpr(tokens.slice(j + 3), env, resolveToken)
-        if (rest === undefined) return undefined
-        return lo === 'and' ? cmp && rest : cmp || rest
-      }
-    }
-    return cmp
-  }
-  if (tokens.length === 1) {
-    const v = resolveToken(tokens[0], env)
-    if (v?.kind === 'int') return v.value !== 0
-    if (v?.kind === 'str') return v.value !== ''
-  }
-  return undefined
+  return evalBoolExprShared(tokens, env, resolveToken, { typeMismatchAsFalse: true })
 }
 
 /** ドライランでユーザー入力なしに断定できる条件か（シミュレート済みの値は利用可） */
@@ -645,27 +585,6 @@ function isArrayAssignTarget(tokens: Token[], eqIdx: number): string | null {
     return name.text
   }
   return null
-}
-
-function lineKeyword(line: string, lineIdx: number): string {
-  const tokens = tokenizeLine(line, lineIdx + 1)
-  let off = tokens[0]?.kind === 'label' ? 1 : 0
-  return tokens[off]?.kind === 'identifier' ? tokens[off]!.text.toLowerCase() : ''
-}
-
-function findBlockEnd(lines: string[], startIdx: number, open: string, close: string): number {
-  let depth = 1
-  for (let i = startIdx + 1; i < lines.length; i++) {
-    const tokens = tokenizeLine(lines[i]!, i + 1)
-    let off = tokens[0]?.kind === 'label' ? 1 : 0
-    const kw = tokens[off]?.kind === 'identifier' ? tokens[off]!.text.toLowerCase() : ''
-    if (kw === open) depth++
-    if (kw === close) {
-      depth--
-      if (depth === 0) return i
-    }
-  }
-  return lines.length - 1
 }
 
 function resolveIncludeEffectiveRaw(tokens: Token[], offset: number, env: Env): string | undefined {

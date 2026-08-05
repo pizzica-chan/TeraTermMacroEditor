@@ -3,7 +3,9 @@ description: 未確定 if 内 end の後（endif 以降）に到達不能警告�
 globs:
   - src/ttl/analyzer.ts
   - src/ttl/evaluator.ts
+  - src/ttl/controlFlow.ts
   - src/ttl/branchAssumptions.ts
+  - src/app/analysisCoordinator.ts
   - src/ui/sidePanel.ts
   - src/main.ts
   - scripts/test-conditional-end-static.ts
@@ -50,6 +52,9 @@ sendln 'after'    ; ← 到達不能警告あり、送信データに after は�
 
 ## 実装の要点（触るときはセットで確認）
 
+**controlFlow.ts**
+- `evalGuaranteedLiteralCondition` … リテラルだけで真と断定できる条件（analyzer / evaluator 共有）
+
 **analyzer.ts**
 - `guaranteedEntry` … リテラルだけ真と断定できる `if`/`while` のみ `true`
 - `isConditionalTerminatorContext` … 未確定ブロックが残るとき `end` はブロック内だけ
@@ -61,7 +66,7 @@ sendln 'after'    ; ← 到達不能警告あり、送信データに after は�
 - `resolveIfCondition` … 静的評価できなければ `branchAssumptions`（行番号 1-based）を参照
 - `EvaluateOptions.branchAssumptions` … UI でユーザーが選んだ True/False を渡す
 
-**branchAssumptions.ts / UI**
+**analysisCoordinator.ts / branchAssumptions.ts / UI**
 - `collectIndeterminateIfBranches` … 各行直前 env で未確定の if/elseif を列挙
 - サイドパネル「未確定分岐」で True/False/クリア → `tab.branchAssumptions` → 再評価
 - include が未確定 if 内にあるとき、仮定 True で子ファイルの変数代入が親 env に反映される

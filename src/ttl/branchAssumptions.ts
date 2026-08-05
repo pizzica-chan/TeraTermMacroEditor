@@ -1,4 +1,5 @@
 import { stripComments, tokenizeLine } from './tokenize'
+import { lineKeyword } from './controlFlow'
 import { evalIfConditionStatic, initMacroEnvironment } from './evaluator'
 import type { MacroEnvironment } from './evaluator'
 
@@ -6,13 +7,6 @@ export interface IndeterminateIfBranch {
   line: number
   command: 'if' | 'elseif'
   conditionText: string
-}
-
-function lineKeyword(line: string, lineIdx: number): string {
-  const tokens = tokenizeLine(line, lineIdx + 1)
-  let off = tokens[0]?.kind === 'label' ? 1 : 0
-  const tok = tokens[off]
-  return tok?.kind === 'identifier' ? tok.text.toLowerCase() : ''
 }
 
 export function extractIfConditionText(line: string, lineIdx: number, cmd: string): string {

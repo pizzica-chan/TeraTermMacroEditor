@@ -38,6 +38,10 @@ import {
   type Token,
 } from './tokenize'
 import {
+  BLOCK_PAIR_LIST,
+  evalGuaranteedLiteralCondition,
+} from './controlFlow'
+import {
   collectLabelNames,
   formatLabelRef,
   getGotoCallTargetToken,
@@ -273,33 +277,6 @@ function clearFallthroughDead(ctx: AnalysisContext): void {
   if (depth > 0) {
     ctx.fallthroughDeadStack[depth - 1] = false
   }
-}
-
-/**
- * 到達不能判定で安全に真と断定できる条件だけを扱う。
- * 変数や複合式は条件付き代入などの経路を追跡できないため、常に未確定とする。
- *
- * 未確定 if 内 end の不変条件テスト: scripts/test-conditional-end-static.ts
- */
-function evalGuaranteedLiteralCondition(tokens: Token[]): boolean | undefined {
-  if (tokens.length === 1) {
-    const token = tokens[0]
-    if (token?.kind === 'number') {
-      const value = Number(token.text)
-      return Number.isFinite(value) ? value !== 0 : undefined
-    }
-    if (token?.kind === 'string') return unquoteString(token.text) !== ''
-    return undefined
-  }
-  if (
-    tokens.length === 2 &&
-    tokens[0]?.kind === 'identifier' &&
-    tokens[0].text.toLowerCase() === 'not'
-  ) {
-    const inner = evalGuaranteedLiteralCondition(tokens.slice(1))
-    return inner === undefined ? undefined : !inner
-  }
-  return undefined
 }
 
 /** 現在位置までの全ブロックが必ず実行される場合だけ、終端効果を外側へ伝播する。 */
@@ -677,14 +654,6 @@ function checkArrayAccess(
   }
 }
 
-const BLOCK_PAIRS: [string, string][] = [
-  ['if', 'endif'],
-  ['while', 'endwhile'],
-  ['for', 'next'],
-  ['do', 'loop'],
-  ['until', 'enduntil'],
-]
-
 function stmtOffset(tokens: Token[]): number {
   return tokens[0]?.kind === 'label' ? 1 : 0
 }
@@ -738,7 +707,7 @@ function closeBlock(ctx: AnalysisContext, open: string, lineNum: number, column:
 
 /** ブロック構造キーワード（デッドコード警告の対象外） */
 const BLOCK_BRANCH_KEYWORDS = new Set([
-  ...BLOCK_PAIRS.map(([, close]) => close),
+  ...BLOCK_PAIR_LIST.map(([, close]) => close),
   'elseif',
   'else',
 ])
@@ -1021,7 +990,7 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
       if (currentIf) currentIf.guaranteedEntry = false
     }
 
-    for (const [open, close] of BLOCK_PAIRS) {
+    for (const [open, close] of BLOCK_PAIR_LIST) {
       if (cmd === open) {
         if (open === 'if') {
           if (!hasThenKeyword(tokens, stmtOffset(tokens))) continue

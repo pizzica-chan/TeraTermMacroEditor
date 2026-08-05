@@ -1,4 +1,5 @@
 import { findAssignmentIndex } from './argChecker'
+import { findBlockEnd } from './controlFlow'
 import { stripComments, tokenizeLine, unquoteString, type Token } from './tokenize'
 
 export const MAX_INCLUDE_LOOP_ITERATIONS = 256
@@ -371,21 +372,6 @@ function resolveStaticIntToken(token: Token | undefined, constants: Map<string, 
   return undefined
 }
 
-function findBlockEndIndex(lines: string[], startIdx: number, open: string, close: string): number {
-  let depth = 1
-  for (let i = startIdx + 1; i < lines.length; i++) {
-    const tokens = tokenizeLine(lines[i]!, i + 1)
-    let off = tokens[0]?.kind === 'label' ? 1 : 0
-    const kw = tokens[off]?.kind === 'identifier' ? tokens[off]!.text.toLowerCase() : ''
-    if (kw === open) depth++
-    if (kw === close) {
-      depth--
-      if (depth === 0) return i
-    }
-  }
-  return lines.length - 1
-}
-
 function findForLoopBlocks(lines: string[]): ForLoopBlock[] {
   const blocks: ForLoopBlock[] = []
 
@@ -405,7 +391,7 @@ function findForLoopBlocks(lines: string[]): ForLoopBlock[] {
     const values = computeLoopValues(loopStart, loopEnd)
     if (values.length === 0) continue
 
-    const nextIdx = findBlockEndIndex(lines, lineIdx, 'for', 'next')
+    const nextIdx = findBlockEnd(lines, lineIdx, 'for', 'next')
     blocks.push({
       variable,
       start: loopStart,
