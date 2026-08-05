@@ -355,7 +355,8 @@ function runtimeSegmentLabel(origin: ValueOrigin): string {
     case 'match-received':
       return '（受信マッチ）'
     case 'dialog-result':
-      return '（ダイアログの戻り値）'
+      // origin 名は歴史的。ダイアログ以外の実行時依存 result にも使う
+      return '（実行時）'
     default:
       return '（実行時）'
   }
@@ -434,7 +435,7 @@ function evalTokenValue(token: Token | undefined, env: Env): RuntimeScalar | und
   return undefined
 }
 
-/** if 条件で未確定とみなす値（既定値・ダイアログ戻り値は静的に真偽を断定しない） */
+/** if 条件で未確定とみなす値（既定値・実行時依存の result 等は静的に真偽を断定しない） */
 function evalConditionTokenValue(token: Token | undefined, env: Env): RuntimeScalar | undefined {
   const v = evalTokenValue(token, env)
   if (v?.kind === 'int' && (v.origin === 'system-default' || v.origin === 'dialog-result')) {
@@ -1833,8 +1834,8 @@ function resolveVarHover(name: string, env: Env): HoverInfo {
     return {
       name,
       type: 'integer',
-      display: v.hint ?? '（ダイアログの戻り値）',
-      note: '実行時に決定されます（例: 1=OK / Yes、0=Cancel / No）',
+      display: v.hint ?? '（実行時）',
+      note: '実行時に決定されます（静的には断定できません）',
       valueKind: 'runtime',
       isSystem,
     }

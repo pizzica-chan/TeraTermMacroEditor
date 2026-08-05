@@ -159,9 +159,9 @@ export const SYSTEM_VARIABLE_META: Record<string, SystemVariableMeta> = {
     defaultHint: '0（初期値）',
   },
   result: {
-    description: 'ダイアログ等の戻り値・成否',
-    setBy: 'yesnobox / messagebox / listbox / inputbox など',
-    defaultHint: '0（未操作）',
+    description: 'コマンドの成否・戻り値',
+    setBy: 'wait / yesnobox / strlen / gettime など各コマンド',
+    defaultHint: '0（初期値）',
   },
   inputstr: {
     description: 'ユーザーが入力した文字列',
