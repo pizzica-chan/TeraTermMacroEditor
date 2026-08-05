@@ -1,6 +1,11 @@
 /** TTL コマンド・キーワード・システム変数の定義 */
 
 import { COMMAND_OUTPUT_EFFECTS } from './commandOutputs'
+import {
+  getParamcntMeta,
+  getParamNMeta,
+  getParamsArrayMeta,
+} from './commandLineParams'
 
 export const CONTROL_KEYWORDS = new Set([
   'if', 'then', 'elseif', 'else', 'endif',
@@ -141,12 +146,6 @@ const GROUPMATCH_META: SystemVariableMeta = {
   defaultHint: '空文字（未マッチ）',
 }
 
-const PARAM_META: SystemVariableMeta = {
-  description: 'マクロ起動時のコマンドライン引数',
-  setBy: 'マクロ実行時（コマンドライン引数）',
-  defaultHint: '空文字（引数なし）',
-}
-
 export const SYSTEM_VARIABLE_META: Record<string, SystemVariableMeta> = {
   timeout: {
     description: 'wait 系コマンドのタイムアウト秒',
@@ -173,22 +172,18 @@ export const SYSTEM_VARIABLE_META: Record<string, SystemVariableMeta> = {
     setBy: 'wait / waitln / waitregex',
     defaultHint: '空文字（未受信）',
   },
-  paramcnt: {
-    description: 'マクロ起動時のコマンドライン引数個数',
-    setBy: 'マクロ実行時（マクロファイル名を含む）',
-    defaultHint: '0（引数なし）',
-  },
-  params: {
-    description: 'マクロ起動時の引数配列',
-    setBy: 'マクロ実行時（コマンドライン引数）',
-    defaultHint: '未設定',
-  },
+  paramcnt: getParamcntMeta(),
+  params: getParamsArrayMeta(),
 }
 
 export function getSystemVariableMeta(name: string): SystemVariableMeta | undefined {
   const lower = name.toLowerCase()
   if (lower in SYSTEM_VARIABLE_META) return SYSTEM_VARIABLE_META[lower]
   if (/^groupmatchstr\d+$/.test(lower)) return GROUPMATCH_META
-  if (/^param\d+$/.test(lower)) return PARAM_META
+  const paramMatch = /^param(\d+)$/.exec(lower)
+  if (paramMatch) {
+    const n = Number(paramMatch[1])
+    if (n >= 1 && n <= 9) return getParamNMeta(n)
+  }
   return undefined
 }

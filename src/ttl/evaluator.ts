@@ -18,6 +18,14 @@ import {
 import { commandOutputHint, getCommandOutputEffect, isCommandOutputHint, REGEX_MATCH_HINT } from './commandOutputs'
 import { formatResultSetByNote } from './resultCommandMeta'
 import {
+  buildCommandLineParamsSnapshot,
+  formatParamcntHoverNote,
+  formatParamNHoverNote,
+  formatParamsArrayHoverNote,
+  formatParamsIndexHoverNote,
+  type MacroArgvInput,
+} from './commandLineParams'
+import {
   tryStaticIntegerCommand,
   tryStaticResultCommand,
   tryStaticStr2intCommand,
@@ -314,7 +322,7 @@ function cloneEnv(env: Env): Env {
   return next
 }
 
-function initEnv(macroArgv?: string[]): Env {
+function initEnv(macroArgv?: MacroArgvInput): Env {
   const env: Env = new Map()
   for (const name of ['timeout', 'mtimeout', 'result']) {
     env.set(name, { kind: 'int', value: 0, origin: 'system-default' })
@@ -322,25 +330,39 @@ function initEnv(macroArgv?: string[]): Env {
   for (const name of ['inputstr', 'matchstr']) {
     env.set(name, { kind: 'str', value: '', origin: 'system-default' })
   }
-  applyMacroArgv(env, macroArgv ?? [])
+  applyMacroArgv(env, macroArgv)
   return env
 }
 
-/** Tera Term: paramcnt / params[] / param1〜9 はマクロ起動時のコマンドライン引数 */
-function applyMacroArgv(env: Env, argv: string[]): void {
-  env.set('paramcnt', { kind: 'int', value: argv.length, origin: 'system-default' })
+/**
+ * Tera Term: paramcnt / params[] / param1〜9 はマクロ起動時のコマンドライン引数。
+ * 仕様の正は commandLineParams.ts（Manual 5 commandline.html）。
+ */
+function applyMacroArgv(env: Env, input?: MacroArgvInput): void {
+  const snap = buildCommandLineParamsSnapshot(input)
+  // 明示 argv は静的に既知（literal）。未指定（方針 A）は system-default のまま if で未確定。
+  const origin = snap.specified ? 'literal' : 'system-default'
+
+  env.set('paramcnt', { kind: 'int', value: snap.paramcnt, origin })
+
   const elements = new Map<number, RuntimeScalar>()
-  for (let i = 0; i < argv.length; i++) {
-    elements.set(i + 1, { kind: 'str', value: argv[i]!, origin: 'system-default' })
+  for (const [index, value] of snap.params) {
+    elements.set(index, { kind: 'str', value, origin })
   }
+  const maxIndex = elements.size > 0 ? Math.max(...elements.keys()) : -1
   env.set('params', {
     kind: 'array',
-    size: Math.max(argv.length, 1),
+    size: Math.max(maxIndex + 1, snap.paramcnt, 0),
     elements,
     elementKind: 'str',
   })
+
   for (let i = 1; i <= 9; i++) {
-    env.set(`param${i}`, { kind: 'str', value: argv[i - 1] ?? '', origin: 'system-default' })
+    env.set(`param${i}`, {
+      kind: 'str',
+      value: snap.param1to9[i - 1] ?? '',
+      origin,
+    })
   }
 }
 
@@ -1571,8 +1593,13 @@ function processStatement(
 
 export interface EvaluateOptions {
   includeResolver?: IncludeResolver
-  /** マクロ起動時のコマンドライン引数（先頭要素はマクロファイルパス。paramcnt に含む） */
-  macroArgv?: string[]
+  /**
+   * マクロ起動時のコマンドライン引数。
+   * - string[]: [ファイル名, 引数1, ...]（後方互換。params[1..] に対応）
+   * - MacroLaunchArgv: params[0]/[1]/[2..] を明示
+   * 未指定（方針 A）: paramcnt=0・param* 空・params[0] 未設定
+   */
+  macroArgv?: MacroArgvInput
   /** 未確定 if/elseif のユーザー仮定（行番号 1-based → 真偽） */
   branchAssumptions?: Map<number, boolean>
 }
@@ -1588,12 +1615,12 @@ export interface EvaluationResult {
   getHoverAt(line: number, column: number): HoverAtResult | null
 }
 
-export function initMacroEnvironment(macroArgv?: string[]): Map<string, RuntimeValue> {
+export function initMacroEnvironment(macroArgv?: MacroArgvInput): Map<string, RuntimeValue> {
   return initEnv(macroArgv)
 }
 
 /** @deprecated initMacroEnvironment を使用 */
-export function createMacroEnvironment(macroArgv?: string[]): Map<string, RuntimeValue> {
+export function createMacroEnvironment(macroArgv?: MacroArgvInput): Map<string, RuntimeValue> {
   return initMacroEnvironment(macroArgv)
 }
 
@@ -1879,11 +1906,17 @@ function resolveVarHover(name: string, env: Env): HoverInfo {
 
   if (isSystem && (v.kind === 'int' || v.kind === 'str') && v.origin === 'system-default') {
     const typeLabel = sysType ?? (v.kind === 'int' ? 'integer' : 'string')
+    let note = meta ? `${meta.description}。${meta.setBy} で更新されます。` : 'システム変数（初期状態）'
+    if (key === 'paramcnt') note = formatParamcntHoverNote(false)
+    else {
+      const pm = /^param(\d+)$/.exec(key)
+      if (pm) note = `${formatParamNHoverNote(Number(pm[1]))}（エディタでは起動引数未指定）`
+    }
     return {
       name,
       type: typeLabel,
       display: meta?.defaultHint ?? (v.kind === 'int' ? '0（初期値）' : "''（初期値）"),
-      note: meta ? `${meta.description}。${meta.setBy} で更新されます。` : 'システム変数（初期状態）',
+      note,
       valueKind: 'system-default',
       isSystem: true,
     }
@@ -1893,9 +1926,11 @@ function resolveVarHover(name: string, env: Env): HoverInfo {
     const note =
       key === 'result' && v.setBy
         ? formatResultSetByNote(v.setBy)
-        : isSystem && meta
-          ? `システム変数 — ${meta.description}`
-          : undefined
+        : key === 'paramcnt'
+          ? formatParamcntHoverNote(v.origin === 'literal')
+          : isSystem && meta
+            ? `システム変数 — ${meta.description}`
+            : undefined
     return {
       name,
       type: 'integer',
@@ -1906,12 +1941,15 @@ function resolveVarHover(name: string, env: Env): HoverInfo {
     }
   }
   if (v.kind === 'str') {
+    const paramMatch = /^param(\d+)$/.exec(key)
     const matchNote =
       isSystem && name.toLowerCase() === 'matchstr' && v.origin === 'literal'
         ? '待機文字列との一致を想定（静的推定）'
-        : isSystem && meta
-          ? `システム変数 — ${meta.description}`
-          : undefined
+        : paramMatch
+          ? formatParamNHoverNote(Number(paramMatch[1]))
+          : isSystem && meta
+            ? `システム変数 — ${meta.description}`
+            : undefined
     return {
       name,
       type: 'string',
@@ -1942,10 +1980,14 @@ function resolveArrayHover(
   index: number | 'var' | undefined,
   env: Env,
 ): HoverInfo | null {
-  const arr = env.get(name.toLowerCase())
+  const key = name.toLowerCase()
+  const arr = env.get(key)
   if (!arr || arr.kind !== 'array') {
     return { name, type: 'array', display: '（未宣言または未代入）' }
   }
+
+  const isParams = key === 'params'
+  const paramsSpecified = isParams && [...arr.elements.values()].some((el) => el.origin === 'literal')
 
   if (index !== undefined && index !== 'var') {
     const el = arr.elements.get(index)
@@ -1955,25 +1997,51 @@ function resolveArrayHover(
           name: `${name}[${index}]`,
           type: 'string',
           display: el.hint ?? (el.origin ? runtimeSegmentLabel(el.origin) : `'${el.value}'`),
-          note: runtimeStrNote(el.origin, false),
+          note: isParams ? formatParamsIndexHoverNote(index) : runtimeStrNote(el.origin, false),
           valueKind: isRuntimeOrigin(el.origin) ? 'runtime' : 'known',
         }
       }
-      return { name: `${name}[${index}]`, type: 'string', display: `'${el.value}'` }
+      return {
+        name: `${name}[${index}]`,
+        type: 'string',
+        display: `'${el.value}'`,
+        note: isParams ? formatParamsIndexHoverNote(index) : undefined,
+        valueKind: 'known',
+        isSystem: isParams,
+      }
     }
     if (el?.kind === 'int') {
       return { name: `${name}[${index}]`, type: 'integer', display: String(el.value) }
     }
-    return { name: `${name}[${index}]`, type: 'string', display: '（未代入）' }
+    return {
+      name: `${name}[${index}]`,
+      type: 'string',
+      display: '（未代入）',
+      note: isParams ? formatParamsIndexHoverNote(index) : undefined,
+      isSystem: isParams,
+    }
   }
 
   const entries = [...arr.elements.entries()].sort((a, b) => a[0] - b[0])
   if (entries.length === 0) {
-    return { name, type: 'array', display: `（サイズ ${arr.size}、要素未代入）` }
+    return {
+      name,
+      type: 'array',
+      display: `（サイズ ${arr.size}、要素未代入）`,
+      note: isParams ? formatParamsArrayHoverNote(false) : undefined,
+      isSystem: isParams,
+      valueKind: isParams ? 'system-default' : undefined,
+    }
   }
 
   const lines = entries.map(([i, v]) => {
-    const val = v.kind === 'str' ? `'${v.value}'` : String(v.value)
+    const val =
+      v.kind === 'str'
+        ? v.hint ??
+          (v.origin && isRuntimeOrigin(v.origin) ? runtimeSegmentLabel(v.origin) : `'${v.value}'`)
+        : v.kind === 'int'
+          ? String(v.value)
+          : '?'
     return `[${i}] = ${val}`
   })
 
@@ -1982,9 +2050,19 @@ function resolveArrayHover(
       name: `${name}[i]`,
       type: 'array',
       display: lines.join('\n'),
-      note: 'インデックスは変数（反復中）',
+      note: isParams ? formatParamsArrayHoverNote(paramsSpecified) : 'インデックスは変数（反復中）',
+      isSystem: isParams,
     }
   }
 
-  return { name, type: 'array', display: lines.join('\n') }
+  const preview = lines.slice(0, 8).join(', ')
+  const more = lines.length > 8 ? ` …他${lines.length - 8}件` : ''
+  return {
+    name,
+    type: 'array',
+    display: preview + more,
+    note: isParams ? formatParamsArrayHoverNote(paramsSpecified) : undefined,
+    valueKind: 'known',
+    isSystem: isParams,
+  }
 }

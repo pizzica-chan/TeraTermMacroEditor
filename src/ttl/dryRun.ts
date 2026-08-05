@@ -50,6 +50,7 @@ import {
   type MacroEnvironment,
   type RuntimeScalar,
 } from './evaluator'
+import type { MacroArgvInput } from './commandLineParams'
 import { extractIfConditionText } from './branchAssumptions'
 import { formatDryRunBranchFlowMessage } from './dryRunBranchCopy'
 import {
@@ -164,7 +165,7 @@ export interface DryRunDialogAdapter {
 export interface DryRunOptions {
   source: string
   includeResolver?: IncludeResolver
-  macroArgv?: string[]
+  macroArgv?: MacroArgvInput
   dialogAdapter: DryRunDialogAdapter
   onStateChange?: (state: DryRunState) => void
   yieldEveryLine?: () => Promise<void>
