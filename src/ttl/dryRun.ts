@@ -37,6 +37,7 @@ import {
   lineKeyword,
   type BoolExprScalar,
 } from './controlFlow'
+import { formatGetdate, formatGettime } from './ttlDateTime'
 import {
   buildStringFromOperands,
   collectSendPayload,
@@ -1093,6 +1094,11 @@ export class DryRunSession {
       return
     }
 
+    if (cmd === 'gettime' || cmd === 'getdate') {
+      this.handleGetDateTime(cmd, tokens, offset, lineNum, env, execOpts)
+      return
+    }
+
     const effect = getCommandOutputEffect(cmd)
     if (effect) {
       for (const slot of effect.variables ?? []) {
@@ -1121,6 +1127,91 @@ export class DryRunSession {
         })
       }
     }
+  }
+
+  /**
+   * gettime / getdate — ドライラン実行時刻で実値を埋める（静的解析はプレースホルダのまま）。
+   * format / timezone が未解決のときは宛先を実行時プレースホルダにし、result は更新しない。
+   * 公式どおり result=1/2 のときは宛先へ格納しない（既存値も消す）。
+   */
+  private handleGetDateTime(
+    cmd: 'gettime' | 'getdate',
+    tokens: Token[],
+    offset: number,
+    lineNum: number,
+    env: Env,
+    execOpts: ExecOptions,
+  ): void {
+    const dest = tokens[offset + 1]
+    if (dest?.kind !== 'identifier') return
+    const destKey = dest.text.toLowerCase()
+
+    const formatTok = tokens[offset + 2]
+    let format: string | undefined
+    if (formatTok) {
+      format = resolveDryRunString(formatTok, env)
+      if (format === undefined) {
+        // 書式自体が未解決 → 成功/失敗も実行時まで不明なので result は触らない
+        setScalar(env, dest.text, { kind: 'str', value: '', hint: `（${cmd} の出力 / 実行時）` })
+        this.pushEvent({
+          kind: 'flow',
+          line: lineNum,
+          location: formatLocation(lineNum, execOpts.locationPrefix),
+          command: cmd,
+          message: `${cmd}（ドライラン: 書式が未解決のため実行時扱い）`,
+        })
+        return
+      }
+    }
+
+    const tzTok = tokens[offset + 3]
+    let timezone: string | undefined
+    if (tzTok) {
+      timezone = resolveDryRunString(tzTok, env)
+      if (timezone === undefined) {
+        setScalar(env, dest.text, { kind: 'str', value: '', hint: `（${cmd} の出力 / 実行時）` })
+        this.pushEvent({
+          kind: 'flow',
+          line: lineNum,
+          location: formatLocation(lineNum, execOpts.locationPrefix),
+          command: cmd,
+          message: `${cmd}（ドライラン: タイムゾーンが未解決のため実行時扱い）`,
+        })
+        return
+      }
+    }
+
+    const now = new Date()
+    const formatted =
+      cmd === 'gettime' ? formatGettime(format, now, timezone) : formatGetdate(format, now, timezone)
+
+    if (formatted.ok) {
+      setScalar(env, dest.text, { kind: 'str', value: formatted.value, origin: 'literal' })
+      setScalar(env, 'result', { kind: 'int', value: 0, origin: 'literal' })
+      const note = formatted.timezoneNote ? ` / ${formatted.timezoneNote}` : ''
+      this.pushEvent({
+        kind: 'flow',
+        line: lineNum,
+        location: formatLocation(lineNum, execOpts.locationPrefix),
+        command: cmd,
+        message: `${cmd}: '${formatted.value}'${note}`,
+      })
+      return
+    }
+
+    // result=1: 長すぎて未格納 / result=2: 書式不正で未格納（公式: 宛先は更新しない）
+    env.delete(destKey)
+    setScalar(env, 'result', { kind: 'int', value: formatted.result, origin: 'literal' })
+    this.pushEvent({
+      kind: 'warning',
+      line: lineNum,
+      location: formatLocation(lineNum, execOpts.locationPrefix),
+      command: cmd,
+      message:
+        formatted.result === 1
+          ? `${cmd}: 生成文字列が 511 文字を超えたため未格納 (result=1)`
+          : `${cmd}: 書式が不正なため未格納 (result=2)`,
+    })
   }
 
   private async handleDialog(

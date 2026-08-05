@@ -722,15 +722,46 @@ console.log('\n=== 44. yesnobox cancel sets result=0 ===')
   assert(sends[0] === 'no', 'yesnobox cancel sets result=0', sends)
 }
 
-console.log('\n=== 45. gettime strconcat send shows runtime hint ===')
+console.log('\n=== 45. gettime strconcat send resolves wall clock in dry-run ===')
 {
+  const year = String(new Date().getFullYear())
   const state = await runDryRun({
     source: `gettime t "%Y"\nstrconcat t 'x'\nsendln t\nend`,
     dialogAdapter: createMockDialogAdapter([]),
   })
   const sends = eventsOfKind(state.events, 'send')
-  assert(sends[0]?.payload?.includes('実行時') === true, 'gettime hint in dry run send payload', sends[0]?.payload)
-  assert(sends[0]?.detail?.includes('未解決') === true, 'gettime send marked unresolved', sends[0]?.detail)
+  assert(sends[0]?.payload === `${year}x`, 'gettime year resolved then strconcat', sends[0]?.payload)
+  assert(sends[0]?.detail?.includes('未解決') !== true, 'gettime send is resolved', sends[0]?.detail)
+}
+
+console.log('\n=== 45b. getdate default / gettime GMT / invalid format ===')
+{
+  const stateDefault = await runDryRun({
+    source: `getdate d\nsendln d\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const d = eventsOfKind(stateDefault.events, 'send')[0]?.payload ?? ''
+  assert(/^\d{4}-\d{2}-\d{2}$/.test(d), 'getdate default YYYY-MM-DD', d)
+
+  const utcNow = new Date()
+  const expectUtc = `${utcNow.getUTCFullYear()}/${String(utcNow.getUTCMonth() + 1).padStart(2, '0')}/${String(utcNow.getUTCDate()).padStart(2, '0')}`
+  const stateGmt = await runDryRun({
+    source: `tz = 'GMT'\ngettime s "%Y/%m/%d" tz\nsendln s\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const g = eventsOfKind(stateGmt.events, 'send')[0]?.payload ?? ''
+  assert(g === expectUtc, 'gettime GMT uses UTC calendar date', `got ${g}, expect ${expectUtc}`)
+
+  const stateBad = await runDryRun({
+    source: `t = 'stale'\ngettime t "%Q"\nsendln t\nsendln 'after'\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  assert(stateBad.status === 'finished', 'invalid format still finishes')
+  const warns = eventsOfKind(stateBad.events, 'warning')
+  assert(warns.some((e) => e.message?.includes('result=2')), 'invalid format sets result=2 warning', warns)
+  const after = eventsOfKind(stateBad.events, 'send').map((e) => e.payload)
+  assert(!after.includes('stale'), 'invalid format clears previous dest value', after)
+  assert(after.includes('after'), 'invalid format does not stop macro', after)
 }
 
 console.log('\n=== 46. buildDryRunPlainTextForCopy ===')

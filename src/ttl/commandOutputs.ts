@@ -79,13 +79,19 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
     'basename',
     'dirname',
     'makepath',
-    'getdate',
-    'gettime',
     'getver',
     'getspecialfolder',
     'clipb2var',
     'loginfo',
   ),
+  getdate: {
+    variables: [{ index: 1, type: 'string' }],
+    setsResult: true,
+  },
+  gettime: {
+    variables: [{ index: 1, type: 'string' }],
+    setsResult: true,
+  },
   strcopy: {
     variables: [{ index: 4, type: 'string' }],
   },
