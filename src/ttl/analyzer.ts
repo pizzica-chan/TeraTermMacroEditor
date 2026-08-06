@@ -34,6 +34,7 @@ import {
   tokenizeLine,
   stripComments,
   getStringLiteralError,
+  parseTtlIntegerLiteral,
   unquoteString,
   findNonAsciiOutsideLiterals,
   type Token,
@@ -424,8 +425,7 @@ function resolveStaticInteger(
 ): number | undefined {
   if (!token) return undefined
   if (token.kind === 'number') {
-    const n = Number(token.text)
-    return Number.isFinite(n) ? Math.trunc(n) : undefined
+    return parseTtlIntegerLiteral(token.text)
   }
   if (token.kind === 'identifier') {
     return varMap.get(token.text.toLowerCase())?.constantValue

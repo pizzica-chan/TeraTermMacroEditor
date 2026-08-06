@@ -1,4 +1,4 @@
-import { unquoteString, type Token } from './tokenize'
+import { parseTtlCharCodeLiteral, parseTtlIntegerLiteral, unquoteString, type Token } from './tokenize'
 
 /** 隣接トークン間に空白などの区切りがあるか */
 export function tokenGapBefore(tokens: Token[], i: number): boolean {
@@ -108,7 +108,9 @@ export function resolveStaticGroupedString(
 export function resolveStaticControlPart(tokens: Token[], index: number): string | undefined {
   const tok = tokens[index]
   if (tok?.text === '#' && tokens[index + 1]?.kind === 'number') {
-    return String.fromCharCode(Number(tokens[index + 1]!.text))
+    const code = parseTtlCharCodeLiteral(tokens[index + 1]!.text)
+    if (code === undefined) return undefined
+    return String.fromCharCode(code)
   }
   return undefined
 }
@@ -116,6 +118,11 @@ export function resolveStaticControlPart(tokens: Token[], index: number): string
 export function resolveStaticLiteralPart(token: Token | undefined): string | undefined {
   if (!token) return undefined
   if (token.kind === 'string') return unquoteString(token.text)
-  if (token.kind === 'number') return token.text
+  if (token.kind === 'number') {
+    // 隣接連結内の裸の数値は文字列化（`$` 付きもトークン text をそのまま）
+    return token.text.startsWith('$')
+      ? String(parseTtlIntegerLiteral(token.text) ?? token.text)
+      : token.text
+  }
   return undefined
 }

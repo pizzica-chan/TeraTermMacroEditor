@@ -52,8 +52,8 @@ const ttlLanguage = StreamLanguage.define<State>({
       return 'labelName'
     }
 
-    // Number
-    if (stream.match(/-?\d+(\.\d+)?/)) {
+    // Number: `$3a` / 10進（公式 formats — 浮動小数は未サポート）
+    if (stream.match(/\$[0-9a-fA-F]+/) || stream.match(/-?\d+/)) {
       return 'number'
     }
 

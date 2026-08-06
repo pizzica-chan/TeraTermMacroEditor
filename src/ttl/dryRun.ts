@@ -29,7 +29,7 @@ import {
 } from './staticCommandEval'
 import { formatSendPayloadForDisplay } from './sendText'
 import { collectLabelNames } from './labels'
-import { RESERVED, stripComments, tokenizeLine, unquoteString, type Token } from './tokenize'
+import { RESERVED, stripComments, tokenizeLine, unquoteString, parseTtlIntegerLiteral, parseTtlCharCodeLiteral, type Token } from './tokenize'
 import {
   BLOCK_PAIRS,
   MAX_LOOP_ITERATIONS,
@@ -308,7 +308,7 @@ function setArrayElement(env: Env, name: string, index: number, value: RuntimeSc
 }
 
 function resolveArrayIndex(indexToken: Token, env: Env): number | undefined {
-  if (indexToken.kind === 'number') return Number(indexToken.text)
+  if (indexToken.kind === 'number') return parseTtlIntegerLiteral(indexToken.text)
   if (indexToken.kind === 'identifier') {
     const v = env.get(indexToken.text.toLowerCase())
     if (v?.kind === 'int') return v.value
@@ -327,7 +327,10 @@ function evalArrayElement(name: string, indexToken: Token, env: Env): RuntimeSca
 function evalTokenValue(token: Token | undefined, env: Env): RuntimeScalar | undefined {
   if (!token) return undefined
   if (token.kind === 'string') return { kind: 'str', value: unquoteString(token.text), origin: 'literal' }
-  if (token.kind === 'number') return { kind: 'int', value: Number(token.text), origin: 'literal' }
+  if (token.kind === 'number') {
+    const n = parseTtlIntegerLiteral(token.text)
+    return n === undefined ? undefined : { kind: 'int', value: n, origin: 'literal' }
+  }
   if (token.kind === 'identifier') {
     const v = env.get(token.text.toLowerCase())
     if (v?.kind === 'int' || v?.kind === 'str') return v
@@ -357,7 +360,11 @@ function evalIntExprAt(
   if (!first) return undefined
   let value = evalTokenValue(first, env)
   if (value?.kind !== 'int') {
-    if (first.kind === 'number') value = { kind: 'int', value: Number(first.text) }
+    if (first.kind === 'number') {
+      const n = parseTtlIntegerLiteral(first.text)
+      if (n === undefined) return undefined
+      value = { kind: 'int', value: n }
+    }
     else return undefined
   }
   let i = start + 1
@@ -418,10 +425,13 @@ function resolveStringToken(token: Token | undefined, env: Env): string {
   return token.text
 }
 
-function resolveOperandSlice(tokens: Token[], i: number, env: Env): string {
+function resolveOperandSlice(tokens: Token[], i: number, env: Env): string | undefined {
   const tok = tokens[i]
   if (tok?.text === '#' && tokens[i + 1]?.kind === 'number') {
-    return String.fromCharCode(Number(tokens[i + 1]!.text))
+    const code = parseTtlCharCodeLiteral(tokens[i + 1]!.text)
+    // NUL (#0 / #$0) は公式どおり不可。空文字継続せず undefined（send の evalSendOperand と同様）
+    if (code === undefined) return undefined
+    return String.fromCharCode(code)
   }
   return resolveStringToken(tok, env)
 }
@@ -436,7 +446,13 @@ function collectStringArgs(tokens: Token[], start: number, env: Env): string[] {
       if (consumed && tokenGapBefore(tokens, i)) break
       const next = consumeOperand(tokens, i)
       if (next === null) break
-      parts.push(resolveOperandSlice(tokens, i, env))
+      const part = resolveOperandSlice(tokens, i, env)
+      if (part === undefined) {
+        // #0 等: send と同様に以降のオペランドを取り込まない
+        if (consumed) args.push(parts.join(''))
+        return args
+      }
+      parts.push(part)
       consumed = true
       i = next
     }
@@ -459,7 +475,13 @@ function collectOneStringArg(
     if (consumed && tokenGapBefore(tokens, i)) break
     const next = consumeOperand(tokens, i)
     if (next === null) break
-    parts.push(resolveOperandSlice(tokens, i, env))
+    const part = resolveOperandSlice(tokens, i, env)
+    if (part === undefined) {
+      // #0 等: ここまでの連結だけ返す（位置は拒否トークン上＝後続を誤読しない）
+      if (!consumed) return null
+      return { value: parts.join(''), next: i }
+    }
+    parts.push(part)
     consumed = true
     i = next
   }
@@ -1172,7 +1194,7 @@ export class DryRunSession {
         const indexTok = tokens[assignIdx - 2]
         const index =
           indexTok?.kind === 'number'
-            ? Number(indexTok.text)
+            ? parseTtlIntegerLiteral(indexTok.text)
             : indexTok?.kind === 'identifier'
               ? env.get(indexTok.text.toLowerCase())?.kind === 'int'
                 ? (env.get(indexTok.text.toLowerCase()) as RuntimeScalar & { kind: 'int' }).value

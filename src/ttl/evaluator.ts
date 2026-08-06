@@ -35,7 +35,7 @@ import {
   type IfdefinedTypeCode,
   type StaticValueContext,
 } from './staticCommandEval'
-import { RESERVED, tokenizeLine, stripComments, unquoteString, type Token } from './tokenize'
+import { RESERVED, tokenizeLine, stripComments, unquoteString, parseTtlIntegerLiteral, parseTtlCharCodeLiteral, type Token } from './tokenize'
 import {
   BLOCK_PAIRS,
   MAX_LOOP_ITERATIONS,
@@ -124,7 +124,7 @@ function canUnrollForLoop(start: number, end: number): boolean {
 }
 
 function resolveArrayIndex(indexToken: Token, env: Env): number | undefined {
-  if (indexToken.kind === 'number') return Number(indexToken.text)
+  if (indexToken.kind === 'number') return parseTtlIntegerLiteral(indexToken.text)
   if (indexToken.kind === 'identifier') {
     const v = env.get(indexToken.text.toLowerCase())
     if (v?.kind === 'int') return v.value
@@ -207,7 +207,8 @@ function evalSendOperand(
   if (!tok) return null
 
   if (tok.text === '#' && tokens[i + 1]?.kind === 'number') {
-    const code = Number(tokens[i + 1]!.text)
+    const code = parseTtlCharCodeLiteral(tokens[i + 1]!.text)
+    if (code === undefined) return null
     return {
       scalar: { kind: 'str', value: String.fromCharCode(code), origin: 'literal' },
       next: i + 2,
@@ -457,7 +458,10 @@ export function prepareAssignedScalar(scalar: RuntimeScalar): RuntimeScalar {
 
 function evalTokenValue(token: Token | undefined, env: Env): RuntimeScalar | undefined {
   if (!token) return undefined
-  if (token.kind === 'number') return { kind: 'int', value: Number(token.text) }
+  if (token.kind === 'number') {
+    const n = parseTtlIntegerLiteral(token.text)
+    return n === undefined ? undefined : { kind: 'int', value: n }
+  }
   if (token.kind === 'string') return { kind: 'str', value: unquoteString(token.text), origin: 'literal' }
   if (token.kind === 'identifier') {
     const v = env.get(token.text.toLowerCase())
@@ -536,7 +540,7 @@ function withElseBodyOpts(opts: EvalOptions, guaranteed = false): EvalOptions {
 function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefined {
   const first = evalTokenValue(tokens[start], env)
   if (!first || first.kind !== 'int') {
-    if (tokens[start]?.kind === 'number') return Number(tokens[start]!.text)
+    if (tokens[start]?.kind === 'number') return parseTtlIntegerLiteral(tokens[start]!.text)
     return undefined
   }
   let value = first.value
@@ -879,7 +883,7 @@ function processLine(env: Env, line: string, lineNum: number, knownLabels?: Read
       const indexTok = tokens[assignIdx - 2]
       const index =
         indexTok?.kind === 'number'
-          ? Number(indexTok.text)
+          ? parseTtlIntegerLiteral(indexTok.text)
           : indexTok?.kind === 'identifier'
             ? env.get(indexTok.text.toLowerCase())?.kind === 'int'
               ? (env.get(indexTok.text.toLowerCase()) as RuntimeScalar & { kind: 'int' }).value
@@ -1832,7 +1836,7 @@ function findHoverTarget(line: string, lineNum: number, column: number): HoverTa
       if (column < idxEnd) {
         const arrayIndex =
           idxTok?.kind === 'number'
-            ? Number(idxTok.text)
+            ? parseTtlIntegerLiteral(idxTok.text)
             : idxTok?.kind === 'identifier'
               ? 'var'
               : undefined

@@ -1,6 +1,6 @@
 import { findAssignmentIndex } from './argChecker'
 import { findBlockEnd } from './controlFlow'
-import { stripComments, tokenizeLine, unquoteString, type Token } from './tokenize'
+import { stripComments, tokenizeLine, unquoteString, parseTtlIntegerLiteral, type Token } from './tokenize'
 
 export const MAX_INCLUDE_LOOP_ITERATIONS = 256
 
@@ -218,7 +218,7 @@ function collectStaticIntConstants(lines: string[], beforeLineIdx?: number): Map
 
       let value: number | undefined
       if (rhs?.kind === 'number') {
-        value = Number(rhs.text)
+        value = parseTtlIntegerLiteral(rhs.text)
       } else if (rhs?.kind === 'identifier') {
         value = constants.get(rhs.text.toLowerCase())
       }
@@ -262,8 +262,8 @@ export function collectStaticStringArrayValues(lines: string[], beforeLineIdx?: 
     }
 
     const arrayKey = name.text.toLowerCase()
-    const index = Number(indexTok.text)
-    if (!Number.isFinite(index)) continue
+    const index = parseTtlIntegerLiteral(indexTok.text)
+    if (index === undefined) continue
 
     let bucket = arrays.get(arrayKey)
     if (!bucket) {
@@ -367,7 +367,7 @@ function buildLoopEffectiveRaws(
 
 function resolveStaticIntToken(token: Token | undefined, constants: Map<string, number>): number | undefined {
   if (!token) return undefined
-  if (token.kind === 'number') return Number(token.text)
+  if (token.kind === 'number') return parseTtlIntegerLiteral(token.text)
   if (token.kind === 'identifier') return constants.get(token.text.toLowerCase())
   return undefined
 }

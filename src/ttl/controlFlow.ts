@@ -1,4 +1,4 @@
-import { tokenizeLine, unquoteString, type Token } from './tokenize'
+import { tokenizeLine, unquoteString, parseTtlIntegerLiteral, type Token } from './tokenize'
 
 /** if/while/for/do/until の開閉ペア（配列形・analyzer 向け） */
 export const BLOCK_PAIR_LIST: ReadonlyArray<readonly [string, string]> = [
@@ -57,8 +57,8 @@ export function evalGuaranteedLiteralCondition(tokens: Token[]): boolean | undef
   if (tokens.length === 1) {
     const token = tokens[0]
     if (token?.kind === 'number') {
-      const value = Number(token.text)
-      return Number.isFinite(value) ? value !== 0 : undefined
+      const value = parseTtlIntegerLiteral(token.text)
+      return value !== undefined ? value !== 0 : undefined
     }
     if (token?.kind === 'string') return unquoteString(token.text) !== ''
     return undefined

@@ -18,6 +18,31 @@ export const RESERVED = new Set([
   'then',
 ])
 
+/**
+ * TTL 整数定数（10進 / `$` 始まり16進）を数値化する。
+ * @see https://teratermproject.github.io/manual/5/en/macro/syntax/formats.html
+ */
+export function parseTtlIntegerLiteral(text: string): number | undefined {
+  if (/^-?\d+$/.test(text)) {
+    const n = Number(text)
+    return Number.isFinite(n) ? n | 0 : undefined
+  }
+  if (/^\$[0-9a-fA-F]+$/.test(text)) {
+    // 符号付き32bit（公式 Integer）
+    return (parseInt(text.slice(1), 16) | 0)
+  }
+  return undefined
+}
+
+/**
+ * `#` / `#$` に続く文字コード。NUL(0) は公式どおり文字列に含められないため undefined。
+ */
+export function parseTtlCharCodeLiteral(text: string): number | undefined {
+  const n = parseTtlIntegerLiteral(text)
+  if (n === undefined || n === 0) return undefined
+  return n
+}
+
 export function tokenizeLine(line: string, lineNum: number): Token[] {
   const tokens: Token[] = []
   let i = 0
@@ -57,7 +82,16 @@ export function tokenizeLine(line: string, lineNum: number): Token[] {
       }
     }
 
-    const numMatch = line.slice(i).match(/^-?\d+(\.\d+)?/)
+    // `$3a` / `$10F` — 公式16進整数（10進より先に判定）
+    const hexMatch = line.slice(i).match(/^\$[0-9a-fA-F]+/)
+    if (hexMatch) {
+      tokens.push({ text: hexMatch[0], line: lineNum, column: col, kind: 'number' })
+      i += hexMatch[0].length
+      continue
+    }
+
+    // 10進整数のみ（公式は浮動小数未サポートのため小数点は含めない）
+    const numMatch = line.slice(i).match(/^-?\d+/)
     if (numMatch) {
       tokens.push({ text: numMatch[0], line: lineNum, column: col, kind: 'number' })
       i += numMatch[0].length
