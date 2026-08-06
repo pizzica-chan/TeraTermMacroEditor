@@ -25,6 +25,7 @@ import {
 } from './includeRefs'
 import {
   tryStaticIntegerCommand,
+  tryStaticSprintfCommand,
   tryStaticStringCommand,
   type StaticValueContext,
 } from './staticCommandEval'
@@ -547,6 +548,28 @@ function applyStaticCommandConstants(
   cmd: string,
 ): void {
   const staticCtx = createAnalyzerStaticCtx(tokens, offset, ctx.varMap)
+  const sprintfResult = tryStaticSprintfCommand(cmd, offset, staticCtx)
+  if (sprintfResult) {
+    if (cmd === 'sprintf2' && sprintfResult.result === 0 && sprintfResult.destIndex !== undefined) {
+      const destTok = tokens[sprintfResult.destIndex]
+      if (destTok?.kind === 'identifier') {
+        const varKey = destTok.text.toLowerCase()
+        const existing = ctx.varMap.get(varKey)
+        if (existing) {
+          existing.constantString = sprintfResult.value
+          if (existing.type === 'unknown') existing.type = 'string'
+        }
+      }
+    } else if (cmd === 'sprintf' && sprintfResult.result === 0) {
+      const existing = ctx.varMap.get('inputstr')
+      if (existing) {
+        existing.constantString = sprintfResult.value
+        if (existing.type === 'unknown') existing.type = 'string'
+      }
+    }
+    return
+  }
+
   const strResult = tryStaticStringCommand(cmd, offset, staticCtx)
   if (strResult) {
     const destTok = tokens[strResult.destIndex]

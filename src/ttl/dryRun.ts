@@ -22,6 +22,7 @@ import {
   computeStrscan,
   tryStaticIntegerCommand,
   tryStaticResultCommand,
+  tryStaticSprintfCommand,
   tryStaticStr2intCommand,
   tryStaticStringCommand,
   type StaticValueContext,
@@ -650,6 +651,28 @@ function applyStaticCommandEffects(
   knownLabels: ReadonlySet<string>,
 ): boolean {
   const staticCtx = createStaticCtx(tokens, offset, env)
+  const sprintfResult = tryStaticSprintfCommand(cmd, offset, staticCtx)
+  if (sprintfResult) {
+    if (cmd === 'sprintf2' && sprintfResult.result === 0 && sprintfResult.destIndex !== undefined) {
+      const destTok = tokens[sprintfResult.destIndex]
+      if (destTok?.kind === 'identifier') {
+        setScalar(env, destTok.text, {
+          kind: 'str',
+          value: sprintfResult.value,
+          origin: 'literal',
+        })
+      }
+    } else if (cmd === 'sprintf' && sprintfResult.result === 0) {
+      setScalar(env, 'inputstr', {
+        kind: 'str',
+        value: sprintfResult.value,
+        origin: 'literal',
+      })
+    }
+    setResult(env, cmd, sprintfResult.result, 'literal')
+    return true
+  }
+
   const strResult = tryStaticStringCommand(cmd, offset, staticCtx)
   if (strResult) {
     const destTok = tokens[strResult.destIndex]

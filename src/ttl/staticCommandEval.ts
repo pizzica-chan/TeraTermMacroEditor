@@ -1,4 +1,5 @@
 import type { Token } from './tokenize'
+import { formatTtlSprintf, type SprintfArg } from './ttlSprintf'
 
 export interface StaticValueContext {
   tokenAt(rel: number): Token | undefined
@@ -24,6 +25,15 @@ export interface StaticStr2intResult {
   destIndex: number
   value: number
   result: 0 | 1
+}
+
+/** sprintf2 / sprintf の静的評価結果 */
+export interface StaticSprintfResult {
+  /** sprintf2 の格納先トークン index。sprintf は inputstr なので省略 */
+  destIndex?: number
+  value: string
+  /** 0=成功 / 1=書式なし / 2=不正書式 / 3=不正引数 / 4=不正な宛先(sprintf2) */
+  result: 0 | 1 | 2 | 3 | 4
 }
 
 function utf8Bytes(s: string): Uint8Array {
@@ -400,6 +410,152 @@ export function tryStaticStr2intCommand(
   const value = parseStr2int(src)
   if (value !== undefined) return { destIndex: dest, value, result: 1 }
   return { destIndex: dest, value: 0, result: 0 }
+}
+
+/**
+ * sprintf2 / sprintf の引数を先頭から静的に解決する。
+ * どれか未解決なら undefined。
+ */
+function collectSprintfArgs(ctx: StaticValueContext, startRel: number): SprintfArg[] | undefined {
+  const args: SprintfArg[] = []
+  let rel = startRel
+  while (true) {
+    const tok = ctx.tokenAt(rel)
+    if (!tok) break
+
+    if (tok.kind === 'number') {
+      const n = ctx.resolveInt(rel)
+      if (n === undefined) return undefined
+      args.push({ kind: 'int', value: n })
+      rel += 1
+      continue
+    }
+
+    if (tok.kind === 'identifier') {
+      // 隣接連結の先頭が識別子の場合は grouped 文字列を試す
+      const groupedEnd = endOfGroupedRel(ctx, rel)
+      if (groupedEnd !== undefined && groupedEnd > rel + 1) {
+        const s = ctx.resolveGroupedString(rel)
+        if (s === undefined) return undefined
+        args.push({ kind: 'str', value: s })
+        rel = groupedEnd
+        continue
+      }
+      const n = ctx.resolveInt(rel)
+      if (n !== undefined) {
+        args.push({ kind: 'int', value: n })
+        rel += 1
+        continue
+      }
+      const s = ctx.resolveString(rel)
+      if (s !== undefined) {
+        args.push({ kind: 'str', value: s })
+        rel += 1
+        continue
+      }
+      return undefined
+    }
+
+    if (tok.kind === 'string' || tok.text === '#') {
+      const s = ctx.resolveGroupedString(rel) ?? ctx.resolveString(rel)
+      if (s === undefined) return undefined
+      const end = endOfGroupedRel(ctx, rel)
+      if (end === undefined) return undefined
+      args.push({ kind: 'str', value: s })
+      rel = end
+      continue
+    }
+
+    return undefined
+  }
+  return args
+}
+
+function tokenGapBetween(prev: Token, cur: Token): boolean {
+  return cur.column > prev.column + prev.text.length
+}
+
+/** StaticValueContext 上で consumeOperand 相当 */
+function consumeOperandRel(ctx: StaticValueContext, i: number): number | null {
+  const tok = ctx.tokenAt(i)
+  if (!tok) return null
+  if (tok.text === '#' && ctx.tokenAt(i + 1)?.kind === 'number') return i + 2
+  if (tok.kind === 'string' || tok.kind === 'number') return i + 1
+  if (tok.kind === 'identifier') {
+    if (ctx.tokenAt(i + 1)?.text === '[' && ctx.tokenAt(i + 2) && ctx.tokenAt(i + 3)?.text === ']') {
+      return i + 4
+    }
+    return i + 1
+  }
+  return null
+}
+
+/** 隣接連結を含む 1 論理引数の終端 rel（排他） */
+function endOfGroupedRel(ctx: StaticValueContext, start: number): number | undefined {
+  let i = start
+  let consumed = false
+  let prev: Token | undefined
+  while (true) {
+    const tok = ctx.tokenAt(i)
+    if (!tok) break
+    if (consumed && prev && tokenGapBetween(prev, tok)) break
+    const next = consumeOperandRel(ctx, i)
+    if (next === null) break
+    prev = ctx.tokenAt(next - 1) ?? tok
+    consumed = true
+    i = next
+  }
+  return consumed ? i : undefined
+}
+
+function resolveFormatAt(
+  ctx: StaticValueContext,
+  startRel: number,
+): { value: string; nextRel: number } | undefined {
+  const value = ctx.resolveGroupedString(startRel) ?? ctx.resolveString(startRel)
+  if (value === undefined) return undefined
+  const nextRel = endOfGroupedRel(ctx, startRel)
+  if (nextRel === undefined) return undefined
+  return { value, nextRel }
+}
+
+/**
+ * sprintf2 strvar FORMAT [ARGUMENT ...]
+ * sprintf FORMAT [ARGUMENT ...] → inputstr
+ * @see https://teratermproject.github.io/manual/5/en/macro/command/sprintf2.html
+ */
+export function tryStaticSprintfCommand(
+  cmd: string,
+  offset: number,
+  ctx: StaticValueContext,
+): StaticSprintfResult | undefined {
+  const lower = cmd.toLowerCase()
+  if (lower !== 'sprintf2' && lower !== 'sprintf') return undefined
+
+  if (lower === 'sprintf2') {
+    const destTok = ctx.tokenAt(1)
+    const dest = destIdentifier(ctx, offset, 1)
+    // 第1引数があるが識別子でない → 公式 result=4（引数解決可否に依存しない）
+    if (destTok && dest === undefined) {
+      return { value: '', result: 4 }
+    }
+    if (dest === undefined) return undefined
+
+    const format = resolveFormatAt(ctx, 2)
+    if (!format) return undefined
+    const args = collectSprintfArgs(ctx, format.nextRel)
+    if (args === undefined) return undefined
+    const outcome = formatTtlSprintf(format.value, args)
+    return { destIndex: dest, value: outcome.value, result: outcome.result }
+  }
+
+  // sprintf FORMAT [ARGUMENT ...] → inputstr
+  const format = resolveFormatAt(ctx, 1)
+  if (!format) return undefined
+  const args = collectSprintfArgs(ctx, format.nextRel)
+  if (args === undefined) return undefined
+  const outcome = formatTtlSprintf(format.value, args)
+  return { value: outcome.value, result: outcome.result }
 }
 
 /** result のみを更新するコマンド（strcompare / strlen 等） */
