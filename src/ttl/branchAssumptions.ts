@@ -2,6 +2,7 @@ import { stripComments, tokenizeLine } from './tokenize'
 import { lineKeyword } from './controlFlow'
 import { evalIfConditionStatic, initMacroEnvironment } from './evaluator'
 import type { MacroEnvironment } from './evaluator'
+import { findSingleLineIfTailStart } from './subroutine'
 
 export interface IndeterminateIfBranch {
   line: number
@@ -17,7 +18,12 @@ export function extractIfConditionText(line: string, lineIdx: number, cmd: strin
     const thenIdx = tokens.findIndex(
       (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
     )
-    if (thenIdx >= 0) condEnd = thenIdx
+    if (thenIdx >= 0) {
+      condEnd = thenIdx
+    } else if (cmd === 'if') {
+      const tailStart = findSingleLineIfTailStart(tokens, off)
+      if (tailStart !== null) condEnd = tailStart
+    }
   }
   return tokens
     .slice(off + 1, condEnd)

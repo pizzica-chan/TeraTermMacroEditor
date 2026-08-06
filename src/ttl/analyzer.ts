@@ -35,6 +35,7 @@ import {
   stripComments,
   getStringLiteralError,
   parseTtlIntegerLiteral,
+  parseTtlSignedIntAt,
   unquoteString,
   findNonAsciiOutsideLiterals,
   type Token,
@@ -43,6 +44,7 @@ import {
   BLOCK_PAIR_LIST,
   evalGuaranteedLiteralCondition,
 } from './controlFlow'
+import { evalTtlIntExprAt } from './ttlExpression'
 import {
   collectLabelNames,
   formatLabelRef,
@@ -433,6 +435,23 @@ function resolveStaticInteger(
   return undefined
 }
 
+/** tokens[start] から静的整数（符号付きリテラル・定数式・定数変数）を解決 */
+function resolveStaticIntegerAt(
+  tokens: Token[],
+  start: number,
+  varMap: Map<string, VariableInfo>,
+): number | undefined {
+  const lit = parseTtlSignedIntAt(tokens, start)
+  if (lit) return lit.value
+  const got = evalTtlIntExprAt(tokens, start, {
+    resolveInt(name) {
+      return varMap.get(name.toLowerCase())?.constantValue
+    },
+  })
+  if (got && !got.error) return got.value
+  return undefined
+}
+
 function resolveStaticOperandPart(
   tokens: Token[],
   index: number,
@@ -463,8 +482,9 @@ function applyConstantValue(
   }
 
   if (!isGroupedStringExprStart(tokens, rhsStart)) {
-    info.constantValue = resolveStaticInteger(valueToken, varMap)
-    applyConstantString(info, valueToken, varMap)
+    info.constantValue = resolveStaticIntegerAt(tokens, rhsStart, varMap)
+    // 文字列は先頭トークンのみ（整数式 RHS とは排他）
+    if (info.constantValue === undefined) applyConstantString(info, valueToken, varMap)
     return
   }
 
@@ -477,8 +497,8 @@ function applyConstantValue(
     return
   }
 
-  info.constantValue = resolveStaticInteger(valueToken, varMap)
-  applyConstantString(info, valueToken, varMap)
+  info.constantValue = resolveStaticIntegerAt(tokens, rhsStart, varMap)
+  if (info.constantValue === undefined) applyConstantString(info, valueToken, varMap)
 }
 
 function resolveStaticString(
@@ -526,7 +546,7 @@ function createAnalyzerStaticCtx(
       return resolveStaticString(tokens[offset + rel], varMap)
     },
     resolveInt(rel) {
-      return resolveStaticInteger(tokens[offset + rel], varMap)
+      return resolveStaticIntegerAt(tokens, offset + rel, varMap)
     },
     resolveInPlaceVar(rel) {
       const tok = tokens[offset + rel]

@@ -64,7 +64,8 @@ export const TTL_COMMANDS = new Set([
   'var2clipb', 'yesnobox',
 ])
 
-export const LOGICAL_OPERATORS = new Set(['and', 'or', 'not'])
+/** 単語として書けるビット演算子（公式: and/or/xor/not はビット演算であり論理演算ではない） */
+export const LOGICAL_OPERATORS = new Set(['and', 'or', 'xor', 'not'])
 
 export {
   getCommandOutputEffect,

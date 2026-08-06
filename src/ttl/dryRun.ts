@@ -38,6 +38,7 @@ import {
   lineKeyword,
   type BoolExprScalar,
 } from './controlFlow'
+import { evalTtlIntExprAt, type TtlIntExprResolve } from './ttlExpression'
 import { formatGetdate, formatGettime } from './ttlDateTime'
 import {
   buildStringFromOperands,
@@ -351,35 +352,29 @@ export function dryRunBranchAssumptionKey(lineNum: number, locationPrefix?: stri
   return `${locationPrefix ?? ''}\0${lineNum}`
 }
 
+function makeIntExprResolve(env: Env): TtlIntExprResolve {
+  return {
+    resolveInt(name) {
+      const v = env.get(name.toLowerCase())
+      return v?.kind === 'int' ? v.value : undefined
+    },
+    resolveIntArray(name, index) {
+      const arr = env.get(name.toLowerCase())
+      if (!arr || arr.kind !== 'array') return undefined
+      const el = arr.elements.get(index)
+      return el?.kind === 'int' ? el.value : undefined
+    },
+  }
+}
+
 function evalIntExprAt(
   tokens: Token[],
   start: number,
   env: Env,
 ): { value: number; next: number } | undefined {
-  const first = tokens[start]
-  if (!first) return undefined
-  let value = evalTokenValue(first, env)
-  if (value?.kind !== 'int') {
-    if (first.kind === 'number') {
-      const n = parseTtlIntegerLiteral(first.text)
-      if (n === undefined) return undefined
-      value = { kind: 'int', value: n }
-    }
-    else return undefined
-  }
-  let i = start + 1
-  while (i < tokens.length) {
-    const op = tokens[i]
-    const rhs = tokens[i + 1]
-    if (op?.kind !== 'operator' || !rhs) break
-    const rhsVal = evalTokenValue(rhs, env)
-    if (rhsVal?.kind !== 'int') break
-    if (op.text === '+') value = { kind: 'int', value: value.value + rhsVal.value }
-    else if (op.text === '-') value = { kind: 'int', value: value.value - rhsVal.value }
-    else break
-    i += 2
-  }
-  return { value: value.value, next: i }
+  const got = evalTtlIntExprAt(tokens, start, makeIntExprResolve(env))
+  if (!got || got.error) return undefined
+  return { value: got.value, next: got.next }
 }
 
 function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefined {
@@ -391,7 +386,18 @@ function evalBoolExpr(
   env: Env,
   resolveToken: (token: Token | undefined, env: Env) => BoolExprScalar | undefined = evalTokenValue,
 ): boolean | undefined {
-  return evalBoolExprShared(tokens, env, resolveToken, { typeMismatchAsFalse: true })
+  return evalBoolExprShared(tokens, env, resolveToken, {
+    typeMismatchAsFalse: true,
+    resolveIntArray(name, index) {
+      const arr = env.get(name.toLowerCase())
+      if (!arr || arr.kind !== 'array') return undefined
+      const el = arr.elements.get(index)
+      if (el?.kind !== 'int') return undefined
+      // dry-run: 未更新の system-default のみ未確定。dialog-result は直前ダイアログで確定済みなので採用する
+      if (el.origin === 'system-default') return undefined
+      return el.value
+    },
+  })
 }
 
 /** ドライランでユーザー入力なしに断定できる条件か（シミュレート済みの値は利用可） */
@@ -408,7 +414,12 @@ export function tryEvalResolvableDryRunCondition(
     const thenIdx = tokens.findIndex(
       (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
     )
-    condEnd = thenIdx >= 0 ? thenIdx : tokens.length
+    if (thenIdx >= 0) {
+      condEnd = thenIdx
+    } else if (cmd === 'if') {
+      const tailStart = findSingleLineIfTailStart(tokens, off)
+      if (tailStart !== null) condEnd = tailStart
+    }
   } else if (cmd !== 'while' && cmd !== 'until') {
     return undefined
   }
@@ -991,7 +1002,12 @@ export class DryRunSession {
       const thenIdx = tokens.findIndex(
         (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
       )
-      condEnd = thenIdx >= 0 ? thenIdx : tokens.length
+      if (thenIdx >= 0) {
+        condEnd = thenIdx
+      } else if (cmd === 'if') {
+        const tailStart = findSingleLineIfTailStart(tokens, off)
+        if (tailStart !== null) condEnd = tailStart
+      }
     } else if (cmd !== 'while' && cmd !== 'until') {
       return undefined
     }

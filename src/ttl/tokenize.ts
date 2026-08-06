@@ -43,6 +43,30 @@ export function parseTtlCharCodeLiteral(text: string): number | undefined {
   return n
 }
 
+/**
+ * tokens[start] から符号付き整数リテラルを読む（`-`/`+` + 非負 number、または number）。
+ * トークン化が単項 `-` と数値を分離したあとの静的解析用。
+ */
+export function parseTtlSignedIntAt(
+  tokens: ReadonlyArray<Token>,
+  start: number,
+): { value: number; next: number } | undefined {
+  const tok = tokens[start]
+  if (!tok) return undefined
+  if (tok.kind === 'number') {
+    const n = parseTtlIntegerLiteral(tok.text)
+    return n === undefined ? undefined : { value: n, next: start + 1 }
+  }
+  if (tok.kind === 'operator' && (tok.text === '-' || tok.text === '+')) {
+    const num = tokens[start + 1]
+    if (num?.kind !== 'number') return undefined
+    const n = parseTtlIntegerLiteral(num.text)
+    if (n === undefined) return undefined
+    return { value: tok.text === '-' ? (-n | 0) : (n | 0), next: start + 2 }
+  }
+  return undefined
+}
+
 export function tokenizeLine(line: string, lineNum: number): Token[] {
   const tokens: Token[] = []
   let i = 0
@@ -90,8 +114,8 @@ export function tokenizeLine(line: string, lineNum: number): Token[] {
       continue
     }
 
-    // 10進整数のみ（公式は浮動小数未サポートのため小数点は含めない）
-    const numMatch = line.slice(i).match(/^-?\d+/)
+    // 10進は非負のみ（負数は単項 `-` + 数値。公式 expressions / ttpmacro GetNumber に合わせる）
+    const numMatch = line.slice(i).match(/^\d+/)
     if (numMatch) {
       tokens.push({ text: numMatch[0], line: lineNum, column: col, kind: 'number' })
       i += numMatch[0].length
@@ -105,7 +129,10 @@ export function tokenizeLine(line: string, lineNum: number): Token[] {
       continue
     }
 
-    const opMatch = line.slice(i).match(/^(<>|>=|<=|:=|[=<>+\-*/%#])/)
+    // 長い演算子を先に（expressions.html / ttpmacro GetOperator）
+    const opMatch = line
+      .slice(i)
+      .match(/^(>>>|>>|<<|&&|\|\||<>|>=|<=|==|!=|:=|[=<>+\-*/%#&|^~!()[\]])/)
     if (opMatch) {
       tokens.push({ text: opMatch[0], line: lineNum, column: col, kind: 'operator' })
       i += opMatch[0].length

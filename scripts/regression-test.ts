@@ -190,13 +190,22 @@ assert(
   conditionallyAssignedConstant.diagnostics,
 )
 
-const unsupportedCompoundCondition = analyzeTTL(`if 1 + 0 = 0 then\nend\nendif\naaa = 0`)
+const compoundFalseCondition = analyzeTTL(`if 1 + 0 = 0 then\nend\nendif\naaa = 0`)
 assert(
-  !unsupportedCompoundCondition.diagnostics.some(
+  !compoundFalseCondition.diagnostics.some(
     (diag) => diag.line === 4 && diag.message.includes('到達しません'),
   ),
-  'unsupported compound condition is not treated as definitely true',
-  unsupportedCompoundCondition.diagnostics,
+  'compound false condition does not make following code unreachable',
+  compoundFalseCondition.diagnostics,
+)
+
+const compoundTrueCondition = analyzeTTL(`if 1 + 0 = 1 then\nend\nendif\naaa = 0`)
+assert(
+  compoundTrueCondition.diagnostics.some(
+    (diag) => diag.line === 4 && diag.message.includes('到達しません'),
+  ),
+  'compound true condition makes following code unreachable',
+  compoundTrueCondition.diagnostics,
 )
 
 const nestedDefiniteEnd = analyzeTTL(

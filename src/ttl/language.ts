@@ -52,8 +52,8 @@ const ttlLanguage = StreamLanguage.define<State>({
       return 'labelName'
     }
 
-    // Number: `$3a` / 10進（公式 formats — 浮動小数は未サポート）
-    if (stream.match(/\$[0-9a-fA-F]+/) || stream.match(/-?\d+/)) {
+    // Number: `$3a` / 非負10進（負は単項 `-`。公式 formats / expressions）
+    if (stream.match(/\$[0-9a-fA-F]+/) || stream.match(/\d+/)) {
       return 'number'
     }
 
@@ -77,8 +77,8 @@ const ttlLanguage = StreamLanguage.define<State>({
       return 'variableName'
     }
 
-    // Operators
-    if (stream.match(/<>|>=|<=|:=|[=<>+\-*/%#]/)) {
+    // Operators（expressions.html）
+    if (stream.match(/>>>|>>|<<|&&|\|\||<>|>=|<=|==|!=|:=|[=<>+\-*/%#&|^~!()[\]]/)) {
       return 'operator'
     }
 

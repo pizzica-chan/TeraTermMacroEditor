@@ -44,6 +44,7 @@ import {
   findBlockEnd,
   lineKeyword,
 } from './controlFlow'
+import { evalTtlIntExprAt, type TtlIntExprResolve } from './ttlExpression'
 import { collectLabelLineMap, collectLabelNames, formatLabelRef, normalizeLabelName } from './labels'
 import {
   findLabelLineIndex,
@@ -495,7 +496,12 @@ function evalGuaranteedIfCondition(
     const thenIdx = tokens.findIndex(
       (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
     )
-    if (thenIdx >= 0) condEnd = thenIdx
+    if (thenIdx >= 0) {
+      condEnd = thenIdx
+    } else if (cmd === 'if') {
+      const tailStart = findSingleLineIfTailStart(tokens, off)
+      if (tailStart !== null) condEnd = tailStart
+    }
   }
   return evalGuaranteedLiteralCondition(tokens.slice(off + 1, condEnd))
 }
@@ -536,25 +542,26 @@ function withElseBodyOpts(opts: EvalOptions, guaranteed = false): EvalOptions {
   }
 }
 
-/** 単純な整数式: a, a - b, a + b */
+function makeIntExprResolve(env: Env): TtlIntExprResolve {
+  return {
+    resolveInt(name) {
+      const v = env.get(name.toLowerCase())
+      return v?.kind === 'int' ? v.value : undefined
+    },
+    resolveIntArray(name, index) {
+      const arr = env.get(name.toLowerCase())
+      if (!arr || arr.kind !== 'array') return undefined
+      const el = arr.elements.get(index)
+      return el?.kind === 'int' ? el.value : undefined
+    },
+  }
+}
+
+/** 公式優先順位の整数式（expressions.html） */
 function evalIntExpr(tokens: Token[], start: number, env: Env): number | undefined {
-  const first = evalTokenValue(tokens[start], env)
-  if (!first || first.kind !== 'int') {
-    if (tokens[start]?.kind === 'number') return parseTtlIntegerLiteral(tokens[start]!.text)
-    return undefined
-  }
-  let value = first.value
-  let i = start + 1
-  while (i + 1 < tokens.length) {
-    const op = tokens[i]
-    const rhs = evalTokenValue(tokens[i + 1], env)
-    if (op?.kind !== 'operator' || !rhs || rhs.kind !== 'int') break
-    if (op.text === '-') value -= rhs.value
-    else if (op.text === '+') value += rhs.value
-    else break
-    i += 2
-  }
-  return value
+  const got = evalTtlIntExprAt(tokens, start, makeIntExprResolve(env))
+  if (!got || got.error) return undefined
+  return got.value
 }
 
 /** include 引数の実行時実効値（hoge や host[i] を env から解決） */
@@ -1046,7 +1053,17 @@ function findNextIfSiblingLine(lines: string[], fromLineIdx: number, endIdx: num
 }
 
 function evalBoolExpr(tokens: Token[], env: Env): boolean | undefined {
-  return evalBoolExprShared(tokens, env, evalConditionTokenValue)
+  return evalBoolExprShared(tokens, env, evalConditionTokenValue, {
+    resolveIntArray(name, index) {
+      const arr = env.get(name.toLowerCase())
+      if (!arr || arr.kind !== 'array') return undefined
+      const el = arr.elements.get(index)
+      if (el?.kind !== 'int') return undefined
+      // 静的評価: 既定値・ダイアログ由来は真偽を断定しない（スカラー条件と同方針）
+      if (el.origin === 'system-default' || el.origin === 'dialog-result') return undefined
+      return el.value
+    },
+  })
 }
 
 function tryEvalCondition(line: string, lineIdx: number, env: Env, cmd: string): boolean | undefined {
@@ -1058,7 +1075,12 @@ function tryEvalCondition(line: string, lineIdx: number, env: Env, cmd: string):
     const thenIdx = tokens.findIndex(
       (t, i) => i > off && t.kind === 'identifier' && t.text.toLowerCase() === 'then',
     )
-    if (thenIdx >= 0) condEnd = thenIdx
+    if (thenIdx >= 0) {
+      condEnd = thenIdx
+    } else if (cmd === 'if') {
+      const tailStart = findSingleLineIfTailStart(tokens, off)
+      if (tailStart !== null) condEnd = tailStart
+    }
   } else if (cmd !== 'while' && cmd !== 'until') {
     return undefined
   }

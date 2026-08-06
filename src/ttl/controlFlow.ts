@@ -1,4 +1,5 @@
-import { tokenizeLine, unquoteString, parseTtlIntegerLiteral, type Token } from './tokenize'
+import { tokenizeLine, unquoteString, type Token } from './tokenize'
+import { evalTtlIntExprAt, evalTtlLiteralIntCondition, type TtlIntExprResolve } from './ttlExpression'
 
 /** if/while/for/do/until の開閉ペア（配列形・analyzer 向け） */
 export const BLOCK_PAIR_LIST: ReadonlyArray<readonly [string, string]> = [
@@ -51,27 +52,16 @@ export function findBlockEnd(lines: string[], startIdx: number, open: string, cl
 
 /**
  * 到達不能判定と同様、リテラルだけで真と断定できる if 条件か。
- * 変数比較は未確定とする。
+ * 変数を含む式は未確定とする。
+ * @see https://teratermproject.github.io/manual/5/en/macro/syntax/expressions.html
  */
 export function evalGuaranteedLiteralCondition(tokens: Token[]): boolean | undefined {
-  if (tokens.length === 1) {
-    const token = tokens[0]
-    if (token?.kind === 'number') {
-      const value = parseTtlIntegerLiteral(token.text)
-      return value !== undefined ? value !== 0 : undefined
-    }
-    if (token?.kind === 'string') return unquoteString(token.text) !== ''
-    return undefined
+  if (tokens.length === 0) return undefined
+  // 文字列リテラル単独（公式の整数条件ではないが、従来の静的判定を維持）
+  if (tokens.length === 1 && tokens[0]?.kind === 'string') {
+    return unquoteString(tokens[0].text) !== ''
   }
-  if (
-    tokens.length === 2 &&
-    tokens[0]?.kind === 'identifier' &&
-    tokens[0].text.toLowerCase() === 'not'
-  ) {
-    const inner = evalGuaranteedLiteralCondition(tokens.slice(1))
-    return inner === undefined ? undefined : !inner
-  }
-  return undefined
+  return evalTtlLiteralIntCondition(tokens)
 }
 
 export function scalarCompare(
@@ -81,15 +71,17 @@ export function scalarCompare(
 ): boolean | undefined {
   if (!lhs || !rhs) return undefined
   if (lhs.kind === 'str' && rhs.kind === 'str') {
-    if (op === '=') return lhs.value === rhs.value
-    if (op === '<>') return lhs.value !== rhs.value
+    if (op === '=' || op === '==') return lhs.value === rhs.value
+    if (op === '<>' || op === '!=') return lhs.value !== rhs.value
     return undefined
   }
   if (lhs.kind === 'int' && rhs.kind === 'int') {
     switch (op) {
       case '=':
+      case '==':
         return lhs.value === rhs.value
       case '<>':
+      case '!=':
         return lhs.value !== rhs.value
       case '<':
         return lhs.value < rhs.value
@@ -112,12 +104,51 @@ export interface EvalBoolExprOptions {
    * evaluator では undefined のまま（未確定）にする。
    */
   typeMismatchAsFalse?: boolean
+  /** 整数配列要素の解決（`if arr[0]=1` 用） */
+  resolveIntArray?: (name: string, index: number) => number | undefined
+}
+
+function resolveFromTokenFn<TEnv>(
+  resolveToken: (token: Token | undefined, env: TEnv) => BoolExprScalar | undefined,
+  env: TEnv,
+  options?: EvalBoolExprOptions,
+): TtlIntExprResolve {
+  return {
+    resolveInt(name: string) {
+      const v = resolveToken({ text: name, line: 0, column: 0, kind: 'identifier' }, env)
+      return v?.kind === 'int' ? v.value : undefined
+    },
+    resolveIntArray: options?.resolveIntArray,
+  }
 }
 
 /**
- * ブール式の静的／実行時評価。トークン解決は呼び出し側に委譲する。
- * - evaluator: resolveToken = evalConditionTokenValue（system-default 等は未確定）
- * - dryRun: resolveToken = evalTokenValue 等 + typeMismatchAsFalse
+ * 単純な文字列比較 `lhs =/==/<> /!= rhs`（公式整数式の外側の互換）。
+ */
+function evalSimpleStringCompare<TEnv>(
+  tokens: Token[],
+  env: TEnv,
+  resolveToken: (token: Token | undefined, env: TEnv) => BoolExprScalar | undefined,
+  options?: EvalBoolExprOptions,
+): boolean | undefined {
+  if (tokens.length !== 3) return undefined
+  const op = tokens[1]
+  if (op?.kind !== 'operator' || !['=', '==', '<>', '!='].includes(op.text)) return undefined
+  const lhs = resolveToken(tokens[0], env)
+  const rhs = resolveToken(tokens[2], env)
+  if (!lhs || !rhs) return undefined
+  if (lhs.kind !== 'str' || rhs.kind !== 'str') {
+    if (options?.typeMismatchAsFalse && lhs.kind !== rhs.kind) return false
+    return undefined
+  }
+  return scalarCompare(lhs, op.text, rhs)
+}
+
+/**
+ * 条件式の評価。
+ * 本線は公式どおり整数式（非ゼロが真）。
+ * 互換: 単独の文字列真偽、単純な文字列比較。
+ * @see https://teratermproject.github.io/manual/5/en/macro/syntax/expressions.html
  */
 export function evalBoolExpr<TEnv>(
   tokens: Token[],
@@ -127,40 +158,33 @@ export function evalBoolExpr<TEnv>(
 ): boolean | undefined {
   if (tokens.length === 0) return undefined
 
-  if (tokens[0]?.kind === 'identifier' && tokens[0].text.toLowerCase() === 'not') {
-    const inner = evalBoolExpr(tokens.slice(1), env, resolveToken, options)
-    return inner === undefined ? undefined : !inner
+  const intGot = evalTtlIntExprAt(tokens, 0, resolveFromTokenFn(resolveToken, env, options))
+  if (intGot && !intGot.error && intGot.next === tokens.length) {
+    return intGot.value !== 0
   }
 
-  for (let j = 1; j < tokens.length; j++) {
-    const op = tokens[j]
-    if (op?.kind !== 'operator' || !['=', '<>', '<', '>', '<=', '>='].includes(op.text)) continue
-
-    const lhs = resolveToken(tokens[j - 1], env)
-    const rhs = resolveToken(tokens[j + 1], env)
-    const cmp = scalarCompare(lhs, op.text, rhs)
-    if (cmp === undefined) {
-      if (options?.typeMismatchAsFalse && lhs && rhs && lhs.kind !== rhs.kind) return false
-      return undefined
-    }
-
-    const andOr = tokens[j + 2]
-    if (andOr?.kind === 'identifier') {
-      const lo = andOr.text.toLowerCase()
-      if (lo === 'and' || lo === 'or') {
-        const rest = evalBoolExpr(tokens.slice(j + 3), env, resolveToken, options)
-        if (rest === undefined) return undefined
-        return lo === 'and' ? cmp && rest : cmp || rest
-      }
-    }
-    return cmp
-  }
-
+  // 単独トークンの真偽（整数は上で処理済み。文字列は非空が真）
   if (tokens.length === 1) {
     const v = resolveToken(tokens[0], env)
     if (v?.kind === 'int') return v.value !== 0
     if (v?.kind === 'str') return v.value !== ''
+    return undefined
   }
 
+  // 型不一致の単純比較（dryRun: msg = 1 → false）
+  if (tokens.length === 3 && options?.typeMismatchAsFalse) {
+    const op = tokens[1]
+    if (op?.kind === 'operator' && ['=', '==', '<>', '!=', '<', '>', '<=', '>='].includes(op.text)) {
+      const lhs = resolveToken(tokens[0], env)
+      const rhs = resolveToken(tokens[2], env)
+      if (lhs && rhs && lhs.kind !== rhs.kind) return false
+    }
+  }
+
+  const strCmp = evalSimpleStringCompare(tokens, env, resolveToken, options)
+  if (strCmp !== undefined) return strCmp
+
+  // 整数式が途中までしか解けない／未解決変数 → 未確定
+  if (intGot?.error === 'unresolved') return undefined
   return undefined
 }

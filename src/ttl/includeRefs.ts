@@ -1,6 +1,6 @@
 import { findAssignmentIndex } from './argChecker'
 import { findBlockEnd } from './controlFlow'
-import { stripComments, tokenizeLine, unquoteString, parseTtlIntegerLiteral, type Token } from './tokenize'
+import { stripComments, tokenizeLine, unquoteString, parseTtlIntegerLiteral, parseTtlSignedIntAt, type Token } from './tokenize'
 
 export const MAX_INCLUDE_LOOP_ITERATIONS = 256
 
@@ -217,8 +217,9 @@ function collectStaticIntConstants(lines: string[], beforeLineIdx?: number): Map
       if (lhs?.kind !== 'identifier') continue
 
       let value: number | undefined
-      if (rhs?.kind === 'number') {
-        value = parseTtlIntegerLiteral(rhs.text)
+      const lit = parseTtlSignedIntAt(tokens, assignIdx + 1)
+      if (lit) {
+        value = lit.value
       } else if (rhs?.kind === 'identifier') {
         value = constants.get(rhs.text.toLowerCase())
       }
@@ -365,10 +366,15 @@ function buildLoopEffectiveRaws(
   return Object.keys(effectiveRawsByValue).length > 0 ? effectiveRawsByValue : undefined
 }
 
-function resolveStaticIntToken(token: Token | undefined, constants: Map<string, number>): number | undefined {
-  if (!token) return undefined
-  if (token.kind === 'number') return parseTtlIntegerLiteral(token.text)
-  if (token.kind === 'identifier') return constants.get(token.text.toLowerCase())
+function resolveStaticIntTokenAt(
+  tokens: Token[],
+  start: number,
+  constants: Map<string, number>,
+): number | undefined {
+  const lit = parseTtlSignedIntAt(tokens, start)
+  if (lit) return lit.value
+  const token = tokens[start]
+  if (token?.kind === 'identifier') return constants.get(token.text.toLowerCase())
   return undefined
 }
 
@@ -384,8 +390,11 @@ function findForLoopBlocks(lines: string[]): ForLoopBlock[] {
 
     const variable = tokens[start + 1]!.text
     const constants = collectStaticIntConstants(lines, lineIdx)
-    const loopStart = resolveStaticIntToken(tokens[start + 2], constants)
-    const loopEnd = resolveStaticIntToken(tokens[start + 3], constants)
+    const startLit = parseTtlSignedIntAt(tokens, start + 2)
+    const loopStart = resolveStaticIntTokenAt(tokens, start + 2, constants)
+    // 終端は start が符号付きなら 2 トークン消費後から
+    const endAt = startLit?.next ?? start + 3
+    const loopEnd = resolveStaticIntTokenAt(tokens, endAt, constants)
     if (loopStart === undefined || loopEnd === undefined) continue
 
     const values = computeLoopValues(loopStart, loopEnd)

@@ -30,7 +30,12 @@ console.log('=== formats.html: tokenize ===')
   assert(hex2.some((t) => t.kind === 'number' && t.text === '$10F'), '$10F is one number token', hex2)
 
   const neg = tokenizeLine('x = -11', 1)
-  assert(neg.some((t) => t.kind === 'number' && t.text === '-11'), '-11 is one number token', neg)
+  assert(
+    neg.map((t) => `${t.kind}:${t.text}`).join(' ') ===
+      'identifier:x operator:= operator:- number:11',
+    '-11 is unary minus + number (expressions / GetNumber)',
+    neg,
+  )
 
   const floatish = tokenizeLine('x = 1.5', 1)
   assert(

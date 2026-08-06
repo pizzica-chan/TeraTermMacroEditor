@@ -45,5 +45,29 @@ check(
 )
 check('loop include line is 6', loopRef?.line === 6)
 
+const negForSrc = `for i -1 1
+  include host[i]
+next`
+const negRefs = findIncludeRefs(negForSrc)
+const negLoop = negRefs.find((r) => r.raw === 'host[i]')
+check(
+  'for i -1 1 expands values',
+  negLoop?.loopContext?.values.join(',') === '-1,0,1',
+  `got ${negLoop?.loopContext?.values.join(',')}`,
+)
+
+const negConstSrc = `n = -2
+for i n 0
+  include host[i]
+next`
+const negConstRefs = findIncludeRefs(negConstSrc)
+const negConstLoop = negConstRefs.find((r) => r.raw === 'host[i]')
+check(
+  'n=-2 feeds for start',
+  negConstLoop?.loopContext?.start === -2 &&
+    negConstLoop.loopContext.values.join(',') === '-2,-1,0',
+  `got start=${negConstLoop?.loopContext?.start} vals=${negConstLoop?.loopContext?.values.join(',')}`,
+)
+
 console.log(`\n=== INCLUDE REFS: ${passed} passed, ${failed} failed ===`)
 if (failed > 0) process.exit(1)
