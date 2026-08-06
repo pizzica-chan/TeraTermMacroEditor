@@ -47,7 +47,10 @@ export const RESULT_COMMAND_META: Readonly<Record<string, ResultCommandMeta>> = 
   waitrecv: { hint: '1=条件一致 / 0=タイムアウト / -1=長さ不足でタイムアウト' },
   waitevent: { hint: '発生したイベント識別子（timeout=1 / unlink=2 / disconnect=4 / connect=8）' },
   logopen: { hint: '0=オープン成功 / 1=失敗' },
-  loginfo: { hint: 'ログ中はフラグ状態 / -1=ログ未開始' },
+  loginfo: {
+    hint:
+      '-1=ログ未開始 / ≥0=ログ開始時フラグの合計（1=バイナリ 2=アペンド 4=プレインテキスト 8=タイムスタンプ 16=ダイアログ非表示）',
+  },
 
   // ── String ──
   strlen: { hint: '文字列のバイト長（UTF-8）' },

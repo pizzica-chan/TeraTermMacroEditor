@@ -156,6 +156,37 @@ endif
   'getver with version',
 )
 
+assertNoteContains(
+  `loginfo logfile
+if result = -1 then
+  sendln 'a'
+endif
+`,
+  2,
+  'loginfo —',
+  'loginfo',
+)
+assertNoteContains(
+  `loginfo logfile
+if result = -1 then
+  sendln 'a'
+endif
+`,
+  2,
+  '-1=ログ未開始',
+  'loginfo meaning: not logging',
+)
+assertNoteContains(
+  `loginfo logfile
+if result = -1 then
+  sendln 'a'
+endif
+`,
+  2,
+  '8=タイムスタンプ',
+  'loginfo meaning: flag bits',
+)
+
 // ── レジストリ健全性 ──
 const cmds = listResultSettingCommands()
 assert.ok(cmds.length >= 80, `expected 80+ result commands, got ${cmds.length}`)
