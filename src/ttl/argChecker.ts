@@ -9,10 +9,13 @@ export interface ArgDiagnostic {
   severity: 'error' | 'warning' | 'info'
 }
 
-const CONDITIONAL_CMDS = new Set(['if', 'elseif', 'while', 'until'])
+/** 条件式に = を含む制御コマンド（代入行ではない） */
+const CONDITIONAL_CMDS = new Set(['if', 'elseif', 'while', 'until', 'do', 'loop'])
 
 /**
- * 代入演算子の位置を返す。if/elseif/while/until の条件内の = は除外する。
+ * 代入演算子の位置を返す。
+ * if/elseif/while/until/do/loop の条件内の = は除外する。
+ * （例: `loop while loopflg=1` は代入ではない）
  */
 export function findAssignmentIndex(tokens: Token[], stmtOffset = 0): number {
   const cmd =
@@ -28,6 +31,8 @@ export function findAssignmentIndex(tokens: Token[], stmtOffset = 0): number {
         (t, i) => i > thenIdx && t.kind === 'operator' && (t.text === '=' || t.text === ':='),
       )
     }
+    // while / until / do / loop: 条件式中の = は比較（代入行にしない）
+    // do/loop 単体（条件なし）でも = は出ない想定
     return -1
   }
 
