@@ -542,6 +542,21 @@ function withElseBodyOpts(opts: EvalOptions, guaranteed = false): EvalOptions {
   }
 }
 
+/** 未確定 if then をホバー用にだけ走らせるときの完全隔離 opts */
+function withSpeculativeHoverOpts(opts: EvalOptions): EvalOptions {
+  return {
+    ...withIfBodyOpts(opts, false),
+    speculativeHover: true,
+    sendEntries: undefined,
+    callStack: [],
+    loopControl: { breakRequested: false, continueRequested: false },
+    // for 展開中でも各行の beforeLine を残せるよう loopFrame は外す
+    loopFrame: undefined,
+    includeStack: [...opts.includeStack],
+    includeTabStack: [...opts.includeTabStack],
+  }
+}
+
 function makeIntExprResolve(env: Env): TtlIntExprResolve {
   return {
     resolveInt(name) {
@@ -1052,6 +1067,31 @@ function findNextIfSiblingLine(lines: string[], fromLineIdx: number, endIdx: num
   return endIdx
 }
 
+/**
+ * 同一 if 鎖の後続 if/elseif が仮定・リテラルで True になり、選択経路になるか。
+ * その場合、先行の未確定分岐は実行されないためホバー投機も行わない。
+ */
+function laterIfSiblingWillExecute(
+  env: Env,
+  lines: string[],
+  fromSiblingIdx: number,
+  endIdx: number,
+  opts: EvalOptions,
+): boolean {
+  let cursor = fromSiblingIdx
+  while (cursor <= endIdx) {
+    const kw = lineKeyword(lines[cursor]!, cursor)
+    if (kw === 'endif' || kw === 'else') break
+    if (kw === 'if' || kw === 'elseif') {
+      if (resolveIfCondition(lines[cursor]!, cursor, env, kw, opts) === true) return true
+      cursor = findNextIfSiblingLine(lines, cursor, endIdx)
+      continue
+    }
+    cursor++
+  }
+  return false
+}
+
 function evalBoolExpr(tokens: Token[], env: Env): boolean | undefined {
   return evalBoolExprShared(tokens, env, evalConditionTokenValue, {
     resolveIntArray(name, index) {
@@ -1183,6 +1223,31 @@ function processIfChain(
         break
       }
 
+      // 条件未確定: 本体は親 env に影響させないが、ホバー用にクローン上で投機実行して
+      // then / elseif 本体の result 設定元（yesnobox 等）を beforeLine に残す。
+      // afterLine も投機側で埋まる。本評価で未訪問の行へホバーしたとき
+      // getEnvForLine が投機 afterLine にフォールバックするのは意図的（分岐内の
+      // result 由来表示を可能にする）。親 env・sendEntries には反映しない。
+      // 後続が仮定/リテラル True で選ばれるときは非選択経路なので投機しない
+      // （送信・ホバーを同じ経路に揃える）。else 本体は従来どおり !executed のとき
+      // 本評価で実行される（投機対象外）。
+      if (
+        condResult === undefined
+        && bodyStart <= bodyEnd
+        && beforeLine
+        && !laterIfSiblingWillExecute(env, lines, nextSibling, endIdx, opts)
+      ) {
+        processBlock(
+          cloneEnv(env),
+          lines,
+          bodyStart,
+          bodyEnd,
+          beforeLine,
+          afterLine,
+          withSpeculativeHoverOpts(opts),
+        )
+      }
+
       pathGuaranteed &&= conditionGuaranteed && condResult === false
       cursor = nextSibling
       continue
@@ -1215,6 +1280,11 @@ interface EvalOptions {
   /** 未確定 if/elseif 行番号（1-based）→ ユーザーが選んだ真偽 */
   branchAssumptions?: Map<number, boolean>
   knownLabels?: ReadonlySet<string>
+  /**
+   * ホバー用の投機実行。親の送信・ループ制御・ジャンプと隔離する。
+   * then/elseif 本体の jumpTo は追わない。未訪問行の afterLine フォールバックは意図的。
+   */
+  speculativeHover?: boolean
 }
 
 interface StmtResult {
@@ -1316,6 +1386,12 @@ function processBlock(
     if (result.stopInclude) return 'stopInclude'
     if (result.stopBlock) return 'stopBlock'
     if (result.jumpTo !== undefined) {
+      // ホバー投機: ジャンプは追わない（範囲外追従・後方 goto の無限ループを防ぐ）。
+      // then 内の前方 goto で飛ばされる result 更新も反映しない（レアケース）。
+      if (opts.speculativeHover) {
+        i = i + 1
+        continue
+      }
       i = result.jumpTo
     } else {
       i = result.nextIdx > i ? result.nextIdx + 1 : i + 1
