@@ -109,7 +109,7 @@ export const RESULT_COMMAND_META: Readonly<Record<string, ResultCommandMeta>> = 
   dirnamebox: { hint: '1=OK / 0=キャンセル' },
   yesnobox: { hint: '1=Yes / 0=No' },
   exec: { hint: 'wait=1: 終了コード（失敗 -1） / wait≠1: 0=起動成功 / -1=起動失敗' },
-  clipb2var: { hint: '0=失敗 / 1=成功 / 2=切り詰めあり' },
+  clipb2var: { hint: '0=失敗 / 1=成功 / 2=切り詰めあり / 3=メモリ確保失敗' },
   var2clipb: { hint: '0=失敗 / 1=成功' },
   checksum8file: { hint: 'ファイルを開けないとき -1' },
   checksum16file: { hint: 'ファイルを開けないとき -1' },

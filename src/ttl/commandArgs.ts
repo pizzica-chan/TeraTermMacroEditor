@@ -225,7 +225,7 @@ export const COMMAND_ARG_SPECS: Record<string, CommandArgSpec> = {
   rotateleft: { min: 3, max: 3 },
   rotateright: { min: 3, max: 3 },
   uptime: { min: 1, max: 1 },
-  clipb2var: { min: 1, max: 1 },
+  clipb2var: { min: 1, max: 2 }, // <strvar> [<offset>] — https://teratermproject.github.io/manual/5/en/macro/command/clipb2var.html
   var2clipb: { min: 1, max: 1 },
   checksum8: { min: 2, max: 2 },
   checksum8file: { min: 2, max: 2 },
