@@ -4,7 +4,7 @@ import { checkCommandArgs } from '../src/ttl/argChecker'
 import { evaluateTTL } from '../src/ttl/evaluator'
 import { formatSendPayloadForDisplay } from '../src/ttl/sendText'
 import { findIncludeRefs, computeLoopValues } from '../src/ttl/includeRefs'
-import { computeStrcopySubstring, computeStrcompare, computeStrlen, computeStrscan, computeStrsplit, computeStrjoin, computeChecksum16, computeChecksum32, computeCrc16, computeCrc32, parseStr2int } from '../src/ttl/staticCommandEval'
+import { computeStrcopySubstring, computeStrcompare, computeStrlen, computeStrscan, computeStrsplit, computeStrjoin, computeStrspecial, computeRotateLeft, computeRotateRight, computeChecksum16, computeChecksum32, computeCrc16, computeCrc32, parseStr2int } from '../src/ttl/staticCommandEval'
 import { tokenizeLine, stripComments } from '../src/ttl/tokenize'
 import { TTL_COMMANDS } from '../src/ttl/commands'
 import { COMMAND_ARG_SPECS } from '../src/ttl/commandArgs'
@@ -50,6 +50,25 @@ assert(computeChecksum16(cs) === 3673, 'checksum16')
 assert(computeChecksum32(cs) === 3673, 'checksum32')
 assert(computeCrc16(cs) === 55192, 'crc16')
 assert(computeCrc32(cs) === 3864722525, 'crc32')
+assert(computeStrspecial('AB\\tCD\\nEF\\nGH') === 'AB\tCD\nEF\nGH', 'strspecial escapes')
+assert(computeRotateLeft(0x80000000, 4) === 0x00000008, 'rotateleft official example')
+assert(computeRotateRight(0x00000008, 4) === 0x80000000, 'rotateright official example')
+
+const strspecialEval = evaluateTTL(`str = 'AB\\tCD\\nEF\\nGH'\nstrspecial str\nend`)
+const strVar = strspecialEval.afterLine.get(2)?.get('str')
+assert(
+  strVar?.kind === 'str' && strVar.value === 'AB\tCD\nEF\nGH',
+  'evaluator strspecial',
+  strVar,
+)
+
+const rotateEval = evaluateTTL(`rotateleft b $80000000 4\nend`)
+const bVar = rotateEval.afterLine.get(1)?.get('b')
+assert(bVar?.kind === 'int' && bVar.value === 8, 'evaluator rotateleft', bVar)
+
+const rotateAnalyzer = analyzeTTL(`rotateleft x $80000000 4`)
+const xVar = rotateAnalyzer.variables.find((v) => v.name === 'x')
+assert(xVar?.constantValue === 8, 'analyzer rotateleft', xVar?.constantValue)
 
 const sendVariants = evaluateTTL(
   `sendtext 'ABC'\nsendlnbroadcast 'x'\nsetmulticastname 'mc'\nsendmulticast mc 'p'`,

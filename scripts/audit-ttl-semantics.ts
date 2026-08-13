@@ -25,9 +25,10 @@ type Official = { cmd: string; page: string; category: string }
 /** 静的に実値計算できるコマンド（staticCommandEval） */
 const STATIC_STRING = new Set([
   'int2str', 'code2str', 'tolower', 'toupper', 'strconcat', 'makepath', 'basename', 'dirname',
-  'strcopy', 'strinsert', 'strremove', 'strtrim', 'strreplace', 'str2int', 'str2code', 'checksum8',
-  'checksum16', 'checksum32', 'crc16', 'crc32',
+  'strcopy', 'strinsert', 'strremove', 'strtrim', 'strreplace', 'strspecial', 'str2int', 'str2code',
+  'checksum8', 'checksum16', 'checksum32', 'crc16', 'crc32',
   'sprintf', 'sprintf2', 'strjoin',
+  'rotateleft', 'rotateright',
 ])
 const STATIC_RESULT = new Set(['strcompare', 'strlen', 'strlength', 'strscan', 'ifdefined', 'strsplit'])
 
@@ -73,8 +74,7 @@ const DRYRUN_RECV_SPECIAL = new Set(['recvln', 'waitrecv'])
 const PURE_STATIC_CANDIDATES = new Set([
   ...STATIC_STRING,
   ...STATIC_RESULT,
-  'strspecial', 'strmatch',
-  'rotateleft', 'rotateright',
+  'strmatch',
 ])
 
 /** 意図的差分（公式と異なるがエディタ方針） */

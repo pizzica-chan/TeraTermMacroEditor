@@ -61,6 +61,57 @@ function isOpenableFile(file: File): boolean {
   return /\.(ttl|txt)$/i.test(file.name)
 }
 
+function dropFileDedupeKey(file: File): string {
+  return `${file.name}\0${file.size}\0${file.lastModified}`
+}
+
+function hasFileDataTransfer(dt: DataTransfer | null): boolean {
+  if (!dt) return false
+  if ((dt.files?.length ?? 0) > 0) return true
+  return Array.from(dt.items).some((item) => item.kind === 'file')
+}
+
+/** drop イベント中に同期的に File を集める（await 後の getAsFile() は null になり得る） */
+export function collectDropFileEntries(
+  de: DragEvent,
+): Array<{ file: File; item: DataTransferItem | null }> {
+  const dt = de.dataTransfer
+  if (!dt) return []
+
+  const entries: Array<{ file: File; item: DataTransferItem | null }> = []
+  const claimed = new Set<string>()
+
+  const tryAdd = (file: File, item: DataTransferItem | null) => {
+    if (!isOpenableFile(file)) return
+    const key = dropFileDedupeKey(file)
+    if (claimed.has(key)) return
+    claimed.add(key)
+    entries.push({ file, item })
+  }
+
+  for (const item of Array.from(dt.items)) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    if (file) tryAdd(file, item)
+  }
+
+  for (const file of Array.from(dt.files)) {
+    tryAdd(file, null)
+  }
+
+  return entries
+}
+
+async function resolveDropFileHandle(item: DataTransferItem | null): Promise<FileSystemFileHandle | null> {
+  if (!item || typeof item.getAsFileSystemHandle !== 'function') return null
+  try {
+    const handle = await item.getAsFileSystemHandle()
+    return handle.kind === 'file' ? (handle as FileSystemFileHandle) : null
+  } catch {
+    return null
+  }
+}
+
 export function createWorkspaceFileService(host: WorkspaceFileServiceHost) {
   async function openFile(
     bytes: Uint8Array,
@@ -248,25 +299,6 @@ export function createWorkspaceFileService(host: WorkspaceFileServiceHost) {
     saveAppSettings({ defaultNewline: newline })
   }
 
-  async function resolveDropFileEntry(
-    item: DataTransferItem,
-  ): Promise<{ file: File; fileHandle: FileSystemFileHandle | null } | null> {
-    if (item.kind !== 'file') return null
-    const file = item.getAsFile()
-    if (!file || !isOpenableFile(file)) return null
-
-    let fileHandle: FileSystemFileHandle | null = null
-    if (typeof item.getAsFileSystemHandle === 'function') {
-      try {
-        const handle = await item.getAsFileSystemHandle()
-        if (handle.kind === 'file') fileHandle = handle as FileSystemFileHandle
-      } catch {
-        // ハンドル取得不可時は内容のみ読み込む
-      }
-    }
-    return { file, fileHandle }
-  }
-
   function setupFileDrop(dropTarget: Element) {
     const showDrag = (on: boolean) => {
       dropTarget.classList.toggle('file-drop-active', on)
@@ -293,22 +325,21 @@ export function createWorkspaceFileService(host: WorkspaceFileServiceHost) {
       'drop',
       async (e) => {
         const de = e as DragEvent
-        const items = Array.from(de.dataTransfer?.items ?? [])
-        if (items.every((item) => item.kind !== 'file')) return
+        if (!hasFileDataTransfer(de.dataTransfer)) return
 
         e.preventDefault()
         e.stopPropagation()
         showDrag(false)
 
-        for (const item of items) {
-          const entry = await resolveDropFileEntry(item)
-          if (!entry) continue
+        const entries = collectDropFileEntries(de)
+        for (const { file, item } of entries) {
           if (!host.canAddTab()) {
             alert(`タブは最大 ${MAX_TABS} 個まで開けます。`)
             break
           }
-          const bytes = await readFileAsBytes(entry.file)
-          await openFile(bytes, entry.file.name, entry.fileHandle, { sourceFile: entry.file })
+          const fileHandle = await resolveDropFileHandle(item)
+          const bytes = await readFileAsBytes(file)
+          await openFile(bytes, file.name, fileHandle, { sourceFile: file })
         }
       },
       true,

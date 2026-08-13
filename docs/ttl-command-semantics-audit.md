@@ -24,17 +24,17 @@
 
 | 判定 | 件数 |
 |------|------|
-| 仕様相当（実装） | 76 |
+| 仕様相当（実装） | 79 |
 | 仕様相当（プレースホルダ） | 120 |
 | 意図的差分 | 2 |
-| 不足 | 10 |
+| 不足 | 7 |
 | 構文要素 | 1 |
 | 合計行 | 209 |
 | EXTRA (`strlength`) | 1 |
 
 ### 結論（厳密読み）
 
-**全コマンドが仕様どおり取り込まれているとは言えない。** 不足 10 件（主に送信系のパネル未連携・決定的コマンドの静的評価欠落・一部待機/ダイアログのDR専用漏れ）。レジストリ上の登録漏れはなし。
+**全コマンドが仕様どおり取り込まれているとは言えない。** 不足 7 件（主に送信系のパネル未連携・決定的コマンドの静的評価欠落・一部待機/ダイアログのDR専用漏れ）。レジストリ上の登録漏れはなし。
 
 ## 3. 不足一覧（要対応候補）
 
@@ -46,9 +46,6 @@
 | [`waitevent`](https://teratermproject.github.io/manual/5/en/macro/command/waitevent.html) | Communication | 待機系だが WAIT_COMMANDS 専用シミュ外（汎用 effect / flow のみ） |
 | [`waitn`](https://teratermproject.github.io/manual/5/en/macro/command/waitn.html) | Communication | 待機系だが WAIT_COMMANDS 専用シミュ外（汎用 effect / flow のみ） |
 | [`strmatch`](https://teratermproject.github.io/manual/5/en/macro/command/strmatch.html) | String | 決定的計算が可能だが staticCommandEval 未実装（引数既知でもプレースホルダ） |
-| [`strspecial`](https://teratermproject.github.io/manual/5/en/macro/command/strspecial.html) | String | 決定的計算が可能だが staticCommandEval 未実装（引数既知でもプレースホルダ） |
-| [`rotateleft`](https://teratermproject.github.io/manual/5/en/macro/command/rotateleft.html) | Miscellaneous | 決定的計算が可能だが staticCommandEval 未実装（引数既知でもプレースホルダ） |
-| [`rotateright`](https://teratermproject.github.io/manual/5/en/macro/command/rotateright.html) | Miscellaneous | 決定的計算が可能だが staticCommandEval 未実装（引数既知でもプレースホルダ） |
 | [`statusbox`](https://teratermproject.github.io/manual/5/en/macro/command/statusbox.html) | Miscellaneous | ダイアログ表示系だが dryRun の DIALOG_COMMANDS 外（専用UIなし） |
 
 ### 不足の分類
@@ -88,14 +85,14 @@
 | レイヤ | 件数 | 内容 |
 |--------|------|------|
 | control | 23 | if/for/while/goto/call/include 等 |
-| static-eval | 28 | 引数既知で実値計算 |
+| static-eval | 31 | 引数既知で実値計算 |
 | send-recorded | 8 | 送信データパネル |
 | dryrun-wait | 4 | wait 系シミュレーション |
 | dryrun-dialog | 7 | ダイアログ UI |
 | dryrun-datetime | 2 | gettime/getdate 実時刻 |
 | dryrun-recv | 2 | recvln/waitrecv |
 | dryrun-flow | 6 | connect 等のフローログ |
-| registry-placeholder | 130 | 登録＋プレースホルダのみ |
+| registry-placeholder | 127 | 登録＋プレースホルダのみ |
 
 ## 6. コマンド別詳細（全件）
 
@@ -230,7 +227,7 @@
 | [`strremove`](https://teratermproject.github.io/manual/5/en/macro/command/strremove.html) | 仕様相当（実装） | 3..3 | N | static-eval | — |
 | [`strreplace`](https://teratermproject.github.io/manual/5/en/macro/command/strreplace.html) | 仕様相当（実装） | 4..4 | Y | static-eval | — |
 | [`strscan`](https://teratermproject.github.io/manual/5/en/macro/command/strscan.html) | 仕様相当（実装） | 2..2 | Y | static-eval | — |
-| [`strspecial`](https://teratermproject.github.io/manual/5/en/macro/command/strspecial.html) | 不足 | 1..2 | N | registry-placeholder | 決定的計算が可能だが staticCommandEval 未実装（引数既知でもプレースホルダ） |
+| [`strspecial`](https://teratermproject.github.io/manual/5/en/macro/command/strspecial.html) | 仕様相当（実装） | 1..2 | N | static-eval | — |
 | [`strsplit`](https://teratermproject.github.io/manual/5/en/macro/command/strsplit.html) | 仕様相当（実装） | 2..3 | Y | static-eval | — |
 | [`strtrim`](https://teratermproject.github.io/manual/5/en/macro/command/strtrim.html) | 仕様相当（実装） | 2..2 | N | static-eval | — |
 | [`tolower`](https://teratermproject.github.io/manual/5/en/macro/command/tolower.html) | 仕様相当（実装） | 2..2 | N | static-eval | — |
@@ -314,8 +311,8 @@
 | [`listbox`](https://teratermproject.github.io/manual/5/en/macro/command/listbox.html) | 仕様相当（実装） | 3..∞ | Y | dryrun-dialog | — |
 | [`messagebox`](https://teratermproject.github.io/manual/5/en/macro/command/messagebox.html) | 仕様相当（実装） | 2..3 | N | dryrun-dialog | 公式は result 非設定。ドライランのみ UI 応答で result を更新し得る |
 | [`random`](https://teratermproject.github.io/manual/5/en/macro/command/random.html) | 仕様相当（プレースホルダ） | 2..2 | N | registry-placeholder | — |
-| [`rotateleft`](https://teratermproject.github.io/manual/5/en/macro/command/rotateleft.html) | 不足 | 3..3 | N | registry-placeholder | 決定的計算が可能だが staticCommandEval 未実装（引数既知でもプレースホルダ） |
-| [`rotateright`](https://teratermproject.github.io/manual/5/en/macro/command/rotateright.html) | 不足 | 3..3 | N | registry-placeholder | 決定的計算が可能だが staticCommandEval 未実装（引数既知でもプレースホルダ） |
+| [`rotateleft`](https://teratermproject.github.io/manual/5/en/macro/command/rotateleft.html) | 仕様相当（実装） | 3..3 | N | static-eval | — |
+| [`rotateright`](https://teratermproject.github.io/manual/5/en/macro/command/rotateright.html) | 仕様相当（実装） | 3..3 | N | static-eval | — |
 | [`setdate`](https://teratermproject.github.io/manual/5/en/macro/command/setdate.html) | 仕様相当（プレースホルダ） | 1..1 | N | registry-placeholder | — |
 | [`setdlgpos`](https://teratermproject.github.io/manual/5/en/macro/command/setdlgpos.html) | 仕様相当（プレースホルダ） | 0..5 | N | registry-placeholder | — |
 | [`setenv`](https://teratermproject.github.io/manual/5/en/macro/command/setenv.html) | 仕様相当（プレースホルダ） | 2..2 | N | registry-placeholder | — |

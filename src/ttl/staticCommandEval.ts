@@ -99,6 +99,50 @@ export function computeStrtrim(base: string, trimChars: string): string {
   return base.slice(start, end)
 }
 
+/** strspecial: `\` `\n` `\t` を展開 */
+export function computeStrspecial(source: string): string {
+  let result = ''
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]!
+    if (c === '\\' && i + 1 < source.length) {
+      const next = source[i + 1]!
+      if (next === 'n') {
+        result += '\n'
+        i++
+      } else if (next === 't') {
+        result += '\t'
+        i++
+      } else if (next === '\\') {
+        result += '\\'
+        i++
+      } else {
+        result += c
+      }
+    } else {
+      result += c
+    }
+  }
+  return result
+}
+
+function toUint32(value: number): number {
+  return value >>> 0
+}
+
+/** rotateleft: 32bit 循環左シフト */
+export function computeRotateLeft(value: number, count: number): number {
+  const n = count & 31
+  const v = toUint32(value)
+  return ((v << n) | (v >>> (32 - n))) >>> 0
+}
+
+/** rotateright: 32bit 循環右シフト */
+export function computeRotateRight(value: number, count: number): number {
+  const n = count & 31
+  const v = toUint32(value)
+  return ((v >>> n) | (v << (32 - n))) >>> 0
+}
+
 export function computeMakepath(dir: string, name: string): string {
   if (dir.length === 0) return name
   const last = dir[dir.length - 1]
@@ -446,6 +490,16 @@ export function tryStaticStringCommand(
       if (base === undefined || trimChars === undefined || dest === undefined) return undefined
       return { destIndex: dest, value: computeStrtrim(base, trimChars) }
     }
+    case 'strspecial': {
+      const dest = destIdentifier(ctx, offset, 1)
+      if (dest === undefined) return undefined
+      const source =
+        ctx.tokenAt(2) !== undefined
+          ? (ctx.resolveGroupedString(2) ?? ctx.resolveString(2))
+          : ctx.resolveInPlaceVar(1)
+      if (source === undefined) return undefined
+      return { destIndex: dest, value: computeStrspecial(source) }
+    }
     case 'strreplace': {
       const base = ctx.resolveInPlaceVar(1)
       const index = ctx.resolveInt(2)
@@ -531,6 +585,20 @@ export function tryStaticIntegerCommand(
       const dest = destIdentifier(ctx, offset, 1)
       if (src === undefined || dest === undefined) return undefined
       return { destIndex: dest, value: computeCrc32(src) }
+    }
+    case 'rotateleft': {
+      const value = ctx.resolveInt(2)
+      const count = ctx.resolveInt(3)
+      const dest = destIdentifier(ctx, offset, 1)
+      if (value === undefined || count === undefined || dest === undefined) return undefined
+      return { destIndex: dest, value: computeRotateLeft(value, count) }
+    }
+    case 'rotateright': {
+      const value = ctx.resolveInt(2)
+      const count = ctx.resolveInt(3)
+      const dest = destIdentifier(ctx, offset, 1)
+      if (value === undefined || count === undefined || dest === undefined) return undefined
+      return { destIndex: dest, value: computeRotateRight(value, count) }
     }
     default:
       return undefined
