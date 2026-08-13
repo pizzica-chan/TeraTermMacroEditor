@@ -1,6 +1,7 @@
 import { findAssignmentIndex } from './argChecker'
 import { findBlockEnd } from './controlFlow'
 import { stripComments, tokenizeLine, unquoteString, parseTtlIntegerLiteral, parseTtlSignedIntAt, type Token } from './tokenize'
+import { parseForLoopRangeExprs } from './ttlExpression'
 
 export const MAX_INCLUDE_LOOP_ITERATIONS = 256
 
@@ -366,18 +367,6 @@ function buildLoopEffectiveRaws(
   return Object.keys(effectiveRawsByValue).length > 0 ? effectiveRawsByValue : undefined
 }
 
-function resolveStaticIntTokenAt(
-  tokens: Token[],
-  start: number,
-  constants: Map<string, number>,
-): number | undefined {
-  const lit = parseTtlSignedIntAt(tokens, start)
-  if (lit) return lit.value
-  const token = tokens[start]
-  if (token?.kind === 'identifier') return constants.get(token.text.toLowerCase())
-  return undefined
-}
-
 function findForLoopBlocks(lines: string[]): ForLoopBlock[] {
   const blocks: ForLoopBlock[] = []
 
@@ -390,12 +379,14 @@ function findForLoopBlocks(lines: string[]): ForLoopBlock[] {
 
     const variable = tokens[start + 1]!.text
     const constants = collectStaticIntConstants(lines, lineIdx)
-    const startLit = parseTtlSignedIntAt(tokens, start + 2)
-    const loopStart = resolveStaticIntTokenAt(tokens, start + 2, constants)
-    // 終端は start が符号付きなら 2 トークン消費後から
-    const endAt = startLit?.next ?? start + 3
-    const loopEnd = resolveStaticIntTokenAt(tokens, endAt, constants)
-    if (loopStart === undefined || loopEnd === undefined) continue
+    const range = parseForLoopRangeExprs(tokens, start + 2, {
+      resolveInt(name) {
+        return constants.get(name.toLowerCase())
+      },
+    })
+    if (range.missingEnd || range.start === undefined || range.end === undefined) continue
+    const loopStart = range.start
+    const loopEnd = range.end
 
     const values = computeLoopValues(loopStart, loopEnd)
     if (values.length === 0) continue

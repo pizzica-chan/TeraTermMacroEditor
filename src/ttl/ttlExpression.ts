@@ -144,6 +144,76 @@ export function evalTtlIntExpr(
   return got.value
 }
 
+/**
+ * 識別子を 0 扱いして式のトークン範囲だけ進める（引数個数・区切り判定用）。
+ * 未解決変数でも next を進められる。
+ */
+export function structuralIntResolve(inner?: TtlIntExprResolve): TtlIntExprResolve {
+  return {
+    resolveInt(name) {
+      return inner?.resolveInt(name) ?? 0
+    },
+    resolveIntArray(name, index) {
+      return inner?.resolveIntArray?.(name, index) ?? 0
+    },
+  }
+}
+
+export interface ForLoopRangeParse {
+  /** 終了式の開始位置（開始式の next） */
+  endAt: number
+  /** 終了式の next（成功時） */
+  afterEnd?: number
+  start?: number
+  end?: number
+  /** 開始式のあとに終了式が無い（例: `for i 5 -1` → 開始が 5-1 で消費） */
+  missingEnd: boolean
+  /** 終了式のあとに余分なトークンがある */
+  trailing: boolean
+}
+
+/**
+ * for の開始値・終了値を式単位で順に読む。
+ * 公式どおり各引数は式なので `for i 5 -1` は第2引数が `5-1` になり第3が欠ける。
+ * @see https://teratermproject.github.io/manual/5/en/macro/appendixes/negative.html
+ */
+export function parseForLoopRangeExprs(
+  tokens: Token[],
+  startAt: number,
+  resolve: TtlIntExprResolve,
+): ForLoopRangeParse {
+  const structural = structuralIntResolve(resolve)
+  const startSpan = evalTtlIntExprAt(tokens, startAt, structural)
+  if (!startSpan || startSpan.error === 'syntax' || startSpan.error === 'type') {
+    return { endAt: startAt, missingEnd: true, trailing: false }
+  }
+
+  const endAt = startSpan.next
+  const startGot = evalTtlIntExprAt(tokens, startAt, resolve)
+  const start =
+    startGot && !startGot.error ? startGot.value : undefined
+
+  if (endAt >= tokens.length) {
+    return { endAt, start, missingEnd: true, trailing: false }
+  }
+
+  const endSpan = evalTtlIntExprAt(tokens, endAt, structural)
+  if (!endSpan || endSpan.error === 'syntax' || endSpan.error === 'type') {
+    return { endAt, start, missingEnd: true, trailing: false }
+  }
+
+  const endGot = evalTtlIntExprAt(tokens, endAt, resolve)
+  const end = endGot && !endGot.error ? endGot.value : undefined
+  return {
+    endAt,
+    afterEnd: endSpan.next,
+    start,
+    end,
+    missingEnd: false,
+    trailing: endSpan.next < tokens.length,
+  }
+}
+
 /** リテラルと演算子だけで真偽が断定できるか（到達不能解析用） */
 export function evalTtlLiteralIntCondition(tokens: Token[]): boolean | undefined {
   if (tokens.length === 0) return undefined

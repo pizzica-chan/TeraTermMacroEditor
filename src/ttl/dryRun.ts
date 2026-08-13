@@ -38,7 +38,7 @@ import {
   lineKeyword,
   type BoolExprScalar,
 } from './controlFlow'
-import { evalTtlIntExprAt, type TtlIntExprResolve } from './ttlExpression'
+import { evalTtlIntExprAt, parseForLoopRangeExprs, type TtlIntExprResolve } from './ttlExpression'
 import { formatGetdate, formatGettime } from './ttlDateTime'
 import {
   buildStringFromOperands,
@@ -2002,8 +2002,10 @@ export class DryRunSession {
 
     if (cmd === 'for' && tokens[offset + 1]?.kind === 'identifier') {
       const loopVar = tokens[offset + 1].text
-      const start = evalIntExpr(tokens, offset + 2, env)
-      const end = evalIntExpr(tokens, offset + 3, env)
+      // 開始・終了は式単位で順に消費（`for i 5 -1` は第2が 5-1 になり第3欠落）
+      const range = parseForLoopRangeExprs(tokens, offset + 2, makeIntExprResolve(env))
+      const start = range.missingEnd ? undefined : range.start
+      const end = range.missingEnd ? undefined : range.end
       const bodyEnd = findBlockEnd(lines, lineIdx, 'for', 'next')
       if (start !== undefined && end !== undefined && canUnrollForLoop(start, end)) {
         const total = forLoopIterationCount(start, end)

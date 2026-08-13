@@ -1,6 +1,7 @@
 import { countGroupedArgs } from './argOperands'
 import type { Token } from './tokenize'
 import { getCommandArgSpec } from './commandArgs'
+import { parseForLoopRangeExprs, structuralIntResolve } from './ttlExpression'
 
 export interface ArgDiagnostic {
   line: number
@@ -73,7 +74,16 @@ export function countCommandArgs(cmd: string, tokens: Token[]): number {
   }
 
   if (lower === 'for') {
-    if (rest.length < 3) return rest.length
+    // ラベル行対応: tokens は [label?, for, var, startExpr..., endExpr...]
+    const forIdx = tokens[0]?.kind === 'label' ? 1 : 0
+    if (tokens[forIdx]?.kind !== 'identifier' || tokens[forIdx]!.text.toLowerCase() !== 'for') {
+      return rest.length < 3 ? rest.length : 3
+    }
+    if (tokens[forIdx + 1]?.kind !== 'identifier') return 1
+    if (forIdx + 2 >= tokens.length) return 1
+    const range = parseForLoopRangeExprs(tokens, forIdx + 2, structuralIntResolve())
+    if (range.missingEnd) return 2
+    if (range.trailing) return 4
     return 3
   }
 
@@ -97,10 +107,14 @@ export function checkCommandArgs(cmd: string, tokens: Token[], lineNum: number, 
   const range = formatArgRange(spec)
 
   if (count < spec.min) {
+    const isForMissingEnd = cmd.toLowerCase() === 'for' && count === 2
+    const negHint = isForMissingEnd
+      ? '。負の整数定数は 0-1 / (-1) / 変数経由を使ってください（公式: 負の整数定数についての注意）'
+      : ''
     diagnostics.push({
       line: lineNum,
       column,
-      message: `'${cmd}' の引数が不足しています（${count}個 / 必要: ${range}）`,
+      message: `'${cmd}' の引数が不足しています（${count}個 / 必要: ${range}）${negHint}`,
       severity: 'error',
     })
   } else if (spec.max !== null && count > spec.max) {
