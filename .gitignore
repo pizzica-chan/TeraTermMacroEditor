@@ -28,3 +28,7 @@ dist-ssr
 !.dev.vars.example
 .env*
 !.env.example
+
+# TTL command audit caches (regenerate via scripts/audit-ttl-commands*.ts)
+docs/_audit-cache.json
+docs/_official-commands.json

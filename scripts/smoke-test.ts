@@ -4,7 +4,7 @@ import { checkCommandArgs } from '../src/ttl/argChecker'
 import { evaluateTTL } from '../src/ttl/evaluator'
 import { formatSendPayloadForDisplay } from '../src/ttl/sendText'
 import { findIncludeRefs, computeLoopValues } from '../src/ttl/includeRefs'
-import { computeStrcopySubstring, computeStrcompare, computeStrlen, computeStrscan, parseStr2int } from '../src/ttl/staticCommandEval'
+import { computeStrcopySubstring, computeStrcompare, computeStrlen, computeStrscan, computeStrsplit, computeStrjoin, computeChecksum16, computeChecksum32, computeCrc16, computeCrc32, parseStr2int } from '../src/ttl/staticCommandEval'
 import { tokenizeLine, stripComments } from '../src/ttl/tokenize'
 import { TTL_COMMANDS } from '../src/ttl/commands'
 import { COMMAND_ARG_SPECS } from '../src/ttl/commandArgs'
@@ -39,6 +39,34 @@ assert(computeStrlen('abc') === 3, 'strlen ascii bytes')
 assert(computeStrlen('マクロ') === 9, 'strlen utf8 multibyte')
 assert(computeStrscan('tera term', 'term') === 6, 'strscan position')
 assert(computeStrscan('tera term', 'xyz') === 0, 'strscan not found')
+
+const split1 = computeStrsplit(',,Sun,Mon,Tue,,Thu,Fri,Sat', ',', 7)
+assert(split1.groups[6] === 'Thu,Fri,Sat' && split1.result === 7, 'strsplit overflow merge')
+const split2 = computeStrsplit('1,2,3,4,5,6,7,8,9,0', ',')
+assert(split2.groups[8] === '9' && split2.result === 10, 'strsplit default cap')
+assert(computeStrjoin(['Jan', 'Feb', 'Mar'], ',') === 'Jan,Feb,Mar', 'strjoin')
+const cs = 'this is a test string to be checksum16ed'
+assert(computeChecksum16(cs) === 3673, 'checksum16')
+assert(computeChecksum32(cs) === 3673, 'checksum32')
+assert(computeCrc16(cs) === 55192, 'crc16')
+assert(computeCrc32(cs) === 3864722525, 'crc32')
+
+const sendVariants = evaluateTTL(
+  `sendtext 'ABC'\nsendlnbroadcast 'x'\nsetmulticastname 'mc'\nsendmulticast mc 'p'`,
+)
+assert(
+  sendVariants.sendEntries.map((e) => `${e.command}:${e.payload}`).join('|') ===
+    'sendtext:ABC|sendlnbroadcast:x|sendmulticast:p',
+  'send variant recording',
+  sendVariants.sendEntries,
+)
+assert(sendVariants.sendEntries[1]?.addsNewline === true, 'sendlnbroadcast adds newline')
+
+const splitJoinAnalyzer = analyzeTTL(`strsplit 'a,b,c' ',' 3\nstrjoin out ',' 3`)
+const outVar = splitJoinAnalyzer.variables.find((v) => v.name === 'out')
+assert(outVar?.constantString === 'a,b,c', 'analyzer strsplit feeds strjoin', outVar?.constantString)
+const gms1 = splitJoinAnalyzer.variables.find((v) => v.name === 'groupmatchstr1')
+assert(gms1?.constantString === 'a', 'analyzer strsplit sets groupmatchstr1', gms1?.constantString)
 
 console.log('\n=== 3. includeRefs ===')
 const includeSrc = `bbb = ''

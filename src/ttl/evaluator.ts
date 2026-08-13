@@ -30,11 +30,18 @@ import {
   tryStaticResultCommand,
   tryStaticSprintfCommand,
   tryStaticStr2intCommand,
+  tryStaticStrsplitCommand,
   tryStaticStringCommand,
   type IfdefinedLookup,
   type IfdefinedTypeCode,
   type StaticValueContext,
 } from './staticCommandEval'
+import {
+  isSendRecordCommand,
+  sendAddsNewline,
+  sendDataTokenStart,
+  type SendRecordCommand,
+} from './sendCommands'
 import { RESERVED, tokenizeLine, stripComments, unquoteString, parseTtlIntegerLiteral, parseTtlCharCodeLiteral, type Token } from './tokenize'
 import {
   BLOCK_PAIRS,
@@ -100,7 +107,7 @@ export interface HoverAtResult {
 export interface SendEntry {
   line: number
   location: string
-  command: 'send' | 'sendln'
+  command: SendRecordCommand
   rawArgs: string
   payload: string
   unresolved: boolean
@@ -620,6 +627,15 @@ function resolveKnownString(token: Token | undefined, env: Env): string | undefi
   return undefined
 }
 
+function resolveKnownSystemString(name: string, env: Env): string | undefined {
+  const v = env.get(name.toLowerCase())
+  if (!v) return ''
+  if (v.kind !== 'str') return undefined
+  if (v.hasUnresolvedParts) return undefined
+  if (isRuntimeOrigin(v.origin)) return undefined
+  return v.value
+}
+
 function createEvaluatorStaticCtx(tokens: Token[], offset: number, env: Env): StaticValueContext {
   return {
     tokenAt(rel) {
@@ -650,6 +666,9 @@ function createEvaluatorStaticCtx(tokens: Token[], offset: number, env: Env): St
         }
         return undefined
       })
+    },
+    resolveSystemString(name) {
+      return resolveKnownSystemString(name, env)
     },
   }
 }
@@ -732,9 +751,22 @@ function applyStaticCommandEffects(
   if (intResult) {
     const destTok = tokens[intResult.destIndex]
     if (destTok?.kind === 'identifier') {
-      setScalar(env, destTok.text, { kind: 'int', value: intResult.value })
+      setScalar(env, destTok.text, { kind: 'int', value: intResult.value, origin: 'literal' })
       return true
     }
+  }
+
+  const splitResult = tryStaticStrsplitCommand(cmd, staticCtx)
+  if (splitResult) {
+    for (let i = 0; i < 9; i++) {
+      setScalar(env, `groupmatchstr${i + 1}`, {
+        kind: 'str',
+        value: splitResult.groups[i]!,
+        origin: 'literal',
+      })
+    }
+    setResult(env, cmd, splitResult.result, 'literal')
+    return true
   }
 
   const ifdefinedLookup = knownLabels ? createIfdefinedLookup(env, knownLabels) : undefined
@@ -1036,12 +1068,13 @@ export function collectSendPayload(
 function recordSend(
   opts: EvalOptions,
   lineNum: number,
-  command: 'send' | 'sendln',
+  command: SendRecordCommand,
   tokens: Token[],
-  argStart: number,
+  commandTokenOffset: number,
   env: Env,
 ): void {
   if (!opts.sendEntries) return
+  const argStart = sendDataTokenStart(command, commandTokenOffset)
   const { payload, rawArgs, unresolved } = collectSendPayload(tokens, argStart, env)
   const lf = opts.loopFrame
   opts.sendEntries.push({
@@ -1051,7 +1084,7 @@ function recordSend(
     rawArgs,
     payload,
     unresolved,
-    addsNewline: command === 'sendln',
+    addsNewline: sendAddsNewline(command),
     loopInfo: lf
       ? { variable: lf.variable, value: lf.value, index: lf.index, total: lf.total }
       : undefined,
@@ -1422,8 +1455,8 @@ function processSingleLineIfTail(
   if (applyWaitReceiveEffects(env, tokens, tailStart, tailCmd)) {
     return { nextIdx: lineIdx }
   }
-  if (tailCmd === 'send' || tailCmd === 'sendln') {
-    recordSend(opts, lineNum, tailCmd, tokens, tailStart + 1, env)
+  if (isSendRecordCommand(tailCmd)) {
+    recordSend(opts, lineNum, tailCmd, tokens, tailStart, env)
     return { nextIdx: lineIdx }
   }
   if (tailCmd === 'end') {
@@ -1559,8 +1592,8 @@ function processStatement(
     return { nextIdx: lineIdx, stopAll: true }
   }
 
-  if (cmd === 'send' || cmd === 'sendln') {
-    recordSend(opts, lineNum, cmd, tokens, offset + 1, env)
+  if (isSendRecordCommand(cmd)) {
+    recordSend(opts, lineNum, cmd, tokens, offset, env)
     return { nextIdx: lineIdx }
   }
 

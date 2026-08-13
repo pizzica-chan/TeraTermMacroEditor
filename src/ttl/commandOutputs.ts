@@ -232,6 +232,9 @@ export const COMMAND_OUTPUT_EFFECTS: Record<string, CommandOutputEffect> = {
   strmatch: {
     systemVariables: [{ name: 'matchstr', type: 'string' }, ...GROUPMATCH_SYSTEM_VARS],
   },
+  strsplit: {
+    systemVariables: GROUPMATCH_SYSTEM_VARS,
+  },
 }
 
 export function getCommandOutputEffect(cmd: string): CommandOutputEffect | undefined {

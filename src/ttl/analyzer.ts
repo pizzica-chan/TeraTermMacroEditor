@@ -26,6 +26,7 @@ import {
 import {
   tryStaticIntegerCommand,
   tryStaticSprintfCommand,
+  tryStaticStrsplitCommand,
   tryStaticStringCommand,
   type StaticValueContext,
 } from './staticCommandEval'
@@ -558,6 +559,13 @@ function createAnalyzerStaticCtx(
         resolveStaticOperandPart(tokens, i, varMap),
       )
     },
+    resolveSystemString(name) {
+      const key = name.toLowerCase()
+      if (/^groupmatchstr\d+$/.test(key)) {
+        return varMap.get(key)?.constantString ?? ''
+      }
+      return varMap.get(key)?.constantString
+    },
   }
 }
 
@@ -605,14 +613,30 @@ function applyStaticCommandConstants(
   }
 
   const intResult = tryStaticIntegerCommand(cmd, offset, staticCtx)
-  if (!intResult) return
-  const destTok = tokens[intResult.destIndex]
-  if (destTok?.kind !== 'identifier') return
-  const varKey = destTok.text.toLowerCase()
-  const existing = ctx.varMap.get(varKey)
-  if (existing) {
-    existing.constantValue = intResult.value
-    if (existing.type === 'unknown') existing.type = 'integer'
+  if (intResult) {
+    const destTok = tokens[intResult.destIndex]
+    if (destTok?.kind === 'identifier') {
+      const varKey = destTok.text.toLowerCase()
+      const existing = ctx.varMap.get(varKey)
+      if (existing) {
+        existing.constantValue = intResult.value
+        if (existing.type === 'unknown') existing.type = 'integer'
+      }
+    }
+    return
+  }
+
+  const splitResult = tryStaticStrsplitCommand(cmd, staticCtx)
+  if (splitResult) {
+    for (let i = 0; i < 9; i++) {
+      const key = `groupmatchstr${i + 1}`
+      const existing = ctx.varMap.get(key)
+      if (existing) {
+        existing.constantString = splitResult.groups[i]
+        if (existing.type === 'unknown') existing.type = 'string'
+      }
+    }
+    return
   }
 }
 
@@ -772,15 +796,10 @@ function registerCommandOutputVariables(
   lineNum: number,
 ): void {
   const effect = getCommandOutputEffect(cmd)
-  if (!effect?.variables) return
+  if (!effect) return
 
-  for (const slot of effect.variables) {
-    const tok = tokens[slot.index]
-    if (tok?.kind !== 'identifier') continue
-
-    const varName = tok.text
+  const registerSlot = (varName: string, outputType: VarType, isSystem: boolean) => {
     const varKey = varName.toLowerCase()
-    const outputType: VarType = slot.type === 'integer' ? 'integer' : 'string'
     const existing = ctx.varMap.get(varKey)
 
     if (!existing) {
@@ -789,7 +808,7 @@ function registerCommandOutputVariables(
         type: outputType,
         declaredAt: lineNum,
         usedAt: [],
-        isSystem: isSystemVariable(varName),
+        isSystem,
         isUsed: false,
       }, ctx))
     } else if (
@@ -799,8 +818,8 @@ function registerCommandOutputVariables(
     ) {
       pushDiagnostic(ctx, {
         line: lineNum,
-        column: tok.column,
-        endColumn: tok.column + tok.text.length,
+        column: tokens[0]?.column ?? 0,
+        endColumn: (tokens[0]?.column ?? 0) + (tokens[0]?.text.length ?? 0),
         message: `変数 '${varName}' の型が ${existing.type} ですが、'${cmd}' は ${outputType} 型の値を出力します`,
         severity: 'error',
       })
@@ -811,6 +830,16 @@ function registerCommandOutputVariables(
         if (ctx.suppressDiagnostics) existing.declaredInInclude = true
       }
     }
+  }
+
+  for (const slot of effect.variables ?? []) {
+    const tok = tokens[slot.index]
+    if (tok?.kind !== 'identifier') continue
+    registerSlot(tok.text, slot.type === 'integer' ? 'integer' : 'string', isSystemVariable(tok.text))
+  }
+
+  for (const sys of effect.systemVariables ?? []) {
+    registerSlot(sys.name, sys.type === 'integer' ? 'integer' : 'string', true)
   }
 }
 

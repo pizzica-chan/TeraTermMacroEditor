@@ -9,6 +9,8 @@ export interface StaticValueContext {
   resolveInPlaceVar(rel: number): string | undefined
   /** 第 rel 引数から始まる隣接連結文字列（'a'#13 等） */
   resolveGroupedString(rel: number): string | undefined
+  /** groupmatchstr 等の既知システム文字列（未設定は ''、実行時依存は undefined） */
+  resolveSystemString?(name: string): string | undefined
 }
 
 export interface StaticStringResult {
@@ -205,6 +207,103 @@ export function computeChecksum8(source: string): number {
   return sum
 }
 
+export function computeChecksum16(source: string): number {
+  const bytes = utf8Bytes(source)
+  let sum = 0
+  for (const b of bytes) sum = (sum + b) & 0xffff
+  return sum
+}
+
+export function computeChecksum32(source: string): number {
+  const bytes = utf8Bytes(source)
+  let sum = 0
+  for (const b of bytes) sum = (sum + b) >>> 0
+  return sum >>> 0
+}
+
+/** CRC-16-CCITT（Manual 5 crc16 の C 実装と同じ） */
+export function computeCrc16(source: string): number {
+  const bytes = utf8Bytes(source)
+  const CRC16POLY2 = 0x8408
+  let r = 0xffff
+  for (const b of bytes) {
+    r ^= b
+    for (let j = 0; j < 8; j++) {
+      if (r & 1) r = (r >>> 1) ^ CRC16POLY2
+      else r >>>= 1
+    }
+  }
+  return (r ^ 0xffff) & 0xffff
+}
+
+/** CRC-32 Ethernet FCS（Manual 5 crc32 の C 実装と同じ） */
+export function computeCrc32(source: string): number {
+  const bytes = utf8Bytes(source)
+  const CRC32POLY2 = 0xedb88320
+  let r = 0xffffffff
+  for (const b of bytes) {
+    r ^= b
+    for (let j = 0; j < 8; j++) {
+      if (r & 1) r = (r >>> 1) ^ CRC32POLY2
+      else r >>>= 1
+    }
+  }
+  return (r ^ 0xffffffff) >>> 0
+}
+
+function splitByDelimiterChar(source: string, delimiter: string): string[] {
+  if (delimiter.length === 0) return [source]
+  const ch = delimiter[0]!
+  const parts: string[] = []
+  let start = 0
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] === ch) {
+      parts.push(source.slice(start, i))
+      start = i + 1
+    }
+  }
+  parts.push(source.slice(start))
+  return parts
+}
+
+export interface StrsplitResult {
+  groups: string[]
+  result: number
+}
+
+/**
+ * strsplit の分割（groupmatchstr1..9 用）。
+ * @see https://teratermproject.github.io/manual/5/en/macro/command/strsplit.html
+ */
+export function computeStrsplit(source: string, separator: string, count?: number): StrsplitResult {
+  const maxSlots = 9
+  const allParts = splitByDelimiterChar(source, separator)
+  const groups = Array<string>(maxSlots).fill('')
+
+  if (count === undefined) {
+    if (allParts.length <= maxSlots) {
+      for (let i = 0; i < allParts.length; i++) groups[i] = allParts[i]!
+      return { groups, result: allParts.length }
+    }
+    for (let i = 0; i < maxSlots; i++) groups[i] = allParts[i]!
+    return { groups, result: 10 }
+  }
+
+  const limit = Math.min(Math.max(count, 1), maxSlots)
+  if (allParts.length <= limit) {
+    for (let i = 0; i < allParts.length; i++) groups[i] = allParts[i]!
+    return { groups, result: allParts.length }
+  }
+  for (let i = 0; i < limit - 1; i++) groups[i] = allParts[i]!
+  const delimChar = separator.length > 0 ? separator[0]! : ''
+  groups[limit - 1] = allParts.slice(limit - 1).join(delimChar)
+  return { groups, result: limit }
+}
+
+export function computeStrjoin(segments: string[], separator: string): string {
+  return segments.join(separator)
+}
+
 function simpleRegexToLiteral(pattern: string): string | null {
   let result = ''
   for (let i = 0; i < pattern.length; i++) {
@@ -366,6 +465,22 @@ export function tryStaticStringCommand(
       if (value === undefined) return undefined
       return { destIndex: dest, value }
     }
+    case 'strjoin': {
+      const separator = ctx.resolveString(2)
+      const dest = destIdentifier(ctx, offset, 1)
+      if (separator === undefined || dest === undefined || !ctx.resolveSystemString) return undefined
+      const countTok = ctx.tokenAt(3)
+      const count = countTok ? ctx.resolveInt(3) : undefined
+      if (countTok && count === undefined) return undefined
+      const n = count !== undefined ? Math.min(Math.max(count, 1), 9) : 9
+      const segments: string[] = []
+      for (let i = 1; i <= n; i++) {
+        const seg = ctx.resolveSystemString(`groupmatchstr${i}`)
+        if (seg === undefined) return undefined
+        segments.push(seg)
+      }
+      return { destIndex: dest, value: computeStrjoin(segments, separator) }
+    }
     default:
       return undefined
   }
@@ -393,9 +508,47 @@ export function tryStaticIntegerCommand(
       if (src === undefined || dest === undefined) return undefined
       return { destIndex: dest, value: computeChecksum8(src) }
     }
+    case 'checksum16': {
+      const src = ctx.resolveString(2)
+      const dest = destIdentifier(ctx, offset, 1)
+      if (src === undefined || dest === undefined) return undefined
+      return { destIndex: dest, value: computeChecksum16(src) }
+    }
+    case 'checksum32': {
+      const src = ctx.resolveString(2)
+      const dest = destIdentifier(ctx, offset, 1)
+      if (src === undefined || dest === undefined) return undefined
+      return { destIndex: dest, value: computeChecksum32(src) }
+    }
+    case 'crc16': {
+      const src = ctx.resolveString(2)
+      const dest = destIdentifier(ctx, offset, 1)
+      if (src === undefined || dest === undefined) return undefined
+      return { destIndex: dest, value: computeCrc16(src) }
+    }
+    case 'crc32': {
+      const src = ctx.resolveString(2)
+      const dest = destIdentifier(ctx, offset, 1)
+      if (src === undefined || dest === undefined) return undefined
+      return { destIndex: dest, value: computeCrc32(src) }
+    }
     default:
       return undefined
   }
+}
+
+export function tryStaticStrsplitCommand(
+  cmd: string,
+  ctx: StaticValueContext,
+): StrsplitResult | undefined {
+  if (cmd.toLowerCase() !== 'strsplit') return undefined
+  const source = ctx.resolveString(1)
+  const separator = ctx.resolveString(2)
+  if (source === undefined || separator === undefined) return undefined
+  const countTok = ctx.tokenAt(3)
+  const count = countTok ? ctx.resolveInt(3) : undefined
+  if (countTok && count === undefined) return undefined
+  return computeStrsplit(source, separator, count)
 }
 
 export function tryStaticStr2intCommand(

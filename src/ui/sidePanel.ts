@@ -317,12 +317,14 @@ export function createSidePanel(
     } else {
       const sendlnCount = sendEntries.filter((e) => e.command === 'sendln').length
       const sendCount = sendEntries.filter((e) => e.command === 'send').length
+      const otherSendCount = sendEntries.length - sendCount - sendlnCount
       const unresolvedCount = countUnresolvedSendEntries(sendEntries)
       const loopExpanded = sendEntries.some((e) => e.loopInfo)
+      const otherLabel = otherSendCount > 0 ? ` / その他 ${otherSendCount}` : ''
       const base =
         loopExpanded
-          ? `合計 ${sendEntries.length} 件（send ${sendCount} / sendln ${sendlnCount}、ループ展開）`
-          : `send ${sendCount} / sendln ${sendlnCount}`
+          ? `合計 ${sendEntries.length} 件（send ${sendCount} / sendln ${sendlnCount}${otherLabel}、ループ展開）`
+          : `send ${sendCount} / sendln ${sendlnCount}${otherLabel}`
       statsEl.textContent =
         unresolvedCount > 0 ? `${base}（未解決 ${unresolvedCount}）` : base
       sendCopyBtn.disabled = sendEntries.length === 0
@@ -450,7 +452,7 @@ export function createSidePanel(
 
   function renderSendList(sendEntries: SendEntry[]) {
     if (sendEntries.length === 0) {
-      sendList.innerHTML = '<div class="empty-state">send / sendln はありません</div>'
+      sendList.innerHTML = '<div class="empty-state">送信データはありません</div>'
     } else {
       sendList.innerHTML = sendEntries.map(renderSend).join('')
       bindSendGotoHandlers()

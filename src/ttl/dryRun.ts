@@ -24,10 +24,17 @@ import {
   tryStaticResultCommand,
   tryStaticSprintfCommand,
   tryStaticStr2intCommand,
+  tryStaticStrsplitCommand,
   tryStaticStringCommand,
   type StaticValueContext,
 } from './staticCommandEval'
 import { formatSendPayloadForDisplay } from './sendText'
+import {
+  isSendRecordCommand,
+  sendAddsNewline,
+  sendDataTokenStart,
+  type SendRecordCommand,
+} from './sendCommands'
 import { collectLabelNames } from './labels'
 import { RESERVED, stripComments, tokenizeLine, unquoteString, parseTtlIntegerLiteral, parseTtlCharCodeLiteral, type Token } from './tokenize'
 import {
@@ -642,6 +649,17 @@ function resolveDryRunString(token: Token | undefined, env: Env): string | undef
   return undefined
 }
 
+function resolveDryRunSystemString(name: string, env: Env): string | undefined {
+  const v = env.get(name.toLowerCase())
+  if (!v) return ''
+  if (v.kind !== 'str') return undefined
+  if (v.hasUnresolvedParts) return undefined
+  if (v.origin === 'dialog-result' || v.origin === 'user-input' || v.origin === 'match-received') {
+    return undefined
+  }
+  return v.value
+}
+
 function createStaticCtx(tokens: Token[], offset: number, env: Env): StaticValueContext {
   return {
     tokenAt(rel) {
@@ -672,6 +690,9 @@ function createStaticCtx(tokens: Token[], offset: number, env: Env): StaticValue
         }
         return undefined
       })
+    },
+    resolveSystemString(name) {
+      return resolveDryRunSystemString(name, env)
     },
   }
 }
@@ -740,9 +761,22 @@ function applyStaticCommandEffects(
   if (intResult) {
     const destTok = tokens[intResult.destIndex]
     if (destTok?.kind === 'identifier') {
-      setScalar(env, destTok.text, { kind: 'int', value: intResult.value })
+      setScalar(env, destTok.text, { kind: 'int', value: intResult.value, origin: 'literal' })
       return true
     }
+  }
+
+  const splitResult = tryStaticStrsplitCommand(cmd, staticCtx)
+  if (splitResult) {
+    for (let i = 0; i < 9; i++) {
+      setScalar(env, `groupmatchstr${i + 1}`, {
+        kind: 'str',
+        value: splitResult.groups[i]!,
+        origin: 'literal',
+      })
+    }
+    setResult(env, cmd, splitResult.result, 'literal')
+    return true
   }
 
   const resultOnlyStringCmds = new Set(['strcompare', 'strlen', 'strlength', 'strscan'])
@@ -882,10 +916,11 @@ export class DryRunSession {
   private pushSendEvent(
     lineNum: number,
     execOpts: { locationPrefix?: string },
-    cmd: 'send' | 'sendln',
+    cmd: SendRecordCommand,
     tokens: Token[],
-    tokenStart: number,
+    commandTokenOffset: number,
   ): void {
+    const tokenStart = sendDataTokenStart(cmd, commandTokenOffset)
     const { payload, rawArgs, unresolved, sensitive } = collectSendPayload(tokens, tokenStart, this.env)
     const maskPayload = sensitive
     const displayPayload = maskPayload ? '（入力済み）' : payload || '（空）'
@@ -896,7 +931,7 @@ export class DryRunSession {
       command: cmd,
       message: `${cmd}: ${displayPayload}`,
       payload,
-      addsNewline: cmd === 'sendln',
+      addsNewline: sendAddsNewline(cmd),
       detail: rawArgs + (unresolved ? '（未解決を含む）' : ''),
       maskPayload: maskPayload || undefined,
     })
@@ -1095,8 +1130,8 @@ export class DryRunSession {
       if (tailCmd === 'goto' || tailCmd === 'call') {
         return this.processGotoCall(env, lines, lineIdx, tokens, tailStart, execOpts)
       }
-      if (tailCmd === 'send' || tailCmd === 'sendln') {
-        this.pushSendEvent(lineNum, execOpts, tailCmd, tokens, tailStart + 1)
+      if (isSendRecordCommand(tailCmd)) {
+        this.pushSendEvent(lineNum, execOpts, tailCmd, tokens, tailStart)
       } else if (
         WAIT_COMMANDS.has(tailCmd) ||
         tailCmd === 'recvln' ||
@@ -1995,8 +2030,8 @@ export class DryRunSession {
       return { nextIdx: lineIdx, stopAll: true }
     }
 
-    if (cmd === 'send' || cmd === 'sendln') {
-      this.pushSendEvent(lineNum, execOpts, cmd, tokens, offset + 1)
+    if (isSendRecordCommand(cmd)) {
+      this.pushSendEvent(lineNum, execOpts, cmd, tokens, offset)
       return { nextIdx: lineIdx }
     }
 
