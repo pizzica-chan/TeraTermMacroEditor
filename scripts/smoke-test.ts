@@ -5,6 +5,7 @@ import { evaluateTTL } from '../src/ttl/evaluator'
 import { formatSendPayloadForDisplay } from '../src/ttl/sendText'
 import { findIncludeRefs, computeLoopValues } from '../src/ttl/includeRefs'
 import { computeStrcopySubstring, computeStrcompare, computeStrlen, computeStrscan, computeStrsplit, computeStrjoin, computeStrspecial, computeRotateLeft, computeRotateRight, computeChecksum16, computeChecksum32, computeCrc16, computeCrc32, parseStr2int } from '../src/ttl/staticCommandEval'
+import { collectDropFileEntries } from '../src/app/workspaceFileService'
 import { tokenizeLine, stripComments } from '../src/ttl/tokenize'
 import { TTL_COMMANDS } from '../src/ttl/commands'
 import { COMMAND_ARG_SPECS } from '../src/ttl/commandArgs'
@@ -387,6 +388,41 @@ assert(cliEval.sendEntries[2]?.payload === '3', 'paramcnt = argv.length', cliEva
 
 const paramsArray = evaluateTTL(`send params[2]`, { macroArgv: ['a.ttl', 'first', 'second'] })
 assert(paramsArray.sendEntries[0]?.payload === 'first', 'params[2] is second argv element', paramsArray.sendEntries[0]?.payload)
+
+console.log('\n=== 10. drop colliding same-name files ===')
+{
+  const dropA = new File(['same'], 'dup.ttl', { lastModified: 1234567890 })
+  const dropB = new File(['same'], 'dup.ttl', { lastModified: 1234567890 })
+  const colliding = collectDropFileEntries({
+    dataTransfer: {
+      items: [
+        { kind: 'file', getAsFile: () => dropA },
+        { kind: 'file', getAsFile: () => dropB },
+      ],
+      files: [dropA, dropB],
+    },
+  } as unknown as DragEvent)
+  assert(colliding.length === 2, 'distinct same-name files both kept', colliding.length)
+
+  const same = new File(['x'], 'one.ttl', { lastModified: 1 })
+  const itemsAndFilesSame = collectDropFileEntries({
+    dataTransfer: {
+      items: [{ kind: 'file', getAsFile: () => same }],
+      files: [same],
+    },
+  } as unknown as DragEvent)
+  assert(itemsAndFilesSame.length === 1, 'items+files same object deduped', itemsAndFilesSame.length)
+
+  const listed = new File(['y'], 'listed.ttl', { lastModified: 2 })
+  const listedAgain = new File(['y'], 'listed.ttl', { lastModified: 2 })
+  const itemsThenFiles = collectDropFileEntries({
+    dataTransfer: {
+      items: [{ kind: 'file', getAsFile: () => listed }],
+      files: [listedAgain],
+    },
+  } as unknown as DragEvent)
+  assert(itemsThenFiles.length === 1, 'items+files same metadata deduped', itemsThenFiles.length)
+}
 
 console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`)
 process.exit(failed > 0 ? 1 : 0)

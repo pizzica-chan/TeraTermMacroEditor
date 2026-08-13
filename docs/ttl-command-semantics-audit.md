@@ -51,7 +51,7 @@
 ### 不足の分類
 
 1. **送信パネル未連携**: `dispstr` / `sendfile` / `sendkcode`（ホスト向け送信系のうち未記録）
-2. **静的評価ギャップ**: `strspecial` / `strmatch` / `rotateleft` / `rotateright` — 引数既知なら本家同様に計算可能なのにプレースホルダ止まり。
+2. **静的評価ギャップ**: `strmatch` — 引数既知なら本家同様に計算可能なのにプレースホルダ止まり。
 3. **ドライラン専用の薄い待機**: `waitn` / `waitevent` は汎用 effect のみ（`wait` 系のような受信シミュレーションなし）。
 4. **statusbox**: ダイアログ表示だが `DIALOG_COMMANDS` 外。
 

@@ -62,7 +62,7 @@ function isOpenableFile(file: File): boolean {
 }
 
 function dropFileDedupeKey(file: File): string {
-  return `${file.name}\0${file.size}\0${file.lastModified}`
+  return `${file.webkitRelativePath || ''}\0${file.name}\0${file.size}\0${file.lastModified}`
 }
 
 function hasFileDataTransfer(dt: DataTransfer | null): boolean {
@@ -79,24 +79,28 @@ export function collectDropFileEntries(
   if (!dt) return []
 
   const entries: Array<{ file: File; item: DataTransferItem | null }> = []
-  const claimed = new Set<string>()
+  const claimedFiles = new Set<File>()
+  const claimedKeysFromItems = new Set<string>()
 
-  const tryAdd = (file: File, item: DataTransferItem | null) => {
+  const tryAdd = (file: File, item: DataTransferItem | null, fromItems: boolean) => {
     if (!isOpenableFile(file)) return
+    if (claimedFiles.has(file)) return
     const key = dropFileDedupeKey(file)
-    if (claimed.has(key)) return
-    claimed.add(key)
+    // items と files の二重掲載だけキーで除外。同一メタデータの別 File は残す。
+    if (!fromItems && claimedKeysFromItems.has(key)) return
+    claimedFiles.add(file)
+    if (fromItems) claimedKeysFromItems.add(key)
     entries.push({ file, item })
   }
 
   for (const item of Array.from(dt.items)) {
     if (item.kind !== 'file') continue
     const file = item.getAsFile()
-    if (file) tryAdd(file, item)
+    if (file) tryAdd(file, item, true)
   }
 
   for (const file of Array.from(dt.files)) {
-    tryAdd(file, null)
+    tryAdd(file, null, false)
   }
 
   return entries

@@ -415,10 +415,18 @@ function main() {
   L.push('')
   L.push('### 不足の分類')
   L.push('')
-  L.push('1. **送信パネル未連携**: `dispstr` / `sendfile` / `sendkcode`（ホスト向け送信系のうち未記録）')
-  L.push('2. **静的評価ギャップ**: `strspecial` / `strmatch` / `rotateleft` / `rotateright` — 引数既知なら本家同様に計算可能なのにプレースホルダ止まり。')
-  L.push('3. **ドライラン専用の薄い待機**: `waitn` / `waitevent` は汎用 effect のみ（`wait` 系のような受信シミュレーションなし）。')
-  L.push('4. **statusbox**: ダイアログ表示だが `DIALOG_COMMANDS` 外。')
+  let gapN = 1
+  L.push(`${gapN++}. **送信パネル未連携**: \`dispstr\` / \`sendfile\` / \`sendkcode\`（ホスト向け送信系のうち未記録）`)
+  const staticGapCmds = [...PURE_STATIC_CANDIDATES]
+    .filter((c) => !STATIC_STRING.has(c) && !STATIC_RESULT.has(c))
+    .sort()
+  if (staticGapCmds.length > 0) {
+    L.push(
+      `${gapN++}. **静的評価ギャップ**: ${staticGapCmds.map((c) => `\`${c}\``).join(' / ')} — 引数既知なら本家同様に計算可能なのにプレースホルダ止まり。`,
+    )
+  }
+  L.push(`${gapN++}. **ドライラン専用の薄い待機**: \`waitn\` / \`waitevent\` は汎用 effect のみ（\`wait\` 系のような受信シミュレーションなし）。`)
+  L.push(`${gapN++}. **statusbox**: ダイアログ表示だが \`DIALOG_COMMANDS\` 外。`)
   L.push('')
   L.push('## 4. 意図的差分')
   L.push('')
