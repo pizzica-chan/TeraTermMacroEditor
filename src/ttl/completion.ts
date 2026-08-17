@@ -11,7 +11,7 @@ import {
   TTL_COMMANDS,
 } from './commands'
 import { analyzeTTL } from './analyzer'
-import { getCachedAnalysis, getIncludeCrossTabContext, getIncludeResolver } from './analysisContext'
+import { getCachedAnalysis, getEditorAnalyzeOptions } from './analysisContext'
 import { collectLabelNames } from './labels'
 import { tokenizeLine } from './tokenize'
 
@@ -96,14 +96,7 @@ function collectLabels(source: string): string[] {
 }
 
 function collectUserVariables(source: string): Completion[] {
-  const crossTab = getIncludeCrossTabContext()
-  const result =
-    getCachedAnalysis(source) ??
-    analyzeTTL(source, {
-      includeResolver: getIncludeResolver(),
-      externallyUsedNames: crossTab?.externallyUsed,
-      externallyDeclaredVars: crossTab?.externallyDeclared,
-    })
+  const result = getCachedAnalysis(source) ?? analyzeTTL(source, getEditorAnalyzeOptions())
   return result.variables
     .filter((v) => !v.isSystem)
     .map((v) => ({

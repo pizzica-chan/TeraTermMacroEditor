@@ -13,6 +13,11 @@ import {
   hasVariableAssumptions,
 } from '../ttl/variableAssumptions'
 import {
+  collectActiveFlushrecvWarningLines,
+  flushrecvWarningIgnoresFromRecord,
+  pruneFlushrecvWarningIgnores,
+} from '../ttl/flushrecvWarningIgnores'
+import {
   type AnalysisLimitations,
 } from '../ttl/analysisLimitations'
 import {
@@ -30,6 +35,8 @@ import { buildFlowchart } from '../ttl/flowchart'
 import {
   setIncludeResolver,
   setIncludeCrossTabContext,
+  setFlushrecvBeforeSendCheck,
+  getEditorAnalyzeOptions,
   setAnalysisCache,
 } from '../ttl/analysisContext'
 import type { EditorTab } from '../ui/tabManager'
@@ -265,6 +272,8 @@ export interface AnalysisCoordinatorHost {
     branchAssumptions: Record<string, boolean>
     indeterminateVariables: ReturnType<typeof collectIndeterminateVariables>
     variableAssumptions: Record<string, string>
+    flushrecvWarningIgnores: Record<string, boolean>
+    checkFlushrecvBeforeSend: boolean
     analysisLimitations: AnalysisLimitations
   }): void
   updateFlowchart(model: ReturnType<typeof buildFlowchart> | null): void
@@ -273,12 +282,14 @@ export interface AnalysisCoordinatorHost {
   schedulePersistWorkspaceSession(): void
   flowchartShowDetailedWaits: () => boolean
   flowchartShowAssignments: () => boolean
+  checkFlushrecvBeforeSend: () => boolean
 }
 
 const ANALYSIS_DEBOUNCE_MS = 250
 
 export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
   let analysisTimer: ReturnType<typeof setTimeout> | null = null
+  setFlushrecvBeforeSendCheck(host.checkFlushrecvBeforeSend())
 
   function syncTabIncludeBindings(tab: EditorTab, source: string): void {
     const migrated = migrateIncludeBindings(source, tab.includeBindings)
@@ -313,11 +324,21 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
     setIncludeResolver(resolver)
     setIncludeCrossTabContext(crossTab)
 
-    const result = analyzeTTL(text, {
-      includeResolver: resolver,
-      externallyUsedNames: crossTab?.externallyUsed,
-      externallyDeclaredVars: crossTab?.externallyDeclared,
-    })
+    const checkFlushrecv = host.checkFlushrecvBeforeSend()
+    if (tab && checkFlushrecv) {
+      const activeLines = collectActiveFlushrecvWarningLines(text)
+      tab.flushrecvWarningIgnores = pruneFlushrecvWarningIgnores(
+        tab.flushrecvWarningIgnores ?? {},
+        activeLines,
+      )
+    }
+
+    const ignoredFlushrecvLines = tab
+      ? flushrecvWarningIgnoresFromRecord(tab.flushrecvWarningIgnores)
+      : new Set<number>()
+    setFlushrecvBeforeSendCheck(checkFlushrecv, ignoredFlushrecvLines)
+
+    const result = analyzeTTL(text, getEditorAnalyzeOptions())
     const evaluationForCollect = evaluateTTL(text, {
       includeResolver: resolver,
     })
@@ -407,6 +428,8 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
       branchAssumptions: tab?.branchAssumptions ?? {},
       indeterminateVariables,
       variableAssumptions: tab?.variableAssumptions ?? {},
+      flushrecvWarningIgnores: tab?.flushrecvWarningIgnores ?? {},
+      checkFlushrecvBeforeSend: checkFlushrecv,
       analysisLimitations,
     })
     host.updateFlowchart(buildFlowchartForActiveTab(text))

@@ -436,6 +436,7 @@ body {
 
 .setup-panel .variable-assumptions-section,
 .setup-panel .branch-assumptions-section,
+.setup-panel .analysis-options-section,
 .setup-panel .include-section {
   flex-shrink: 0;
 }
@@ -1181,6 +1182,27 @@ body {
   line-height: 1.4;
 }
 
+.analysis-options-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.analysis-options-section h2 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.analysis-options-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
 .branch-assumptions-list {
   display: flex;
   flex-direction: column;
@@ -1398,6 +1420,41 @@ body {
 
 .diag-msg {
   flex: 1;
+}
+
+.diag-actions {
+  flex-shrink: 0;
+}
+
+.flushrecv-warning-ignores-section {
+  margin-top: 10px;
+}
+
+.flushrecv-warning-ignores-section[hidden] {
+  display: none;
+}
+
+.flushrecv-warning-ignores-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 6px;
+}
+
+.flushrecv-warning-ignores-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flushrecv-warning-ignore-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 12px;
 }
 
 .empty-state {

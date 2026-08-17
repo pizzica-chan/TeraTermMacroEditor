@@ -5,6 +5,7 @@ import {
 } from './commands'
 import { checkCommandArgs, findAssignmentIndex } from './argChecker'
 import { checkAssignmentRhsCommandMisuse } from './assignmentCommandMisuse'
+import { collectFlushrecvBeforeSendDiagnostics } from './flushrecvBeforeSend'
 import {
   isGroupedStringExprStart,
   resolveStaticControlPart,
@@ -98,6 +99,8 @@ export interface Diagnostic {
   endColumn?: number
   message: string
   severity: DiagnosticSeverity
+  /** 診断の種別（UI の無視ボタン等） */
+  code?: string
 }
 
 export interface AnalysisResult {
@@ -126,6 +129,10 @@ export interface AnalyzeOptions {
   externallyDeclaredVars?: ReadonlyMap<string, VariableInfo>
   /** include 連携の変数収集（親タブ解析時に指定） */
   includeExchange?: IncludeCrossTabVarCollector
+  /** flushrecv → send → wait 順序チェック（オプション ON 時のみ） */
+  checkFlushrecvBeforeSend?: boolean
+  /** flushrecv 警告を無視する行（1-based） */
+  ignoredFlushrecvWarningLines?: ReadonlySet<number>
 }
 
 /** include 親子タブ間の変数連携 */
@@ -1442,6 +1449,14 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
   }
 
   analyzeLines(lines, ctx, {})
+
+  if (options?.checkFlushrecvBeforeSend) {
+    const ignored = options.ignoredFlushrecvWarningLines
+    for (const d of collectFlushrecvBeforeSendDiagnostics(lines)) {
+      if (ignored?.has(d.line)) continue
+      pushDiagnostic(ctx, d)
+    }
+  }
 
   if (options?.includeExchange) {
     for (const [key, info] of ctx.varMap) {

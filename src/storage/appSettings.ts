@@ -8,6 +8,8 @@ export interface AppSettings {
   sidePanelWidth: number
   flowchartShowDetailedWaits: boolean
   flowchartShowAssignments: boolean
+  /** send 系の前に flushrecv があるか（flushrecv→wait 系の並び、およびその間の 2 つ目以降の send） */
+  checkFlushrecvBeforeSend: boolean
 }
 
 const STORAGE_KEY = 'ttl-macro-editor-settings'
@@ -19,6 +21,7 @@ const DEFAULTS: AppSettings = {
   sidePanelWidth: 440,
   flowchartShowDetailedWaits: false,
   flowchartShowAssignments: false,
+  checkFlushrecvBeforeSend: false,
 }
 
 function isEncoding(v: unknown): v is TextEncoding {
@@ -50,6 +53,10 @@ export function loadAppSettings(): AppSettings {
         typeof parsed.flowchartShowAssignments === 'boolean'
           ? parsed.flowchartShowAssignments
           : DEFAULTS.flowchartShowAssignments,
+      checkFlushrecvBeforeSend:
+        typeof parsed.checkFlushrecvBeforeSend === 'boolean'
+          ? parsed.checkFlushrecvBeforeSend
+          : DEFAULTS.checkFlushrecvBeforeSend,
     }
   } catch {
     return { ...DEFAULTS }

@@ -14,6 +14,7 @@ import { findIncludeRefs } from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
 import { clearAnalysisCache } from './ttl/analysisContext'
 import { variableAssumptionKey } from './ttl/variableAssumptions'
+import { flushrecvWarningIgnoreKey } from './ttl/flushrecvWarningIgnores'
 import type { TextEncoding, NewlineType } from './text/types'
 import { ENCODING_LABELS, NEWLINE_LABELS } from './text/types'
 import { loadAppSettings, saveAppSettings } from './storage/appSettings'
@@ -30,6 +31,7 @@ const appSettings = loadAppSettings()
 let isDark = appSettings.isDark
 let flowchartShowDetailedWaits = appSettings.flowchartShowDetailedWaits
 let flowchartShowAssignments = appSettings.flowchartShowAssignments
+let checkFlushrecvBeforeSend = appSettings.checkFlushrecvBeforeSend
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
@@ -64,6 +66,7 @@ const sidePanel = createSidePanel(document.querySelector('#side-panel')!, {
   dark: isDark,
   showDetailedWaits: flowchartShowDetailedWaits,
   showAssignments: flowchartShowAssignments,
+  checkFlushrecvBeforeSend,
 })
 const includePanel = createIncludePanel(sidePanel.includeMount)
 sidePanel.onGotoLine((line) => editor.gotoLine(line))
@@ -192,6 +195,7 @@ const analysis = createAnalysisCoordinator({
   schedulePersistWorkspaceSession,
   flowchartShowDetailedWaits: () => flowchartShowDetailedWaits,
   flowchartShowAssignments: () => flowchartShowAssignments,
+  checkFlushrecvBeforeSend: () => checkFlushrecvBeforeSend,
 })
 
 const dryRunDialogAdapter = createBrowserDialogAdapter()
@@ -449,6 +453,22 @@ sidePanel.onFlowchartAssignmentsChange((show) => {
   flowchartShowAssignments = show
   saveAppSettings({ flowchartShowAssignments: show })
   sidePanel.updateFlowchart(analysis.buildFlowchartForActiveTab(editor.getValue()))
+})
+sidePanel.onCheckFlushrecvBeforeSendChange((enabled) => {
+  checkFlushrecvBeforeSend = enabled
+  saveAppSettings({ checkFlushrecvBeforeSend: enabled })
+  analysis.runAnalysisNow(editor.getValue())
+})
+sidePanel.onFlushrecvWarningIgnoreChange((line, ignored) => {
+  const tab = tabManager.activeTab
+  if (!tab) return
+  const next = { ...(tab.flushrecvWarningIgnores ?? {}) }
+  const key = flushrecvWarningIgnoreKey(line)
+  if (ignored) next[key] = true
+  else delete next[key]
+  tab.flushrecvWarningIgnores = next
+  schedulePersistWorkspaceSession()
+  analysis.runAnalysisNow(editor.getValue())
 })
 
 sidePanel.onClearDryRun(() => {

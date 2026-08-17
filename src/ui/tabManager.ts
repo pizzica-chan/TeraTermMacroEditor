@@ -20,6 +20,8 @@ export interface EditorTab {
   branchAssumptions?: Record<string, boolean>
   /** 未確定変数（`${行番号}:${変数名}`）→ ユーザー仮定の入力テキスト */
   variableAssumptions?: Record<string, string>
+  /** flushrecv 警告を無視する行（行番号文字列キー → true） */
+  flushrecvWarningIgnores?: Record<string, boolean>
 }
 
 let nextTabId = 1
@@ -166,6 +168,7 @@ export class TabManager {
     includeBindings?: Record<string, string>
     branchAssumptions?: Record<string, boolean>
     variableAssumptions?: Record<string, string>
+    flushrecvWarningIgnores?: Record<string, boolean>
     activate?: boolean
   }): EditorTab | null {
     if (!this.canAddTab()) {
@@ -188,6 +191,7 @@ export class TabManager {
       includeBindings: options.includeBindings ? { ...options.includeBindings } : {},
       branchAssumptions: options.branchAssumptions ? { ...options.branchAssumptions } : {},
       variableAssumptions: options.variableAssumptions ? { ...options.variableAssumptions } : {},
+      flushrecvWarningIgnores: options.flushrecvWarningIgnores ? { ...options.flushrecvWarningIgnores } : {},
     }
 
     this.tabs.push(tab)
@@ -333,6 +337,7 @@ export class TabManager {
       includeBindings: { ...tab.includeBindings },
       branchAssumptions: { ...(tab.branchAssumptions ?? {}) },
       variableAssumptions: { ...(tab.variableAssumptions ?? {}) },
+      flushrecvWarningIgnores: { ...(tab.flushrecvWarningIgnores ?? {}) },
     }))
     return {
       version: 1,
@@ -366,6 +371,7 @@ export class TabManager {
         includeBindings: migrateIncludeBindings(saved.content, { ...saved.includeBindings }),
         branchAssumptions: { ...(saved.branchAssumptions ?? {}) },
         variableAssumptions: { ...(saved.variableAssumptions ?? {}) },
+        flushrecvWarningIgnores: { ...(saved.flushrecvWarningIgnores ?? {}) },
       })
     }
 

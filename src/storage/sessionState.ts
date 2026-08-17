@@ -10,6 +10,7 @@ export interface SavedTabState {
   includeBindings: Record<string, string>
   branchAssumptions?: Record<string, boolean>
   variableAssumptions?: Record<string, string>
+  flushrecvWarningIgnores?: Record<string, boolean>
 }
 
 export interface WorkspaceSession {

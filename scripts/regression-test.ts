@@ -8,6 +8,7 @@ import { runConditionalEndStaticTests } from './test-conditional-end-static'
 import { runBranchAssumptionTests } from './test-branch-assumptions'
 import { runVariableAssumptionTests } from './test-variable-assumptions'
 import { runAssignmentCommandMisuseTests } from './test-assignment-command-misuse'
+import { runFlushrecvBeforeSendTests } from './test-flushrecv-before-send'
 import { runCommandHintTests } from './test-command-hints'
 
 let passed = 0
@@ -178,6 +179,13 @@ console.log('=== B4. 未確定変数仮定（送信・ホバー） ===')
 console.log('=== B5. 代入右辺のコマンド名誤用 ===')
 {
   const r = runAssignmentCommandMisuseTests()
+  passed += r.passed
+  failed += r.failed
+}
+
+console.log('=== B5a. flushrecv → send → wait チェック ===')
+{
+  const r = runFlushrecvBeforeSendTests()
   passed += r.passed
   failed += r.failed
 }

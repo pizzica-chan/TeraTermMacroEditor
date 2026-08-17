@@ -1,6 +1,6 @@
 import { StateEffect, StateField, type Extension } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
-import type { AnalysisResult, IncludeResolver, VariableInfo } from './analyzer'
+import type { AnalysisResult, AnalyzeOptions, IncludeResolver, VariableInfo } from './analyzer'
 import type { EvaluationResult } from './evaluator'
 
 let currentResolver: IncludeResolver | undefined
@@ -10,6 +10,9 @@ let includeCrossTabContext:
       externallyUsed: ReadonlySet<string>
     }
   | undefined
+
+let checkFlushrecvBeforeSend = false
+let ignoredFlushrecvWarningLines: ReadonlySet<number> = new Set()
 
 let cachedSource = ''
 let cachedAnalysis: AnalysisResult | null = null
@@ -72,6 +75,26 @@ export function getIncludeCrossTabContext():
     }
   | undefined {
   return includeCrossTabContext
+}
+
+export function setFlushrecvBeforeSendCheck(
+  enabled: boolean,
+  ignoredLines: ReadonlySet<number> = new Set(),
+): void {
+  checkFlushrecvBeforeSend = enabled
+  ignoredFlushrecvWarningLines = new Set(ignoredLines)
+}
+
+/** linter / 補完のキャッシュ未ヒット時も coordinator と同じ解析オプションにする */
+export function getEditorAnalyzeOptions(): AnalyzeOptions {
+  const crossTab = includeCrossTabContext
+  return {
+    includeResolver: currentResolver,
+    externallyUsedNames: crossTab?.externallyUsed,
+    externallyDeclaredVars: crossTab?.externallyDeclared,
+    checkFlushrecvBeforeSend,
+    ignoredFlushrecvWarningLines,
+  }
 }
 
 /** @deprecated getIncludeCrossTabContext().externallyUsed を使用 */
