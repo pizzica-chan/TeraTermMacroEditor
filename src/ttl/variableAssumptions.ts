@@ -162,10 +162,14 @@ export function hasVariableAssumptions(
 export function pruneVariableAssumptions(
   record: Record<string, string>,
   validKeys: ReadonlySet<string>,
+  valueTypes?: ReadonlyMap<string, AssumedValueType>,
 ): Record<string, string> {
   const next: Record<string, string> = {}
   for (const [key, value] of Object.entries(record)) {
-    if (validKeys.has(key) && typeof value === 'string') next[key] = value
+    if (!validKeys.has(key) || typeof value !== 'string') continue
+    const valueType = valueTypes?.get(key)
+    if (valueType !== undefined && !isValidVariableAssumptionInput(valueType, value)) continue
+    next[key] = value
   }
   return next
 }

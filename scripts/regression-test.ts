@@ -7,6 +7,8 @@ import { includeLoopIterationBindingKey } from '../src/ttl/includeRefs'
 import { runConditionalEndStaticTests } from './test-conditional-end-static'
 import { runBranchAssumptionTests } from './test-branch-assumptions'
 import { runVariableAssumptionTests } from './test-variable-assumptions'
+import { runAssignmentCommandMisuseTests } from './test-assignment-command-misuse'
+import { runCommandHintTests } from './test-command-hints'
 
 let passed = 0
 let failed = 0
@@ -169,6 +171,20 @@ console.log('=== B3. 未確定分岐仮定（include 内代入） ===')
 console.log('=== B4. 未確定変数仮定（送信・ホバー） ===')
 {
   const r = runVariableAssumptionTests()
+  passed += r.passed
+  failed += r.failed
+}
+
+console.log('=== B5. 代入右辺のコマンド名誤用 ===')
+{
+  const r = runAssignmentCommandMisuseTests()
+  passed += r.passed
+  failed += r.failed
+}
+
+console.log('=== B6. コマンドホバーヒント ===')
+{
+  const r = runCommandHintTests()
   passed += r.passed
   failed += r.failed
 }

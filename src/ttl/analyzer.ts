@@ -4,6 +4,7 @@ import {
   isSystemVariable,
 } from './commands'
 import { checkCommandArgs, findAssignmentIndex } from './argChecker'
+import { checkAssignmentRhsCommandMisuse } from './assignmentCommandMisuse'
 import {
   isGroupedStringExprStart,
   resolveStaticControlPart,
@@ -1141,6 +1142,15 @@ function analyzeLines(lines: string[], ctx: AnalysisContext, loopOpts: LineLoopO
     }
 
     if (assignVarName) {
+      const misuse = checkAssignmentRhsCommandMisuse(
+        tokens,
+        assignIdx,
+        lineNum,
+        assignVarName,
+        ctx.varMap,
+      )
+      if (misuse) pushDiagnostic(ctx, misuse)
+
       const varKey = assignVarName.toLowerCase()
       const valueToken = tokens[assignIdx + 1]
       const newType = valueToken ? inferTypeFromValue(valueToken.text) : 'unknown'

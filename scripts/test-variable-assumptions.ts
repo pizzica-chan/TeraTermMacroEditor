@@ -204,6 +204,23 @@ end`
     ng('存在しなくなった変数仮定を prune する', pruned)
   }
 
+  const prunedInvalidInt = pruneVariableAssumptions(
+    { '2:n': 'abc', '3:inputstr': 'hello' },
+    new Set(['2:n', '3:inputstr']),
+    new Map([
+      ['2:n', 'integer'],
+      ['3:inputstr', 'string'],
+    ]),
+  )
+  if (
+    prunedInvalidInt['2:n'] === undefined &&
+    prunedInvalidInt['3:inputstr'] === 'hello'
+  ) {
+    ok('TTL 整数として解釈できない整数仮定を prune する')
+  } else {
+    ng('TTL 整数として解釈できない整数仮定を prune する', prunedInvalidInt)
+  }
+
   const without = evaluateTTL(inputSrc)
   if (without.sendEntries[0]?.unresolved === true) ok('仮定なしでは inputstr 送信は未解決のまま')
   else ng('仮定なしでは inputstr 送信は未解決のまま', without.sendEntries)

@@ -70,6 +70,7 @@ export function createSidePanel(
   let flowchartModel: FlowchartModel | null = null
   let showDetailedWaits = options?.showDetailedWaits ?? false
   let showAssignments = options?.showAssignments ?? false
+  let setupWarningDetailsOpen = false
 
   container.innerHTML = ''
 
@@ -487,6 +488,11 @@ export function createSidePanel(
   }
 
   function renderAnalysisWarning(limitations: AnalysisLimitations | undefined) {
+    const openDetails = analysisWarning.querySelector<HTMLDetailsElement>(
+      'details.analysis-limitations-details',
+    )
+    if (openDetails) setupWarningDetailsOpen = openDetails.open
+
     const showUnassumedBranches =
       (activeTab === 'setup' || activeTab === 'sends')
       && (limitations?.unassumedBranches.length ?? 0) > 0
@@ -501,6 +507,44 @@ export function createSidePanel(
     analysisWarning.hidden = !shouldShow
     if (!shouldShow || !limitations) {
       analysisWarning.innerHTML = ''
+      analysisWarning.className = 'analysis-limitations-warning'
+      return
+    }
+
+    const summaryParts: string[] = []
+    if (showUnassumedVariables) {
+      summaryParts.push(`未確定変数 ${limitations.unassumedVariables.length} 件`)
+    }
+    if (showUnassumedBranches) {
+      summaryParts.push(`未確定分岐 ${limitations.unassumedBranches.length} 件`)
+    }
+    if (showUnlinkedIncludes) {
+      summaryParts.push(`未リンク include ${limitations.unlinkedIncludes.length} 件`)
+    }
+    const summaryText = summaryParts.join('、')
+
+    const helpText =
+      activeTab === 'flowchart'
+        ? 'include の参照タブを指定してください。分岐仮定・変数仮定はフロー表示に影響しません。'
+        : activeTab === 'sends'
+          ? '「前提」タブで未確定変数の値、未確定分岐の True/False、include の参照タブを指定してください。'
+          : '下の各セクションで値を入力・選択してください。'
+
+    if (activeTab === 'setup') {
+      analysisWarning.className = 'analysis-limitations-warning analysis-limitations-warning--setup'
+      analysisWarning.innerHTML = `
+        <details class="analysis-limitations-details">
+          <summary class="analysis-limitations-title">⚠ 解析条件が不足しています（${summaryText}）</summary>
+          <div class="analysis-limitations-details-body">
+            <div>解析条件が不足しているため、表示内容が正しい結果にならない可能性があります。</div>
+            <div class="analysis-limitations-help">${helpText}</div>
+          </div>
+        </details>
+      `
+      const details = analysisWarning.querySelector<HTMLDetailsElement>(
+        'details.analysis-limitations-details',
+      )
+      if (details) details.open = setupWarningDetailsOpen
       return
     }
 
@@ -520,17 +564,12 @@ export function createSidePanel(
         `<li>タブ未指定の include: ${limitations.unlinkedIncludes.length} 件</li>`,
       )
     }
+    analysisWarning.className = 'analysis-limitations-warning'
     analysisWarning.innerHTML = `
       <div class="analysis-limitations-title">⚠ 解析結果は暫定です</div>
       <div>解析条件が不足しているため、表示内容が正しい結果にならない可能性があります。</div>
       <ul>${items.join('')}</ul>
-      <div class="analysis-limitations-help">${
-        activeTab === 'flowchart'
-          ? 'include の参照タブを指定してください。分岐仮定・変数仮定はフロー表示に影響しません。'
-          : activeTab === 'sends'
-            ? '「前提」タブで未確定変数の値、未確定分岐の True/False、include の参照タブを指定してください。'
-            : '未確定変数の値、未確定分岐の True/False、include の参照タブを指定してください。'
-      }</div>
+      <div class="analysis-limitations-help">${helpText}</div>
     `
   }
 

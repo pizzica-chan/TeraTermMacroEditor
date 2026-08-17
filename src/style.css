@@ -343,9 +343,10 @@ body {
   width: 440px;
   min-width: 200px;
   max-width: 900px;
+  min-height: 0;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
-  overflow-y: auto;
+  overflow: hidden;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -367,6 +368,7 @@ body {
 .panel-header {
   padding: 8px 14px 8px;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .side-panel-tabs {
@@ -421,24 +423,21 @@ body {
 .setup-panel {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
 }
 
 .setup-panel .variable-assumptions-section,
 .setup-panel .branch-assumptions-section {
   border-top: none;
-  flex-shrink: 0;
 }
 
 .setup-panel .branch-assumptions-section {
   border-top: 1px solid var(--border-color);
 }
 
+.setup-panel .variable-assumptions-section,
+.setup-panel .branch-assumptions-section,
 .setup-panel .include-section {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+  flex-shrink: 0;
 }
 
 .flowchart-toolbar {
@@ -1092,14 +1091,48 @@ body {
 }
 
 .analysis-limitations-warning {
-  margin: 10px 12px 0;
-  padding: 10px 12px;
-  border: 1px solid var(--warning);
-  border-radius: 6px;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid var(--warning);
+  border-radius: 0;
   background: #cca70016;
   color: var(--text-primary);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.analysis-limitations-warning--setup {
+  padding: 6px 12px;
+}
+
+.analysis-limitations-details {
+  margin: 0;
+}
+
+.analysis-limitations-details summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.analysis-limitations-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-limitations-details summary::before {
+  content: '▸ ';
+  display: inline-block;
+  width: 1em;
+}
+
+.analysis-limitations-details[open] summary::before {
+  content: '▾ ';
+}
+
+.analysis-limitations-details-body {
+  margin-top: 6px;
+  padding-left: 1em;
 }
 
 .analysis-limitations-warning[hidden] {
@@ -1400,6 +1433,92 @@ body {
 [data-theme='light'] .status-bar {
   background: #6a8499;
   color: #f2f0ec;
+}
+
+/* Command hover tooltip */
+.cm-cmd-tooltip {
+  max-width: 28rem;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.cm-cmd-tooltip-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.cm-cmd-name {
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-weight: 600;
+  color: #9cdcfe;
+}
+
+.cm-cmd-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #858585;
+}
+
+.cm-cmd-tooltip-summary {
+  color: #cccccc;
+  margin-bottom: 4px;
+}
+
+.cm-cmd-tooltip-usage code {
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 11px;
+  color: #ce9178;
+  background: #ffffff0a;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.cm-cmd-tooltip-note {
+  margin-top: 5px;
+  font-size: 11px;
+  color: #858585;
+}
+
+.cm-cmd-tooltip-manual {
+  display: inline-block;
+  margin-top: 5px;
+  font-size: 10px;
+  color: #569cd6;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cm-cmd-tooltip-manual:hover {
+  color: #9cdcfe;
+}
+
+[data-theme='light'] .cm-cmd-name {
+  color: #0451a5;
+}
+
+[data-theme='light'] .cm-cmd-tooltip-summary {
+  color: #3d3b39;
+}
+
+[data-theme='light'] .cm-cmd-tooltip-usage code {
+  color: #a31515;
+  background: #00000008;
+}
+
+[data-theme='light'] .cm-cmd-tooltip-note {
+  color: #6a6865;
+}
+
+[data-theme='light'] .cm-cmd-tooltip-manual {
+  color: #0451a5;
+}
+
+[data-theme='light'] .cm-cmd-tooltip-manual:hover {
+  color: #0078d4;
 }
 
 /* Variable hover tooltip */

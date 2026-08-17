@@ -331,7 +331,17 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
       const validVarKeys = new Set(
         indeterminateVariables.map((v) => variableAssumptionKey(v.line, v.name)),
       )
-      tab.variableAssumptions = pruneVariableAssumptions(tab.variableAssumptions ?? {}, validVarKeys)
+      const variableValueTypes = new Map(
+        indeterminateVariables.map((v) => [
+          variableAssumptionKey(v.line, v.name),
+          v.valueType,
+        ]),
+      )
+      tab.variableAssumptions = pruneVariableAssumptions(
+        tab.variableAssumptions ?? {},
+        validVarKeys,
+        variableValueTypes,
+      )
     }
 
     const variableAssumptions = tab
