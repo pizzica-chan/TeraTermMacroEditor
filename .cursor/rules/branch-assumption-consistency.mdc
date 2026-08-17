@@ -1,24 +1,28 @@
 ---
-description: 未確定 if/elseif のユーザー仮定を静的評価全体へ一貫して反映し、実行系へ混入させない
+description: 未確定 if/elseif と未確定変数のユーザー仮定を静的評価へ一貫反映し、実行系へ混入させない
 globs:
   - src/ttl/evaluator.ts
   - src/ttl/branchAssumptions.ts
+  - src/ttl/variableAssumptions.ts
   - src/ttl/analysisLimitations.ts
   - src/app/analysisCoordinator.ts
   - src/app/dryRunController.ts
   - src/main.ts
   - src/editor/branchAssumptionDecorations.ts
+  - src/editor/variableAssumptionDecorations.ts
   - src/ui/sidePanel.ts
   - scripts/test-branch-assumptions.ts
+  - scripts/test-variable-assumptions.ts
 alwaysApply: false
 ---
 
-# 分岐仮定の整合性
+# 分岐仮定・変数仮定の整合性
 
-`branchAssumptions` は「現在のソースの行番号（1-based）→ True/False」であり、
-送信データ・静的な変数環境・ホバー表示だけに適用する。
+`branchAssumptions` は「現在のソースの行番号（1-based）→ True/False」、
+`variableAssumptions` は「`${行番号}:${変数名}` → 入力テキスト」であり、
+いずれも送信データ・静的な変数環境・ホバー表示だけに適用する。
 
-## 必須の不変条件
+## 必須の不変条件（分岐仮定）
 
 - True は then、False は後続 elseif/else を選択し、代入・include・send を同じ経路で評価する。
 - elseif の True 指定はその分岐を選ぶ指定であり、先行条件が未選択でも選択経路を確定扱いにする。
@@ -26,27 +30,39 @@ alwaysApply: false
 - else を確定経路にできるのは、先行する全 if/elseif がリテラルまたは仮定で False と確定した場合だけ。
 - 未仮定の条件が一つでも残る経路では、従来の保守的評価を維持する。
 - 行番号キーを include 先へ引き継がない。同じ Lx でも別ソース。リンク先自身の仮定だけを使う。
-- 親で選択した include 経路の代入は親 env、送信データ、ホバーへ反映する。
+
+## 必須の不変条件（変数仮定）
+
+- 仮定は `processLine` の後（その行で生まれた未確定値は次行以降へ反映）に適用する。
+- 未確定変数の収集は仮定なし評価の beforeLine / afterLine を使う（UI リストは仮定後も残す）。
+- `result` / `timeout` / `param` 等のシステム変数は仮定対象にしない。
+- 整数仮定は TTL 整数として解釈できない入力を保存・適用しない。
+- 行番号キーを include 先へ引き継がない。リンク先自身の仮定だけを使う。
+- 親の include 経路で得た変数は親 env・送信データ・ホバーへ反映する。
+
+## 共通の不変条件
+
 - フロー図と `dryRun.ts` / `dryRunController.ts` には仮定を適用しない。実行時条件と静的な仮定を混同しない。
 - エディタ表示には「仮定」であることを明記し、実行結果のように見せない。
-- 未確定分岐の True/False 選択 UI と include リンク UI は「前提」タブにまとめる（送信データ・ドライラン・フロー・変数タブには出さない）。
-- 前提タブと送信データタブでは未選択分岐とタブ未指定 include を警告する。
-- フローとドライラン開始時はタブ未指定 include だけを警告し、分岐仮定の選択状況は参照しない。
+- 未確定分岐・未確定変数の入力 UI と include リンク UI は「前提」タブにまとめる（送信データ・ドライラン・フロー・変数タブには出さない）。
+- 前提タブと送信データタブでは未仮定の分岐・変数とタブ未指定 include を警告する。
+- フローとドライラン開始時はタブ未指定 include だけを警告し、分岐・変数仮定の選択状況は参照しない。
 
 ## 実装の要点（配線）
 
-- `analysisCoordinator.ts` … `evaluateTTL` へ `branchAssumptions` を渡す経路、include 解決時のリンク先仮定、limitation 収集
+- `analysisCoordinator.ts` … `evaluateTTL` へ `branchAssumptions` / `variableAssumptions` を渡す経路、include 解決時のリンク先仮定、limitation 収集
 - `dryRunController.ts` … スナップショット／ドライラン開始に静的仮定を混入させない（実行時プロンプトのみ）
 
 ## 変更時の横展開確認
 
-ブロック if、単行 if、elseif、else、ネスト、include、`end`、True/False/クリアを確認する。
+ブロック if、単行 if、elseif、else、ネスト、include、`end`、True/False/クリア、inputbox/getenv/random 等を確認する。
 特に制御フロー変更では、送信データだけでなく `beforeLine` と include 後の env も確認する。
 
 ```bash
 npm run test:branch-assumptions
+npm run test:variable-assumptions
 npm run test:conditional-end
 npm run test:regression
 ```
 
-回帰ケースは `scripts/test-branch-assumptions.ts` に追加する。
+回帰ケースは `scripts/test-branch-assumptions.ts` と `scripts/test-variable-assumptions.ts` に追加する。

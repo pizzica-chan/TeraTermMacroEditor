@@ -16,6 +16,11 @@ import {
   applyBranchAssumptionDecorations,
   type BranchAssumptionDecoration,
 } from './branchAssumptionDecorations'
+import {
+  variableAssumptionDecorationExtension,
+  applyVariableAssumptionDecorations,
+  type VariableAssumptionDecoration,
+} from './variableAssumptionDecorations'
 import { includeGraphRevisionExtension, bumpIncludeGraphRevision, bumpAnalysisCacheRevision } from '../ttl/analysisContext'
 import { createEditorHistoryExtension, PROGRAM_REPLACE_USER_EVENT } from './editorHistory'
 
@@ -67,6 +72,7 @@ export interface EditorInstance {
   gotoLine: (line: number) => void
   setIncludeDecorations: (info: IncludeDecorationInfo | null) => void
   setBranchAssumptionDecorations: (assumptions: BranchAssumptionDecoration[] | null) => void
+  setVariableAssumptionDecorations: (assumptions: VariableAssumptionDecoration[] | null) => void
   notifyIncludeGraphChanged: () => void
   notifyAnalysisCacheChanged: () => void
   setExecutionLine: (line: number | null, waiting?: boolean) => void
@@ -104,6 +110,7 @@ function buildExtensions(onDocChange: (text: string) => void): Extension[] {
     valueTooltipExtension,
     includeDecorationExtension,
     branchAssumptionDecorationExtension,
+    variableAssumptionDecorationExtension,
     executionDecorationExtension,
     includeGraphRevisionExtension,
     ttlAutocompletion,
@@ -230,6 +237,9 @@ export function createEditor(parent: HTMLElement, initialText = SAMPLE_MACRO): E
     },
     setBranchAssumptionDecorations(assumptions) {
       applyBranchAssumptionDecorations(view, assumptions)
+    },
+    setVariableAssumptionDecorations(assumptions) {
+      applyVariableAssumptionDecorations(view, assumptions)
     },
     notifyIncludeGraphChanged() {
       bumpIncludeGraphRevision(view)

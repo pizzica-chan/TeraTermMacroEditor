@@ -287,6 +287,7 @@ export function createDryRunController(host: DryRunControllerHost) {
         const limitations = host.collectAnalysisLimitations(tab, currentSource)
         const dryRunLimitations: AnalysisLimitations = {
           unassumedBranches: [],
+          unassumedVariables: [],
           unlinkedIncludes: limitations.unlinkedIncludes,
         }
         if (

@@ -113,6 +113,8 @@ export interface IncludeResolver {
   resolverForLinkedTab(tabId: string): IncludeResolver | null
   /** 静的評価用。リンク先ソース自身の分岐仮定（親ソースの行番号仮定は流用しない） */
   getBranchAssumptions?(tabId: string): ReadonlyMap<number, boolean> | undefined
+  /** 静的評価用。リンク先ソース自身の変数仮定（親ソースの行番号仮定は流用しない） */
+  getVariableAssumptions?(tabId: string): Map<number, Map<string, string>> | undefined
 }
 
 export interface AnalyzeOptions {

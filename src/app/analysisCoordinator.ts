@@ -6,6 +6,13 @@ import {
   pruneBranchAssumptions,
 } from '../ttl/branchAssumptions'
 import {
+  collectIndeterminateVariables,
+  variableAssumptionsFromRecord,
+  pruneVariableAssumptions,
+  variableAssumptionKey,
+  hasVariableAssumptions,
+} from '../ttl/variableAssumptions'
+import {
   type AnalysisLimitations,
 } from '../ttl/analysisLimitations'
 import {
@@ -107,6 +114,14 @@ export function createIncludeResolver(
         ? branchAssumptionsFromRecord(linkedTab.branchAssumptions)
         : undefined
     },
+    getVariableAssumptions(tabId: string) {
+      // 変数仮定も静的表示専用。ドライラン用スナップショットには混入させない。
+      if (dryRunSnapshot) return undefined
+      const linkedTab = host.allTabs.find((t) => t.id === tabId)
+      return linkedTab
+        ? variableAssumptionsFromRecord(linkedTab.variableAssumptions)
+        : undefined
+    },
   }
 }
 
@@ -115,9 +130,11 @@ export function collectWorkspaceAnalysisLimitations(
   originTab: EditorTab,
   originSource: string,
   originBranches?: ReturnType<typeof collectIndeterminateIfBranches>,
+  originVariables?: ReturnType<typeof collectIndeterminateVariables>,
 ): AnalysisLimitations {
   const limitations: AnalysisLimitations = {
     unassumedBranches: [],
+    unassumedVariables: [],
     unlinkedIncludes: [],
   }
   const visited = new Set<string>()
@@ -141,21 +158,51 @@ export function collectWorkspaceAnalysisLimitations(
       }
     }
 
+    const isOriginTab = current.tab.id === originTab.id
+    const skipEval = isOriginTab && originBranches !== undefined && originVariables !== undefined
+    const evalForCollect = skipEval
+      ? null
+      : evaluateTTL(current.source, {
+          includeResolver: createIncludeResolver(host, current.tab),
+        })
+    const evalForLimitations = () =>
+      evalForCollect
+      ?? evaluateTTL(current.source, {
+        includeResolver: createIncludeResolver(host, current.tab),
+      })
+
     const branches =
-      current.tab.id === originTab.id && originBranches
+      isOriginTab && originBranches !== undefined
         ? originBranches
-        : collectIndeterminateIfBranches(
-            current.source,
-            evaluateTTL(current.source, {
-              includeResolver: createIncludeResolver(host, current.tab),
-            }).beforeLine,
-          )
+        : collectIndeterminateIfBranches(current.source, evalForLimitations().beforeLine)
     for (const branch of branches) {
       if (current.tab.branchAssumptions?.[String(branch.line)] === undefined) {
         limitations.unassumedBranches.push({
           sourceName: current.tab.fileName,
           line: branch.line,
           conditionText: branch.conditionText,
+        })
+      }
+    }
+
+    const variables =
+      isOriginTab && originVariables !== undefined
+        ? originVariables
+        : (() => {
+            const evalResult = evalForLimitations()
+            return collectIndeterminateVariables(
+              current.source,
+              evalResult.beforeLine,
+              evalResult.afterLine,
+            )
+          })()
+    for (const variable of variables) {
+      const key = variableAssumptionKey(variable.line, variable.name)
+      if (current.tab.variableAssumptions?.[key] === undefined) {
+        limitations.unassumedVariables.push({
+          sourceName: current.tab.fileName,
+          line: variable.line,
+          name: variable.name,
         })
       }
     }
@@ -209,12 +256,15 @@ export interface AnalysisCoordinatorHost {
   isEditorValue(text: string): boolean
   notifyIncludeGraphChanged(): void
   setBranchAssumptionDecorations(items: Array<{ line: number; value: boolean }>): void
+  setVariableAssumptionDecorations(items: Array<{ line: number; labels: string[] }>): void
   notifyAnalysisCacheChanged(): void
   updateSidePanel(payload: {
     analysis: ReturnType<typeof analyzeTTL>
     sendEntries: ReturnType<typeof evaluateTTL>['sendEntries']
     indeterminateBranches: ReturnType<typeof collectIndeterminateIfBranches>
     branchAssumptions: Record<string, boolean>
+    indeterminateVariables: ReturnType<typeof collectIndeterminateVariables>
+    variableAssumptions: Record<string, string>
     analysisLimitations: AnalysisLimitations
   }): void
   updateFlowchart(model: ReturnType<typeof buildFlowchart> | null): void
@@ -268,9 +318,33 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
       externallyUsedNames: crossTab?.externallyUsed,
       externallyDeclaredVars: crossTab?.externallyDeclared,
     })
-    const evaluationForBranches = evaluateTTL(text, {
+    const evaluationForCollect = evaluateTTL(text, {
       includeResolver: resolver,
     })
+    const indeterminateVariables = collectIndeterminateVariables(
+      text,
+      evaluationForCollect.beforeLine,
+      evaluationForCollect.afterLine,
+    )
+
+    if (tab) {
+      const validVarKeys = new Set(
+        indeterminateVariables.map((v) => variableAssumptionKey(v.line, v.name)),
+      )
+      tab.variableAssumptions = pruneVariableAssumptions(tab.variableAssumptions ?? {}, validVarKeys)
+    }
+
+    const variableAssumptions = tab
+      ? variableAssumptionsFromRecord(tab.variableAssumptions)
+      : new Map<number, Map<string, string>>()
+
+    const evaluationForBranches =
+      hasVariableAssumptions(variableAssumptions)
+        ? evaluateTTL(text, {
+            includeResolver: resolver,
+            variableAssumptions,
+          })
+        : evaluationForCollect
     const indeterminateBranches = collectIndeterminateIfBranches(
       text,
       evaluationForBranches.beforeLine,
@@ -288,6 +362,7 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
       branchAssumptions.size > 0
         ? evaluateTTL(text, {
             includeResolver: resolver,
+            variableAssumptions,
             branchAssumptions,
           })
         : evaluationForBranches
@@ -295,10 +370,22 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
     if (!host.isEditorValue(text)) return
 
     const analysisLimitations = tab
-      ? collectWorkspaceAnalysisLimitations(host.includeHost, tab, text, indeterminateBranches)
-      : { unassumedBranches: [], unlinkedIncludes: [] }
+      ? collectWorkspaceAnalysisLimitations(
+          host.includeHost,
+          tab,
+          text,
+          indeterminateBranches,
+          indeterminateVariables,
+        )
+      : { unassumedBranches: [], unassumedVariables: [], unlinkedIncludes: [] }
     host.setBranchAssumptionDecorations(
       [...branchAssumptions].map(([line, value]) => ({ line, value })),
+    )
+    host.setVariableAssumptionDecorations(
+      [...variableAssumptions].map(([line, names]) => ({
+        line,
+        labels: [...names].map(([name, text]) => `${name}=${text}`),
+      })),
     )
     setAnalysisCache(text, result, evaluation)
     host.notifyAnalysisCacheChanged()
@@ -308,6 +395,8 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
       sendEntries: evaluation.sendEntries,
       indeterminateBranches,
       branchAssumptions: tab?.branchAssumptions ?? {},
+      indeterminateVariables,
+      variableAssumptions: tab?.variableAssumptions ?? {},
       analysisLimitations,
     })
     host.updateFlowchart(buildFlowchartForActiveTab(text))

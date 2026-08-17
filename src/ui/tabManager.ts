@@ -18,6 +18,8 @@ export interface EditorTab {
   includeBindings: Record<string, string>
   /** 未確定 if/elseif 行番号（文字列キー）→ ユーザー仮定の真偽 */
   branchAssumptions?: Record<string, boolean>
+  /** 未確定変数（`${行番号}:${変数名}`）→ ユーザー仮定の入力テキスト */
+  variableAssumptions?: Record<string, string>
 }
 
 let nextTabId = 1
@@ -163,6 +165,7 @@ export class TabManager {
     savedContent?: string
     includeBindings?: Record<string, string>
     branchAssumptions?: Record<string, boolean>
+    variableAssumptions?: Record<string, string>
     activate?: boolean
   }): EditorTab | null {
     if (!this.canAddTab()) {
@@ -184,6 +187,7 @@ export class TabManager {
       savedContent: options.savedContent ?? content,
       includeBindings: options.includeBindings ? { ...options.includeBindings } : {},
       branchAssumptions: options.branchAssumptions ? { ...options.branchAssumptions } : {},
+      variableAssumptions: options.variableAssumptions ? { ...options.variableAssumptions } : {},
     }
 
     this.tabs.push(tab)
@@ -328,6 +332,7 @@ export class TabManager {
       newline: tab.docSettings.newline,
       includeBindings: { ...tab.includeBindings },
       branchAssumptions: { ...(tab.branchAssumptions ?? {}) },
+      variableAssumptions: { ...(tab.variableAssumptions ?? {}) },
     }))
     return {
       version: 1,
@@ -360,6 +365,7 @@ export class TabManager {
         savedContent: saved.savedContent,
         includeBindings: migrateIncludeBindings(saved.content, { ...saved.includeBindings }),
         branchAssumptions: { ...(saved.branchAssumptions ?? {}) },
+        variableAssumptions: { ...(saved.variableAssumptions ?? {}) },
       })
     }
 

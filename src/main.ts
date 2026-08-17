@@ -13,6 +13,7 @@ import { TabManager, type EditorTab } from './ui/tabManager'
 import { findIncludeRefs } from './ttl/includeRefs'
 import { createIncludePanel } from './ui/includePanel'
 import { clearAnalysisCache } from './ttl/analysisContext'
+import { variableAssumptionKey } from './ttl/variableAssumptions'
 import type { TextEncoding, NewlineType } from './text/types'
 import { ENCODING_LABELS, NEWLINE_LABELS } from './text/types'
 import { loadAppSettings, saveAppSettings } from './storage/appSettings'
@@ -182,6 +183,7 @@ const analysis = createAnalysisCoordinator({
   isEditorValue: (text) => editor.getValue() === text,
   notifyIncludeGraphChanged: () => editor.notifyIncludeGraphChanged(),
   setBranchAssumptionDecorations: (items) => editor.setBranchAssumptionDecorations(items),
+  setVariableAssumptionDecorations: (items) => editor.setVariableAssumptionDecorations(items),
   notifyAnalysisCacheChanged: () => editor.notifyAnalysisCacheChanged(),
   updateSidePanel: (payload) => sidePanel.update(payload),
   updateFlowchart: (model) => sidePanel.updateFlowchart(model),
@@ -461,6 +463,18 @@ sidePanel.onBranchAssumptionChange((line, value) => {
   if (value === null) delete next[key]
   else next[key] = value
   tab.branchAssumptions = next
+  schedulePersistWorkspaceSession()
+  analysis.runAnalysisNow(editor.getValue())
+})
+
+sidePanel.onVariableAssumptionChange((line, name, value) => {
+  const tab = tabManager.activeTab
+  if (!tab) return
+  const next = { ...(tab.variableAssumptions ?? {}) }
+  const key = variableAssumptionKey(line, name)
+  if (value === null) delete next[key]
+  else next[key] = value
+  tab.variableAssumptions = next
   schedulePersistWorkspaceSession()
   analysis.runAnalysisNow(editor.getValue())
 })

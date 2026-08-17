@@ -61,7 +61,7 @@ import {
   resolveJumpLabelName,
 } from './subroutine'
 
-export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default'
+export type ValueOrigin = 'literal' | 'user-input' | 'dialog-result' | 'match-received' | 'system-default' | 'assumed'
 
 export type RuntimeScalar =
   | {
@@ -94,7 +94,7 @@ export interface HoverInfo {
   display: string
   note?: string
   /** 表示スタイルの区別用 */
-  valueKind?: 'known' | 'runtime' | 'system-default' | 'unset' | 'label'
+  valueKind?: 'known' | 'runtime' | 'system-default' | 'unset' | 'label' | 'assumed'
   isSystem?: boolean
 }
 
@@ -384,8 +384,64 @@ function combineOrigins(a?: ValueOrigin, b?: ValueOrigin): ValueOrigin | undefin
   if (a === 'user-input' || b === 'user-input') return 'user-input'
   if (a === 'match-received' || b === 'match-received') return 'match-received'
   if (a === 'dialog-result' || b === 'dialog-result') return 'dialog-result'
+  if (a === 'assumed' || b === 'assumed') return 'assumed'
   if (a === 'literal' || b === 'literal') return 'literal'
   return a ?? b
+}
+
+function isIndeterminateScalar(v: RuntimeScalar): boolean {
+  if (v.origin === 'assumed') return false
+  if (v.kind === 'int') {
+    return v.origin === 'dialog-result' || v.hint !== undefined
+  }
+  if (v.hasUnresolvedParts) return true
+  if (isRuntimeOrigin(v.origin)) return true
+  if (v.hint !== undefined && isCommandOutputHint(v.hint)) return true
+  return v.value === '' && v.hint !== undefined
+}
+
+/** 静的に値が確定しないスカラーか（変数仮定の収集・上書き判定用） */
+export function isIndeterminateRuntimeScalar(v: RuntimeValue): boolean {
+  if (v.kind !== 'int' && v.kind !== 'str') return false
+  return isIndeterminateScalar(v)
+}
+
+function stripAssumedStringQuotes(text: string): string {
+  if (text.length >= 2) {
+    const q = text[0]
+    if ((q === "'" || q === '"') && text[text.length - 1] === q) {
+      return text.slice(1, -1)
+    }
+  }
+  return text
+}
+
+function applyVariableAssumptionsForLine(env: Env, lineNum: number, opts: EvalOptions): void {
+  const names = opts.variableAssumptions?.get(lineNum)
+  if (!names || names.size === 0) return
+  for (const [name, text] of names) {
+    const key = name.toLowerCase()
+    const current = env.get(key)
+    if (current?.kind !== 'int' && current?.kind !== 'str') continue
+    if (!isIndeterminateScalar(current) && current.origin !== 'assumed') continue
+    if (current.kind === 'int') {
+      const n = parseTtlIntegerLiteral(text.trim())
+      if (n === undefined) continue
+      setScalar(env, key, {
+        kind: 'int',
+        value: n,
+        origin: 'assumed',
+        setBy: current.setBy,
+      })
+    } else {
+      setScalar(env, key, {
+        kind: 'str',
+        value: stripAssumedStringQuotes(text),
+        origin: 'assumed',
+        sensitive: current.sensitive,
+      })
+    }
+  }
 }
 
 function runtimeSegmentLabel(origin: ValueOrigin): string {
@@ -397,6 +453,8 @@ function runtimeSegmentLabel(origin: ValueOrigin): string {
     case 'dialog-result':
       // origin 名は歴史的。ダイアログ以外の実行時依存 result にも使う
       return '（実行時）'
+    case 'assumed':
+      return '（仮定）'
     default:
       return '（実行時）'
   }
@@ -1312,6 +1370,8 @@ interface EvalOptions {
   callStack: CallFrame[]
   /** 未確定 if/elseif 行番号（1-based）→ ユーザーが選んだ真偽 */
   branchAssumptions?: Map<number, boolean>
+  /** 未確定変数のユーザー仮定（行番号 1-based → 変数名 → 入力テキスト） */
+  variableAssumptions?: Map<number, Map<string, string>>
   knownLabels?: ReadonlySet<string>
   /**
    * ホバー用の投機実行。親の送信・ループ制御・ジャンプと隔離する。
@@ -1558,6 +1618,9 @@ function processStatement(
           branchAssumptions: childBranchAssumptions
             ? new Map(childBranchAssumptions)
             : undefined,
+          variableAssumptions: linkedTabId
+            ? opts.includeResolver.getVariableAssumptions?.(linkedTabId)
+            : undefined,
         })
         if (child.stopAll) return { nextIdx: lineIdx, stopAll: true }
       }
@@ -1740,6 +1803,7 @@ function processStatement(
   }
 
   processLine(env, line, lineNum, opts.knownLabels)
+  applyVariableAssumptionsForLine(env, lineNum, opts)
   return { nextIdx: lineIdx }
 }
 
@@ -1754,6 +1818,8 @@ export interface EvaluateOptions {
   macroArgv?: MacroArgvInput
   /** 未確定 if/elseif のユーザー仮定（行番号 1-based → 真偽） */
   branchAssumptions?: Map<number, boolean>
+  /** 未確定変数のユーザー仮定（行番号 1-based → 変数名 → 入力テキスト） */
+  variableAssumptions?: Map<number, Map<string, string>>
 }
 
 export interface EvaluationResult {
@@ -1798,6 +1864,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
     sendEntries,
     callStack: [],
     branchAssumptions: options?.branchAssumptions,
+    variableAssumptions: options?.variableAssumptions,
     knownLabels,
   }
 
@@ -2016,6 +2083,19 @@ function resolveVarHover(name: string, env: Env): HoverInfo {
     }
   }
 
+  if ((v.kind === 'int' || v.kind === 'str') && v.origin === 'assumed') {
+    const typeLabel = v.kind === 'int' ? 'integer' : 'string'
+    const display = v.kind === 'int' ? String(v.value) : `'${v.value}'`
+    return {
+      name,
+      type: typeLabel,
+      display: `仮定: ${display}`,
+      note: '静的解析用のユーザー仮定です（実行時の値ではありません）',
+      valueKind: 'assumed',
+      isSystem,
+    }
+  }
+
   if (v.kind === 'str' && (v.hint || v.origin === 'user-input' || v.origin === 'match-received')) {
     const display =
       v.hint ??
@@ -2143,6 +2223,18 @@ function resolveArrayHover(
 
   if (index !== undefined && index !== 'var') {
     const el = arr.elements.get(index)
+    if (el?.kind === 'str' || el?.kind === 'int') {
+      if (el.origin === 'assumed') {
+        const display = el.kind === 'int' ? String(el.value) : `'${el.value}'`
+        return {
+          name: `${name}[${index}]`,
+          type: el.kind === 'int' ? 'integer' : 'string',
+          display: `仮定: ${display}`,
+          note: '静的解析用のユーザー仮定です（実行時の値ではありません）',
+          valueKind: 'assumed',
+        }
+      }
+    }
     if (el?.kind === 'str') {
       if (el.hint || isRuntimeOrigin(el.origin)) {
         return {

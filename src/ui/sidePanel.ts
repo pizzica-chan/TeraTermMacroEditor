@@ -1,5 +1,10 @@
 import type { AnalysisResult, VariableInfo } from '../ttl/analyzer'
 import type { IndeterminateIfBranch } from '../ttl/branchAssumptions'
+import type { IndeterminateVariable } from '../ttl/variableAssumptions'
+import {
+  isValidVariableAssumptionInput,
+  variableAssumptionKey,
+} from '../ttl/variableAssumptions'
 import type { SendEntry } from '../ttl/evaluator'
 import { buildDryRunPlainTextForCopy, formatDryRunEventMessage, type DryRunEvent, type DryRunState } from '../ttl/dryRun'
 import {
@@ -22,6 +27,8 @@ export function createSidePanel(
     sendEntries: SendEntry[]
     indeterminateBranches?: IndeterminateIfBranch[]
     branchAssumptions?: Record<string, boolean>
+    indeterminateVariables?: IndeterminateVariable[]
+    variableAssumptions?: Record<string, string>
     analysisLimitations?: AnalysisLimitations
   }) => void
   updateDryRun: (state: DryRunState | null) => void
@@ -38,6 +45,7 @@ export function createSidePanel(
   onFlowchartAssignmentsChange: (handler: (show: boolean) => void) => void
   onClearDryRun: (handler: () => void) => void
   onBranchAssumptionChange: (handler: (line: number, value: boolean | null) => void) => void
+  onVariableAssumptionChange: (handler: (line: number, name: string, value: string | null) => void) => void
 } {
   let gotoHandler: ((line: number) => void) | null = null
   let dryRunGotoHandler: ((location: string) => void) | null = null
@@ -47,12 +55,15 @@ export function createSidePanel(
   let flowchartAssignmentsHandler: ((show: boolean) => void) | null = null
   let clearDryRunHandler: (() => void) | null = null
   let branchAssumptionHandler: ((line: number, value: boolean | null) => void) | null = null
+  let variableAssumptionHandler: ((line: number, name: string, value: string | null) => void) | null = null
   let activeTab: SidePanelTab = 'setup'
   let cached: {
     analysis: AnalysisResult
     sendEntries: SendEntry[]
     indeterminateBranches: IndeterminateIfBranch[]
     branchAssumptions: Record<string, boolean>
+    indeterminateVariables: IndeterminateVariable[]
+    variableAssumptions: Record<string, string>
     analysisLimitations: AnalysisLimitations
   } | null = null
   let dryRunState: DryRunState | null = null
@@ -135,6 +146,15 @@ export function createSidePanel(
   includeMount.className = 'include-mount'
   includeMount.id = 'include-mount'
 
+  const variableSection = document.createElement('div')
+  variableSection.className = 'variable-assumptions-section'
+  variableSection.id = 'variable-assumptions-section'
+  variableSection.innerHTML = `
+    <h2>未確定変数</h2>
+    <p class="branch-assumptions-hint">静的に値が決まらない変数です。値を入力すると送信データ・変数ホバーに反映されます。ドライランの実行値は変わりません。</p>
+    <div class="variable-assumptions-list" id="variable-assumptions-list"></div>
+  `
+
   const branchSection = document.createElement('div')
   branchSection.className = 'branch-assumptions-section'
   branchSection.id = 'branch-assumptions-section'
@@ -144,7 +164,7 @@ export function createSidePanel(
     <div class="branch-assumptions-list" id="branch-assumptions-list"></div>
   `
 
-  setupPanel.append(branchSection, includeMount)
+  setupPanel.append(variableSection, branchSection, includeMount)
   body.append(setupPanel, variableList, sendList, dryRunList, flowchartToolbar, flowchartHost, flowchartWarnings)
 
   const diagSection = document.createElement('div')
@@ -302,12 +322,19 @@ export function createSidePanel(
         return
       }
       const snapshot = cached
+      const varCount = snapshot.indeterminateVariables.length
+      const unsetVars = snapshot.indeterminateVariables.filter(
+        (variable) =>
+          snapshot.variableAssumptions[variableAssumptionKey(variable.line, variable.name)]
+            === undefined,
+      ).length
       const branchCount = snapshot.indeterminateBranches.length
       const unselected = snapshot.indeterminateBranches.filter(
         (branch) => snapshot.branchAssumptions[String(branch.line)] === undefined,
       ).length
       const unlinked = snapshot.analysisLimitations.unlinkedIncludes.length
-      statsEl.textContent = `未確定分岐 ${branchCount}（未選択 ${unselected}） / 未リンク include ${unlinked}`
+      statsEl.textContent =
+        `未確定変数 ${varCount}（未入力 ${unsetVars}） / 未確定分岐 ${branchCount}（未選択 ${unselected}） / 未リンク include ${unlinked}`
       return
     }
     if (activeTab === 'variables') {
@@ -463,11 +490,14 @@ export function createSidePanel(
     const showUnassumedBranches =
       (activeTab === 'setup' || activeTab === 'sends')
       && (limitations?.unassumedBranches.length ?? 0) > 0
+    const showUnassumedVariables =
+      (activeTab === 'setup' || activeTab === 'sends')
+      && (limitations?.unassumedVariables.length ?? 0) > 0
     const showUnlinkedIncludes =
       (activeTab === 'setup' || activeTab === 'sends' || activeTab === 'flowchart')
       && (limitations?.unlinkedIncludes.length ?? 0) > 0
     const shouldShow =
-      !!limitations && (showUnassumedBranches || showUnlinkedIncludes)
+      !!limitations && (showUnassumedBranches || showUnassumedVariables || showUnlinkedIncludes)
     analysisWarning.hidden = !shouldShow
     if (!shouldShow || !limitations) {
       analysisWarning.innerHTML = ''
@@ -475,6 +505,11 @@ export function createSidePanel(
     }
 
     const items: string[] = []
+    if (showUnassumedVariables) {
+      items.push(
+        `<li>値が未仮定の変数: ${limitations.unassumedVariables.length} 件</li>`,
+      )
+    }
     if (showUnassumedBranches) {
       items.push(
         `<li>True/False 未選択の分岐: ${limitations.unassumedBranches.length} 件</li>`,
@@ -491,10 +526,10 @@ export function createSidePanel(
       <ul>${items.join('')}</ul>
       <div class="analysis-limitations-help">${
         activeTab === 'flowchart'
-          ? 'include の参照タブを指定してください。分岐仮定はフロー表示に影響しません。'
+          ? 'include の参照タブを指定してください。分岐仮定・変数仮定はフロー表示に影響しません。'
           : activeTab === 'sends'
-            ? '「前提」タブで未確定分岐の True/False と include の参照タブを指定してください。'
-            : '未確定分岐の True/False と include の参照タブを指定してください。'
+            ? '「前提」タブで未確定変数の値、未確定分岐の True/False、include の参照タブを指定してください。'
+            : '未確定変数の値、未確定分岐の True/False、include の参照タブを指定してください。'
       }</div>
     `
   }
@@ -551,6 +586,102 @@ export function createSidePanel(
     bindPanelGotoItems(list)
   }
 
+  function renderVariableAssumptions(
+    variables: IndeterminateVariable[],
+    assumptions: Record<string, string>,
+  ) {
+    const section = container.querySelector<HTMLElement>('#variable-assumptions-section')!
+    const list = container.querySelector<HTMLElement>('#variable-assumptions-list')!
+    if (activeTab !== 'setup') {
+      return
+    }
+    section.hidden = false
+    if (variables.length === 0) {
+      list.innerHTML = '<div class="empty-state">未確定変数はありません</div>'
+      return
+    }
+    list.innerHTML = variables
+      .map((variable) => {
+        const key = variableAssumptionKey(variable.line, variable.name)
+        const assumed = assumptions[key]
+        const hasValue = assumed !== undefined
+        const clearHidden = hasValue ? '' : ' hidden'
+        const typeLabel = variable.valueType === 'integer' ? 'integer' : 'string'
+        return `
+          <div class="variable-assumption-item panel-goto-item" data-line="${variable.line}" title="L${variable.line} へ移動">
+            <div class="branch-assumption-head">
+              <span class="branch-assumption-line">L${variable.line}</span>
+              <span class="branch-assumption-cmd">${escapeHtml(variable.name)}</span>
+              <span class="variable-assumption-type">${typeLabel}</span>
+            </div>
+            <div class="branch-assumption-cond">${escapeHtml(variable.reason)}</div>
+            <div class="variable-assumption-actions">
+              <input
+                type="text"
+                class="variable-assumption-input"
+                data-line="${variable.line}"
+                data-name="${escapeAttr(variable.name)}"
+                data-type="${variable.valueType}"
+                value="${escapeAttr(assumed ?? '')}"
+                placeholder="${variable.valueType === 'integer' ? '整数を入力' : '文字列を入力'}"
+                spellcheck="false"
+              />
+              <button type="button" class="branch-assumption-btn apply" data-line="${variable.line}" data-name="${escapeAttr(variable.name)}">適用</button>
+              <button type="button" class="branch-assumption-btn clear${clearHidden}" data-line="${variable.line}" data-name="${escapeAttr(variable.name)}" data-value="clear">クリア</button>
+            </div>
+          </div>
+        `
+      })
+      .join('')
+
+    const commitInput = (input: HTMLInputElement, mode: 'blur' | 'apply' | 'clear' = 'blur') => {
+      const line = Number(input.dataset.line)
+      const name = input.dataset.name ?? ''
+      if (!Number.isFinite(line) || line <= 0 || !name) return
+      const key = variableAssumptionKey(line, name)
+      const current = assumptions[key]
+      const next = input.value
+      if (mode === 'clear') {
+        if (current !== undefined) variableAssumptionHandler?.(line, name, null)
+        return
+      }
+      const valueType = input.dataset.type === 'integer' ? 'integer' : 'string'
+      if (next.trim() === '') {
+        if (current !== undefined) variableAssumptionHandler?.(line, name, null)
+        return
+      }
+      if (!isValidVariableAssumptionInput(valueType, next)) {
+        if (mode === 'blur') input.value = current ?? ''
+        return
+      }
+      if (mode === 'blur' && next === (current ?? '')) return
+      variableAssumptionHandler?.(line, name, next)
+    }
+
+    for (const input of list.querySelectorAll<HTMLInputElement>('.variable-assumption-input')) {
+      input.addEventListener('click', (e) => e.stopPropagation())
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation()
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          commitInput(input, 'apply')
+        }
+      })
+      input.addEventListener('blur', () => commitInput(input, 'blur'))
+    }
+    for (const btn of list.querySelectorAll<HTMLButtonElement>('.branch-assumption-btn')) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const item = btn.closest('.variable-assumption-item')
+        const input = item?.querySelector<HTMLInputElement>('.variable-assumption-input')
+        if (!input) return
+        if (btn.dataset.value === 'clear') commitInput(input, 'clear')
+        else commitInput(input, 'apply')
+      })
+    }
+    bindPanelGotoItems(list)
+  }
+
   function renderDiagnostics(analysis: AnalysisResult) {
     const errors = analysis.diagnostics.filter((d) => d.severity === 'error').length
     const warnings = analysis.diagnostics.filter((d) => d.severity === 'warning').length
@@ -573,6 +704,8 @@ export function createSidePanel(
     sendEntries: SendEntry[]
     indeterminateBranches: IndeterminateIfBranch[]
     branchAssumptions: Record<string, boolean>
+    indeterminateVariables: IndeterminateVariable[]
+    variableAssumptions: Record<string, string>
     analysisLimitations: AnalysisLimitations
   }) {
     const {
@@ -580,6 +713,8 @@ export function createSidePanel(
       sendEntries,
       indeterminateBranches,
       branchAssumptions,
+      indeterminateVariables,
+      variableAssumptions,
       analysisLimitations,
     } = data
     updateStats(analysis, sendEntries)
@@ -592,6 +727,7 @@ export function createSidePanel(
       renderSendList(sendEntries)
     }
     if (activeTab === 'setup') {
+      renderVariableAssumptions(indeterminateVariables, variableAssumptions)
       renderBranchAssumptions(indeterminateBranches, branchAssumptions)
     }
     if (activeTab !== 'flowchart') {
@@ -711,6 +847,9 @@ export function createSidePanel(
     onBranchAssumptionChange(handler) {
       branchAssumptionHandler = handler
     },
+    onVariableAssumptionChange(handler) {
+      variableAssumptionHandler = handler
+    },
     showTab(tab) {
       setTab(tab)
       if (cached) render(cached)
@@ -720,13 +859,17 @@ export function createSidePanel(
       sendEntries,
       indeterminateBranches = [],
       branchAssumptions = {},
-      analysisLimitations = { unassumedBranches: [], unlinkedIncludes: [] },
+      indeterminateVariables = [],
+      variableAssumptions = {},
+      analysisLimitations = { unassumedBranches: [], unassumedVariables: [], unlinkedIncludes: [] },
     }) {
       cached = {
         analysis,
         sendEntries,
         indeterminateBranches,
         branchAssumptions,
+        indeterminateVariables,
+        variableAssumptions,
         analysisLimitations,
       }
       render(cached)

@@ -34,7 +34,7 @@ function createTooltipDom(info: {
   type: string
   display: string
   note?: string
-  valueKind?: 'known' | 'runtime' | 'system-default' | 'unset' | 'label'
+  valueKind?: 'known' | 'runtime' | 'system-default' | 'unset' | 'label' | 'assumed'
   isSystem?: boolean
 }): HTMLElement {
   const dom = document.createElement('div')

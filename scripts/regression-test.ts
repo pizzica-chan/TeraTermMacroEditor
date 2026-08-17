@@ -6,6 +6,7 @@ import { evaluateTTL } from '../src/ttl/evaluator'
 import { includeLoopIterationBindingKey } from '../src/ttl/includeRefs'
 import { runConditionalEndStaticTests } from './test-conditional-end-static'
 import { runBranchAssumptionTests } from './test-branch-assumptions'
+import { runVariableAssumptionTests } from './test-variable-assumptions'
 
 let passed = 0
 let failed = 0
@@ -161,6 +162,13 @@ console.log('=== B2. 未確定 if 内 end / 静的解析 ===')
 console.log('=== B3. 未確定分岐仮定（include 内代入） ===')
 {
   const r = runBranchAssumptionTests()
+  passed += r.passed
+  failed += r.failed
+}
+
+console.log('=== B4. 未確定変数仮定（送信・ホバー） ===')
+{
+  const r = runVariableAssumptionTests()
   passed += r.passed
   failed += r.failed
 }

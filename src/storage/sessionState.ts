@@ -9,6 +9,7 @@ export interface SavedTabState {
   newline: NewlineType
   includeBindings: Record<string, string>
   branchAssumptions?: Record<string, boolean>
+  variableAssumptions?: Record<string, string>
 }
 
 export interface WorkspaceSession {
@@ -26,6 +27,11 @@ function isEncoding(v: unknown): v is TextEncoding {
 
 function isNewline(v: unknown): v is NewlineType {
   return v === 'LF' || v === 'CRLF' || v === 'CR'
+}
+
+function isStringRecord(v: unknown): v is Record<string, string> {
+  if (!v || typeof v !== 'object') return false
+  return Object.values(v).every((x) => typeof x === 'string')
 }
 
 function isSavedTab(v: unknown): v is SavedTabState {
@@ -59,6 +65,9 @@ export function loadWorkspaceSession(): WorkspaceSession | null {
         if (tabIds.has(tabId)) bindings[path] = tabId
       }
       tab.includeBindings = bindings
+      tab.variableAssumptions = isStringRecord(tab.variableAssumptions)
+        ? tab.variableAssumptions
+        : {}
     }
 
     const activeTabId =
