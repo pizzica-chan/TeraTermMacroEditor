@@ -11,6 +11,7 @@ import {
   formatImportedEnvParentOptionLabel,
   importedEnvParentKey,
   pruneImportedEnvParentKey,
+  resolveImportedEnvWithParentCandidates,
   type IncludeWorkspaceHost,
 } from '../src/app/analysisCoordinator'
 import { evaluateTTL, unresolvedSourceIdsOf, type RuntimeValue } from '../src/ttl/evaluator'
@@ -1031,6 +1032,39 @@ end`
     ng('未確定 if 内の include は投機 beforeLine があれば親候補にする', {
       candidates: maybeCandidates,
       prefix: importedPrefixOf(maybeChild, maybeHost),
+    })
+  }
+
+  const cycleChild = stubTab('cycle-child')
+  const cycleParent = stubTab('cycle-parent', {
+    [normalizeIncludePath('child.ttl')]: cycleChild.id,
+  })
+  cycleChild.includeBindings = {
+    [normalizeIncludePath('parent.ttl')]: cycleParent.id,
+  }
+  const cycleHost: IncludeWorkspaceHost = {
+    allTabs: [cycleParent, cycleChild],
+    getTabContent: (tab) =>
+      tab.id === cycleParent.id
+        ? `prefix = 'from-parent'
+include 'child.ttl'
+end`
+        : `include 'parent.ttl'
+sendln prefix
+end`,
+  }
+  const cycleResolved = resolveImportedEnvWithParentCandidates(cycleHost, cycleChild)
+  const cyclePrefix = cycleResolved.importedEnv?.get('prefix')
+  if (
+    cycleResolved.candidates.length === 1
+    && cyclePrefix?.kind === 'str'
+    && cyclePrefix.value === 'from-parent'
+  ) {
+    ok('相互 include でも解析と同じ共有 state で親 env を渡す')
+  } else {
+    ng('相互 include でも解析と同じ共有 state で親 env を渡す', {
+      candidates: cycleResolved.candidates,
+      prefix: cyclePrefix,
     })
   }
 

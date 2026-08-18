@@ -252,6 +252,37 @@ export function collectImportedEnvParentCandidates(
   return collectImportedEnvParentCandidateList(host, tab, createImportedEnvResolveState())
 }
 
+function resolveImportedEnvWithParentCandidatesUsingState(
+  host: IncludeWorkspaceHost,
+  tab: EditorTab,
+  state: ImportedEnvResolveState,
+): {
+  candidates: ImportedEnvParentCandidate[]
+  importedEnv: MacroEnvironment | undefined
+  prunedParentKey: boolean
+} {
+  const candidates = collectImportedEnvParentCandidateList(host, tab, state)
+  const prunedParentKey = pruneImportedEnvParentKey(tab, candidates)
+  const importedEnv = resolveImportedEnvFromParentIncludes(host, tab, state)
+  return { candidates, importedEnv, prunedParentKey }
+}
+
+/** 解析と同じ共有 state で候補収集→解決する。相互 include のサイクルもこの経路 */
+export function resolveImportedEnvWithParentCandidates(
+  host: IncludeWorkspaceHost,
+  tab: EditorTab,
+): {
+  candidates: ImportedEnvParentCandidate[]
+  importedEnv: MacroEnvironment | undefined
+  prunedParentKey: boolean
+} {
+  return resolveImportedEnvWithParentCandidatesUsingState(
+    host,
+    tab,
+    createImportedEnvResolveState(),
+  )
+}
+
 function collectImportedEnvParentCandidateList(
   host: IncludeWorkspaceHost,
   tab: EditorTab,
@@ -345,10 +376,9 @@ function resolveImportedEnvFromParentIncludes(
   visiting: Set<string> = new Set(),
 ): MacroEnvironment | undefined {
   if (state.importedEnvByTab.has(tab.id)) return state.importedEnvByTab.get(tab.id)
-  if (visiting.has(tab.id)) {
-    state.importedEnvByTab.set(tab.id, undefined)
-    return undefined
-  }
+  // サイクルは visiting だけで止める。undefined をキャッシュすると、
+  // 候補収集が子タブを visiting に入れたあと、解決側がそれを最終結果と誤る。
+  if (visiting.has(tab.id)) return undefined
   visiting.add(tab.id)
 
   const match = pickImportedEnvParentMatch(
@@ -471,7 +501,7 @@ export function collectWorkspaceAnalysisLimitations(
   return limitations
 }
 
-/** 未使用・外部宣言の診断は全親を見る。選択した importedEnv 元は送信データとホバー専用 */
+/** 未使用・外部宣言の診断は全親を見る。選択した importedEnv 元は送信データ・ホバー・未確定変数/分岐に使う */
 export function getIncludeCrossTabContext(
   host: IncludeWorkspaceHost,
   tab: EditorTab,
@@ -603,15 +633,16 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
 
     const result = analyzeTTL(text, getEditorAnalyzeOptions())
     const importedEnvState = createImportedEnvResolveState()
-    const importedEnvParentCandidates = tab
-      ? collectImportedEnvParentCandidateList(host.includeHost, tab, importedEnvState)
-      : []
-    if (tab && pruneImportedEnvParentKey(tab, importedEnvParentCandidates)) {
-      host.schedulePersistWorkspaceSession()
-    }
-    const importedEnv = tab
-      ? resolveImportedEnvFromParentIncludes(host.includeHost, tab, importedEnvState)
+    const imported = tab
+      ? resolveImportedEnvWithParentCandidatesUsingState(
+          host.includeHost,
+          tab,
+          importedEnvState,
+        )
       : undefined
+    if (imported?.prunedParentKey) host.schedulePersistWorkspaceSession()
+    const importedEnvParentCandidates = imported?.candidates ?? []
+    const importedEnv = imported?.importedEnv
     const evaluationForCollect = evaluateTTL(text, {
       includeResolver: resolver,
       importedEnv,
