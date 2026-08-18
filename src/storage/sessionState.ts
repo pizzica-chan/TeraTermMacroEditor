@@ -12,6 +12,7 @@ export interface SavedTabState {
   variableAssumptions?: Record<string, string>
   flushrecvWarningIgnores?: Record<string, boolean>
   consecutiveSendWarningIgnores?: Record<string, boolean>
+  importedEnvParentKey?: string
 }
 
 export interface WorkspaceSession {
@@ -70,6 +71,12 @@ export function loadWorkspaceSession(): WorkspaceSession | null {
       tab.variableAssumptions = isStringRecord(tab.variableAssumptions)
         ? tab.variableAssumptions
         : {}
+      if (typeof tab.importedEnvParentKey === 'string' && tab.importedEnvParentKey.includes(':')) {
+        const parentTabId = tab.importedEnvParentKey.slice(0, tab.importedEnvParentKey.lastIndexOf(':'))
+        if (!tabIds.has(parentTabId)) delete tab.importedEnvParentKey
+      } else {
+        delete tab.importedEnvParentKey
+      }
     }
 
     const activeTabId =

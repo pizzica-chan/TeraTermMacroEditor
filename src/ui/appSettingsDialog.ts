@@ -4,8 +4,6 @@ export interface AppOptionsDialogValues {
   unresolvedValueDisplay: UnresolvedValueDisplay
   checkFlushrecvBeforeSend: boolean
   checkConsecutiveSend: boolean
-  flowchartShowDetailedWaits: boolean
-  flowchartShowAssignments: boolean
 }
 
 export function showAppOptionsDialog(opts: {
@@ -56,17 +54,6 @@ export function showAppOptionsDialog(opts: {
             </span>
           </label>
         </fieldset>
-        <fieldset class="app-settings-fieldset">
-          <legend>フロー図</legend>
-          <label class="app-settings-check">
-            <input type="checkbox" id="opt-flowchart-waits" />
-            <span>詳細な受信待機コマンドを表示する</span>
-          </label>
-          <label class="app-settings-check">
-            <input type="checkbox" id="opt-flowchart-assignments" />
-            <span>変数への代入を表示する</span>
-          </label>
-        </fieldset>
       </div>
       <div class="app-settings-actions">
         <button type="button" class="app-settings-close">閉じる</button>
@@ -77,16 +64,12 @@ export function showAppOptionsDialog(opts: {
   const displayRadios = overlay.querySelectorAll<HTMLInputElement>('input[name="unresolved-value-display"]')
   const flushrecv = overlay.querySelector<HTMLInputElement>('#opt-flushrecv-before-send')!
   const consecutiveSend = overlay.querySelector<HTMLInputElement>('#opt-consecutive-send')!
-  const waits = overlay.querySelector<HTMLInputElement>('#opt-flowchart-waits')!
-  const assignments = overlay.querySelector<HTMLInputElement>('#opt-flowchart-assignments')!
 
   for (const radio of displayRadios) {
     radio.checked = radio.value === opts.values.unresolvedValueDisplay
   }
   flushrecv.checked = opts.values.checkFlushrecvBeforeSend
   consecutiveSend.checked = opts.values.checkConsecutiveSend
-  waits.checked = opts.values.flowchartShowDetailedWaits
-  assignments.checked = opts.values.flowchartShowAssignments
 
   for (const radio of displayRadios) {
     radio.addEventListener('change', () => {
@@ -101,12 +84,6 @@ export function showAppOptionsDialog(opts: {
   })
   consecutiveSend.addEventListener('change', () => {
     opts.onChange({ checkConsecutiveSend: consecutiveSend.checked })
-  })
-  waits.addEventListener('change', () => {
-    opts.onChange({ flowchartShowDetailedWaits: waits.checked })
-  })
-  assignments.addEventListener('change', () => {
-    opts.onChange({ flowchartShowAssignments: assignments.checked })
   })
 
   const close = () => overlay.remove()

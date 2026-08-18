@@ -7,6 +7,10 @@
 import type { IncludeResolver } from '../src/ttl/analyzer'
 import {
   importedEnvFromParentIncludes,
+  collectImportedEnvParentCandidates,
+  formatImportedEnvParentOptionLabel,
+  importedEnvParentKey,
+  pruneImportedEnvParentKey,
   type IncludeWorkspaceHost,
 } from '../src/app/analysisCoordinator'
 import { evaluateTTL, unresolvedSourceIdsOf, type RuntimeValue } from '../src/ttl/evaluator'
@@ -28,6 +32,7 @@ import {
   includeDynamicBindingKey,
   includeLoopIterationBindingKey,
   includeLoopLineBindingKey,
+  normalizeIncludePath,
 } from '../src/ttl/includeRefs'
 import type { EditorTab } from '../src/ui/tabManager'
 
@@ -795,6 +800,163 @@ end`
       b: importedIntOf(pathLoopChildB, pathLoopHost, 'x'),
       line: pathLoopIncludeLine,
       ref: findIncludeRefs(pathLoopSrc).find((ref) => ref.loopContext),
+    })
+  }
+
+  const multiChild = stubTab('shared-child')
+  const parentASrc = `prefix = 'from-a'
+include 'child.ttl'
+end`
+  const parentBSrc = `prefix = 'from-b'
+include 'child.ttl'
+end`
+  const parentAIncludeLine = findIncludeRefs(parentASrc)[0]?.line ?? 0
+  const parentBIncludeLine = findIncludeRefs(parentBSrc)[0]?.line ?? 0
+  const parentA = stubTab('parent-a', {
+    [normalizeIncludePath('child.ttl')]: multiChild.id,
+  })
+  const parentB = stubTab('parent-b', {
+    [normalizeIncludePath('child.ttl')]: multiChild.id,
+  })
+  const multiHost: IncludeWorkspaceHost = {
+    allTabs: [parentA, parentB, multiChild],
+    getTabContent: (tab) => {
+      if (tab.id === parentA.id) return parentASrc
+      if (tab.id === parentB.id) return parentBSrc
+      return 'sendln prefix'
+    },
+  }
+  const multiCandidates = collectImportedEnvParentCandidates(multiHost, multiChild)
+  if (
+    multiCandidates.length === 2
+    && multiCandidates[0]?.parentTabId === parentA.id
+    && multiCandidates[1]?.parentTabId === parentB.id
+  ) {
+    ok('複数親の候補を allTabs 順で列挙する')
+  } else {
+    ng('複数親の候補を allTabs 順で列挙する', multiCandidates)
+  }
+  if (importedPrefixOf(multiChild, multiHost) === 'from-a') {
+    ok('親が複数でも未選択なら先頭の親 env を使う')
+  } else {
+    ng('親が複数でも未選択なら先頭の親 env を使う', importedPrefixOf(multiChild, multiHost))
+  }
+  multiChild.importedEnvParentKey = importedEnvParentKey(parentB.id, parentBIncludeLine)
+  if (importedPrefixOf(multiChild, multiHost) === 'from-b') {
+    ok('前提で選んだ親の include 直前 env を使う')
+  } else {
+    ng('前提で選んだ親の include 直前 env を使う', {
+      prefix: importedPrefixOf(multiChild, multiHost),
+      key: multiChild.importedEnvParentKey,
+      aLine: parentAIncludeLine,
+      bLine: parentBIncludeLine,
+    })
+  }
+  multiChild.importedEnvParentKey = 'missing-tab:99'
+  if (
+    pruneImportedEnvParentKey(multiChild, multiCandidates)
+    && multiChild.importedEnvParentKey === undefined
+    && importedPrefixOf(multiChild, multiHost) === 'from-a'
+  ) {
+    ok('紐づかない親選択は prune して先頭の親へ戻す')
+  } else {
+    ng('紐づかない親選択は prune して先頭の親へ戻す', {
+      key: multiChild.importedEnvParentKey,
+      prefix: importedPrefixOf(multiChild, multiHost),
+    })
+  }
+
+  const dualIncludeChild = stubTab('dual-child')
+  const dualParentSrc = `prefix = 'first'
+include 'child.ttl'
+prefix = 'second'
+include 'child.ttl'
+end`
+  const dualRefs = findIncludeRefs(dualParentSrc)
+  const dualLine1 = dualRefs[0]?.line ?? 0
+  const dualLine2 = dualRefs[1]?.line ?? 0
+  const dualParent = stubTab('dual-parent', {
+    [normalizeIncludePath('child.ttl')]: dualIncludeChild.id,
+  })
+  const dualHost: IncludeWorkspaceHost = {
+    allTabs: [dualParent, dualIncludeChild],
+    getTabContent: (tab) => (tab.id === dualParent.id ? dualParentSrc : 'sendln prefix'),
+  }
+  const dualCandidates = collectImportedEnvParentCandidates(dualHost, dualIncludeChild)
+  dualIncludeChild.importedEnvParentKey = importedEnvParentKey(dualParent.id, dualLine2)
+  if (
+    dualCandidates.length === 2
+    && dualLine1 !== dualLine2
+    && importedPrefixOf(dualIncludeChild, dualHost) === 'second'
+  ) {
+    ok('同一親の複数 include 行から選んだ行の直前 env を使う')
+  } else {
+    ng('同一親の複数 include 行から選んだ行の直前 env を使う', {
+      candidates: dualCandidates,
+      prefix: importedPrefixOf(dualIncludeChild, dualHost),
+      dualLine1,
+      dualLine2,
+    })
+  }
+
+  const sameNameA = {
+    key: 'tab-a:2',
+    parentTabId: 'tab-a',
+    parentFileName: '未保存',
+    includeLine: 2,
+  }
+  const sameNameB = {
+    key: 'tab-b:2',
+    parentTabId: 'tab-b',
+    parentFileName: '未保存',
+    includeLine: 2,
+  }
+  const distinctName = {
+    key: 'tab-c:4',
+    parentTabId: 'tab-c',
+    parentFileName: 'parent.ttl',
+    includeLine: 4,
+  }
+  const sameParentLine2 = {
+    key: 'tab-d:2',
+    parentTabId: 'tab-d',
+    parentFileName: 'dual.ttl',
+    includeLine: 2,
+  }
+  const sameParentLine4 = {
+    key: 'tab-d:4',
+    parentTabId: 'tab-d',
+    parentFileName: 'dual.ttl',
+    includeLine: 4,
+  }
+  if (
+    formatImportedEnvParentOptionLabel(sameNameA, [sameNameA, sameNameB]) === '未保存 #1（L2）'
+    && formatImportedEnvParentOptionLabel(sameNameB, [sameNameA, sameNameB]) === '未保存 #2（L2）'
+  ) {
+    ok('同名の親タブは登場順の番号でラベルを区別する')
+  } else {
+    ng('同名の親タブは登場順の番号でラベルを区別する', {
+      a: formatImportedEnvParentOptionLabel(sameNameA, [sameNameA, sameNameB]),
+      b: formatImportedEnvParentOptionLabel(sameNameB, [sameNameA, sameNameB]),
+    })
+  }
+  if (formatImportedEnvParentOptionLabel(distinctName, [sameNameA, distinctName]) === 'parent.ttl（L4）') {
+    ok('ファイル名が異なれば番号を付けない')
+  } else {
+    ng(
+      'ファイル名が異なれば番号を付けない',
+      formatImportedEnvParentOptionLabel(distinctName, [sameNameA, distinctName]),
+    )
+  }
+  if (
+    formatImportedEnvParentOptionLabel(sameParentLine2, [sameParentLine2, sameParentLine4]) === 'dual.ttl（L2）'
+    && formatImportedEnvParentOptionLabel(sameParentLine4, [sameParentLine2, sameParentLine4]) === 'dual.ttl（L4）'
+  ) {
+    ok('同一親の複数 include 行はファイル名を重複させず行番号で区別する')
+  } else {
+    ng('同一親の複数 include 行はファイル名を重複させず行番号で区別する', {
+      line2: formatImportedEnvParentOptionLabel(sameParentLine2, [sameParentLine2, sameParentLine4]),
+      line4: formatImportedEnvParentOptionLabel(sameParentLine4, [sameParentLine2, sameParentLine4]),
     })
   }
 

@@ -247,6 +247,10 @@ tabManager.setOnTabClosed((closedTabId) => {
   dryRun.onTabClosed(closedTabId)
   fileWatcher.clearTab(closedTabId)
   schedulePersistWorkspaceSession()
+  const active = tabManager.activeTab
+  if (active && active.id !== closedTabId) {
+    analysis.runAnalysisNow(editor.getValue())
+  }
 })
 
 const fileExternalBannerEl = document.querySelector<HTMLDivElement>('#file-external-banner')!
@@ -416,8 +420,6 @@ function handleOpenOptions() {
       unresolvedValueDisplay,
       checkFlushrecvBeforeSend,
       checkConsecutiveSend,
-      flowchartShowDetailedWaits,
-      flowchartShowAssignments,
     },
     onChange(partial) {
       if (partial.unresolvedValueDisplay !== undefined) {
@@ -435,18 +437,6 @@ function handleOpenOptions() {
         checkConsecutiveSend = partial.checkConsecutiveSend
         saveAppSettings({ checkConsecutiveSend })
         analysis.runAnalysisNow(editor.getValue())
-      }
-      if (partial.flowchartShowDetailedWaits !== undefined) {
-        flowchartShowDetailedWaits = partial.flowchartShowDetailedWaits
-        saveAppSettings({ flowchartShowDetailedWaits })
-        sidePanel.syncViewOptions({ showDetailedWaits: flowchartShowDetailedWaits })
-        sidePanel.updateFlowchart(analysis.buildFlowchartForActiveTab(editor.getValue()))
-      }
-      if (partial.flowchartShowAssignments !== undefined) {
-        flowchartShowAssignments = partial.flowchartShowAssignments
-        saveAppSettings({ flowchartShowAssignments })
-        sidePanel.syncViewOptions({ showAssignments: flowchartShowAssignments })
-        sidePanel.updateFlowchart(analysis.buildFlowchartForActiveTab(editor.getValue()))
       }
     },
   })
@@ -524,6 +514,13 @@ sidePanel.onConsecutiveSendWarningIgnoreChange((line, ignored) => {
   if (ignored) next[key] = true
   else delete next[key]
   tab.consecutiveSendWarningIgnores = next
+  schedulePersistWorkspaceSession()
+  analysis.runAnalysisNow(editor.getValue())
+})
+sidePanel.onImportedEnvParentChange((key) => {
+  const tab = tabManager.activeTab
+  if (!tab) return
+  tab.importedEnvParentKey = key || undefined
   schedulePersistWorkspaceSession()
   analysis.runAnalysisNow(editor.getValue())
 })

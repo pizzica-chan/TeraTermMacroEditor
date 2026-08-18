@@ -185,6 +185,94 @@ function importedEnvFromParentEval(
   return parentEval.beforeLine.get(ref.line)
 }
 
+export function importedEnvParentKey(parentTabId: string, includeLine: number): string {
+  return `${parentTabId}:${includeLine}`
+}
+
+export interface ImportedEnvParentCandidate {
+  key: string
+  parentTabId: string
+  parentFileName: string
+  includeLine: number
+}
+
+interface ImportedEnvParentMatch {
+  parentTab: EditorTab
+  ref: IncludeRef
+}
+
+function collectImportedEnvParentMatches(
+  host: IncludeWorkspaceHost,
+  tab: EditorTab,
+): ImportedEnvParentMatch[] {
+  const matches: ImportedEnvParentMatch[] = []
+  for (const parentTab of host.allTabs) {
+    if (parentTab.id === tab.id) continue
+    const bindings = parentTab.includeBindings ?? {}
+    if (!Object.values(bindings).includes(tab.id)) continue
+    const parentSource = host.getTabContent(parentTab)
+    for (const ref of findIncludeRefs(parentSource)) {
+      if (includeRefLinksTab(ref, bindings, tab.id)) matches.push({ parentTab, ref })
+    }
+  }
+  return matches
+}
+
+export function collectImportedEnvParentCandidates(
+  host: IncludeWorkspaceHost,
+  tab: EditorTab,
+): ImportedEnvParentCandidate[] {
+  return collectImportedEnvParentMatches(host, tab).map((match) => ({
+    key: importedEnvParentKey(match.parentTab.id, match.ref.line),
+    parentTabId: match.parentTab.id,
+    parentFileName: match.parentTab.fileName,
+    includeLine: match.ref.line,
+  }))
+}
+
+/** 同名タブは登場順の番号で区別する。同一親の複数 include は行番号で足りる */
+export function formatImportedEnvParentOptionLabel(
+  candidate: ImportedEnvParentCandidate,
+  candidates: readonly ImportedEnvParentCandidate[],
+): string {
+  const parentIdsWithSameName: string[] = []
+  for (const item of candidates) {
+    if (item.parentFileName !== candidate.parentFileName) continue
+    if (!parentIdsWithSameName.includes(item.parentTabId)) parentIdsWithSameName.push(item.parentTabId)
+  }
+  const name =
+    parentIdsWithSameName.length > 1
+      ? `${candidate.parentFileName} #${parentIdsWithSameName.indexOf(candidate.parentTabId) + 1}`
+      : candidate.parentFileName
+  return `${name}（L${candidate.includeLine}）`
+}
+
+function pickImportedEnvParentMatch(
+  matches: readonly ImportedEnvParentMatch[],
+  selectedKey: string | undefined,
+): ImportedEnvParentMatch | undefined {
+  if (matches.length === 0) return undefined
+  if (selectedKey) {
+    const selected = matches.find(
+      (match) => importedEnvParentKey(match.parentTab.id, match.ref.line) === selectedKey,
+    )
+    if (selected) return selected
+  }
+  return matches[0]
+}
+
+/** 紐づかなくなった親選択を消す。変更したら true */
+export function pruneImportedEnvParentKey(
+  tab: EditorTab,
+  candidates: readonly ImportedEnvParentCandidate[],
+): boolean {
+  const key = tab.importedEnvParentKey
+  if (!key) return false
+  if (candidates.some((candidate) => candidate.key === key)) return false
+  delete tab.importedEnvParentKey
+  return true
+}
+
 interface ImportedEnvResolveState {
   importedEnvByTab: Map<string, MacroEnvironment | undefined>
   parentEvalByTab: Map<string, EvaluationResult>
@@ -228,22 +316,24 @@ function resolveImportedEnvFromParentIncludes(
   }
   visiting.add(tab.id)
 
-  for (const parentTab of host.allTabs) {
-    if (parentTab.id === tab.id) continue
-    const bindings = parentTab.includeBindings ?? {}
-    if (!Object.values(bindings).includes(tab.id)) continue
-
-    const parentSource = host.getTabContent(parentTab)
-    const ref = findIncludeRefs(parentSource).find((item) => includeRefLinksTab(item, bindings, tab.id))
-    if (!ref) continue
-
-    const parentEval = parentEvalForImportedEnv(host, parentTab, state, visiting)
-    const env = importedEnvFromParentEval(parentEval, ref, bindings, tab.id)
-    state.importedEnvByTab.set(tab.id, env)
-    return env
+  const match = pickImportedEnvParentMatch(
+    collectImportedEnvParentMatches(host, tab),
+    tab.importedEnvParentKey,
+  )
+  if (!match) {
+    state.importedEnvByTab.set(tab.id, undefined)
+    return undefined
   }
-  state.importedEnvByTab.set(tab.id, undefined)
-  return undefined
+
+  const parentEval = parentEvalForImportedEnv(host, match.parentTab, state, visiting)
+  const env = importedEnvFromParentEval(
+    parentEval,
+    match.ref,
+    match.parentTab.includeBindings ?? {},
+    tab.id,
+  )
+  state.importedEnvByTab.set(tab.id, env)
+  return env
 }
 
 /** include 先タブ評価用。親の include 直前 env（入れ子 include は親側も遡る） */
@@ -402,6 +492,8 @@ export interface AnalysisCoordinatorHost {
     checkFlushrecvBeforeSend: boolean
     checkConsecutiveSend: boolean
     analysisLimitations: AnalysisLimitations
+    importedEnvParentCandidates: ImportedEnvParentCandidate[]
+    importedEnvParentKey: string
   }): void
   updateFlowchart(model: ReturnType<typeof buildFlowchart> | null): void
   refreshIncludePanel(text: string, options?: { readOnly?: boolean }): void
@@ -480,6 +572,12 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
     setConsecutiveSendCheck(checkConsecutive, ignoredConsecutiveSendLines)
 
     const result = analyzeTTL(text, getEditorAnalyzeOptions())
+    const importedEnvParentCandidates = tab
+      ? collectImportedEnvParentCandidates(host.includeHost, tab)
+      : []
+    if (tab && pruneImportedEnvParentKey(tab, importedEnvParentCandidates)) {
+      host.schedulePersistWorkspaceSession()
+    }
     const importedEnvState = createImportedEnvResolveState()
     const importedEnv = tab
       ? resolveImportedEnvFromParentIncludes(host.includeHost, tab, importedEnvState)
@@ -582,6 +680,8 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
       checkFlushrecvBeforeSend: checkFlushrecv,
       checkConsecutiveSend: checkConsecutive,
       analysisLimitations,
+      importedEnvParentCandidates,
+      importedEnvParentKey: tab?.importedEnvParentKey ?? importedEnvParentCandidates[0]?.key ?? '',
     })
     host.updateFlowchart(buildFlowchartForActiveTab(text))
     host.refreshIncludePanel(text, { readOnly: host.isDryRunInProgress() })

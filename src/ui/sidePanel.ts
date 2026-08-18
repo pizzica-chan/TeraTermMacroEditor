@@ -14,6 +14,10 @@ import {
 } from '../ttl/sendText'
 import type { FlowchartModel } from '../ttl/flowchart'
 import type { AnalysisLimitations } from '../ttl/analysisLimitations'
+import {
+  formatImportedEnvParentOptionLabel,
+  type ImportedEnvParentCandidate,
+} from '../app/analysisCoordinator'
 import { FLUSHRECV_BEFORE_SEND_DIAG_CODE } from '../ttl/flushrecvWarningIgnores'
 import { CONSECUTIVE_SEND_DIAG_CODE } from '../ttl/consecutiveSendWarningIgnores'
 import { formatUnresolvedDisplay } from '../ttl/unresolvedDisplay'
@@ -43,6 +47,8 @@ export function createSidePanel(
     checkFlushrecvBeforeSend?: boolean
     checkConsecutiveSend?: boolean
     analysisLimitations?: AnalysisLimitations
+    importedEnvParentCandidates?: ImportedEnvParentCandidate[]
+    importedEnvParentKey?: string
   }) => void
   updateDryRun: (state: DryRunState | null) => void
   updateFlowchart: (model: FlowchartModel | null) => void
@@ -61,8 +67,8 @@ export function createSidePanel(
   onClearDryRun: (handler: () => void) => void
   onBranchAssumptionChange: (handler: (line: number, value: boolean | null) => void) => void
   onVariableAssumptionChange: (handler: (line: number, name: string, value: string | null) => void) => void
+  onImportedEnvParentChange: (handler: (key: string) => void) => void
   refresh: () => void
-  syncViewOptions: (options: { showDetailedWaits?: boolean; showAssignments?: boolean }) => void
 } {
   let gotoHandler: ((line: number) => void) | null = null
   let dryRunGotoHandler: ((location: string) => void) | null = null
@@ -75,6 +81,7 @@ export function createSidePanel(
   let clearDryRunHandler: (() => void) | null = null
   let branchAssumptionHandler: ((line: number, value: boolean | null) => void) | null = null
   let variableAssumptionHandler: ((line: number, name: string, value: string | null) => void) | null = null
+  let importedEnvParentHandler: ((key: string) => void) | null = null
   let activeTab: SidePanelTab = 'setup'
   let cached: {
     analysis: AnalysisResult
@@ -88,6 +95,8 @@ export function createSidePanel(
     checkFlushrecvBeforeSend: boolean
     checkConsecutiveSend: boolean
     analysisLimitations: AnalysisLimitations
+    importedEnvParentCandidates: ImportedEnvParentCandidate[]
+    importedEnvParentKey: string
   } | null = null
   let dryRunState: DryRunState | null = null
   let flowchartModel: FlowchartModel | null = null
@@ -182,6 +191,16 @@ export function createSidePanel(
     </div>
   `
 
+  const importedEnvParentSection = document.createElement('div')
+  importedEnvParentSection.className = 'imported-env-parent-section'
+  importedEnvParentSection.id = 'imported-env-parent-section'
+  importedEnvParentSection.hidden = true
+  importedEnvParentSection.innerHTML = `
+    <h2 id="imported-env-parent-title">親マクロの環境</h2>
+    <p class="branch-assumptions-hint">このファイルを include している箇所が複数あります。送信データと変数ホバーに使う親（include 行）を選んでください。</p>
+    <select class="include-link-select" id="imported-env-parent-select" aria-labelledby="imported-env-parent-title"></select>
+  `
+
   const variableSection = document.createElement('div')
   variableSection.className = 'variable-assumptions-section'
   variableSection.id = 'variable-assumptions-section'
@@ -200,7 +219,7 @@ export function createSidePanel(
     <div class="branch-assumptions-list" id="branch-assumptions-list"></div>
   `
 
-  setupPanel.append(analysisOptionsSection, variableSection, branchSection, includeMount)
+  setupPanel.append(analysisOptionsSection, importedEnvParentSection, variableSection, branchSection, includeMount)
   body.append(setupPanel, variableList, sendList, dryRunList, flowchartToolbar, flowchartHost, flowchartWarnings)
 
   const diagSection = document.createElement('div')
@@ -747,6 +766,32 @@ export function createSidePanel(
     bindPanelGotoItems(list)
   }
 
+  function renderImportedEnvParent(
+    candidates: ImportedEnvParentCandidate[],
+    selectedKey: string,
+  ) {
+    const select = importedEnvParentSection.querySelector<HTMLSelectElement>('#imported-env-parent-select')!
+    if (candidates.length < 2) {
+      importedEnvParentSection.hidden = true
+      select.innerHTML = ''
+      return
+    }
+    importedEnvParentSection.hidden = false
+    const effectiveKey = candidates.some((c) => c.key === selectedKey)
+      ? selectedKey
+      : candidates[0]!.key
+    select.innerHTML = candidates
+      .map((candidate) => {
+        const selected = candidate.key === effectiveKey ? ' selected' : ''
+        const label = formatImportedEnvParentOptionLabel(candidate, candidates)
+        return `<option value="${escapeAttr(candidate.key)}"${selected}>${escapeHtml(label)}</option>`
+      })
+      .join('')
+    select.onchange = () => {
+      if (select.value) importedEnvParentHandler?.(select.value)
+    }
+  }
+
   function ignoredLines(record: Record<string, boolean>): number[] {
     return Object.entries(record)
       .filter(([, value]) => value)
@@ -837,6 +882,8 @@ export function createSidePanel(
     checkFlushrecvBeforeSend: boolean
     checkConsecutiveSend: boolean
     analysisLimitations: AnalysisLimitations
+    importedEnvParentCandidates: ImportedEnvParentCandidate[]
+    importedEnvParentKey: string
   }) {
     const {
       analysis,
@@ -863,6 +910,7 @@ export function createSidePanel(
       renderSendList(sendEntries)
     }
     if (activeTab === 'setup') {
+      renderImportedEnvParent(data.importedEnvParentCandidates, data.importedEnvParentKey)
       renderVariableAssumptions(indeterminateVariables, variableAssumptions)
       renderBranchAssumptions(indeterminateBranches, branchAssumptions)
       renderLintWarningIgnores(flushrecvWarningIgnores, consecutiveSendWarningIgnores)
@@ -1017,6 +1065,9 @@ export function createSidePanel(
     onVariableAssumptionChange(handler) {
       variableAssumptionHandler = handler
     },
+    onImportedEnvParentChange(handler) {
+      importedEnvParentHandler = handler
+    },
     showTab(tab) {
       setTab(tab)
       if (cached) render(cached)
@@ -1033,6 +1084,8 @@ export function createSidePanel(
       checkFlushrecvBeforeSend: checkFlushrecvOption = false,
       checkConsecutiveSend: checkConsecutiveOption = false,
       analysisLimitations = { unassumedBranches: [], unassumedVariables: [], unlinkedIncludes: [] },
+      importedEnvParentCandidates = [],
+      importedEnvParentKey = '',
     }) {
       cached = {
         analysis,
@@ -1046,6 +1099,8 @@ export function createSidePanel(
         checkFlushrecvBeforeSend: checkFlushrecvOption,
         checkConsecutiveSend: checkConsecutiveOption,
         analysisLimitations,
+        importedEnvParentCandidates,
+        importedEnvParentKey,
       }
       render(cached)
     },
@@ -1078,16 +1133,6 @@ export function createSidePanel(
       if (cached) render(cached)
       if (activeTab === 'dryrun') {
         renderDryRun(dryRunState ?? { status: 'idle', currentLine: 0, events: [] })
-      }
-    },
-    syncViewOptions(options) {
-      if (options.showDetailedWaits !== undefined) {
-        showDetailedWaits = options.showDetailedWaits
-        updateFlowchartWaitsButton()
-      }
-      if (options.showAssignments !== undefined) {
-        showAssignments = options.showAssignments
-        updateFlowchartAssignmentsButton()
       }
     },
   }

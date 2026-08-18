@@ -24,6 +24,8 @@ export interface EditorTab {
   flushrecvWarningIgnores?: Record<string, boolean>
   /** 連続 send 警告を無視する行（行番号文字列キー → true） */
   consecutiveSendWarningIgnores?: Record<string, boolean>
+  /** 複数親が include しているときの importedEnv 元（`${親タブID}:${include行}`） */
+  importedEnvParentKey?: string
 }
 
 let nextTabId = 1
@@ -172,6 +174,7 @@ export class TabManager {
     variableAssumptions?: Record<string, string>
     flushrecvWarningIgnores?: Record<string, boolean>
     consecutiveSendWarningIgnores?: Record<string, boolean>
+    importedEnvParentKey?: string
     activate?: boolean
   }): EditorTab | null {
     if (!this.canAddTab()) {
@@ -198,6 +201,7 @@ export class TabManager {
       consecutiveSendWarningIgnores: options.consecutiveSendWarningIgnores
         ? { ...options.consecutiveSendWarningIgnores }
         : {},
+      importedEnvParentKey: options.importedEnvParentKey,
     }
 
     this.tabs.push(tab)
@@ -261,9 +265,9 @@ export class TabManager {
 
     const idx = this.tabs.findIndex((t) => t.id === id)
     this.tabs.splice(idx, 1)
-    this.onTabClosed?.(id)
     this.externalChangeTabIds.delete(id)
     this.clearBindingsToTab(id)
+    this.onTabClosed?.(id)
 
     if (this.activeId === id) {
       if (this.tabs.length === 0) {
@@ -313,10 +317,12 @@ export class TabManager {
 
   /** 閉じたタブへのリンクを他タブから除去 */
   clearBindingsToTab(closedTabId: string): void {
+    const parentKeyPrefix = `${closedTabId}:`
     for (const tab of this.tabs) {
       for (const [path, tabId] of Object.entries(tab.includeBindings)) {
         if (tabId === closedTabId) delete tab.includeBindings[path]
       }
+      if (tab.importedEnvParentKey?.startsWith(parentKeyPrefix)) delete tab.importedEnvParentKey
     }
   }
 
@@ -345,6 +351,7 @@ export class TabManager {
       variableAssumptions: { ...(tab.variableAssumptions ?? {}) },
       flushrecvWarningIgnores: { ...(tab.flushrecvWarningIgnores ?? {}) },
       consecutiveSendWarningIgnores: { ...(tab.consecutiveSendWarningIgnores ?? {}) },
+      importedEnvParentKey: tab.importedEnvParentKey,
     }))
     return {
       version: 1,
@@ -380,6 +387,7 @@ export class TabManager {
         variableAssumptions: { ...(saved.variableAssumptions ?? {}) },
         flushrecvWarningIgnores: { ...(saved.flushrecvWarningIgnores ?? {}) },
         consecutiveSendWarningIgnores: { ...(saved.consecutiveSendWarningIgnores ?? {}) },
+        importedEnvParentKey: saved.importedEnvParentKey,
       })
     }
 

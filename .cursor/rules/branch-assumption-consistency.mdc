@@ -13,6 +13,7 @@ globs:
   - src/editor/branchAssumptionDecorations.ts
   - src/editor/variableAssumptionDecorations.ts
   - src/ui/sidePanel.ts
+  - src/ui/tabManager.ts
   - scripts/test-branch-assumptions.ts
   - scripts/test-variable-assumptions.ts
 alwaysApply: false
@@ -46,6 +47,7 @@ alwaysApply: false
 - 行番号キーを include 先へ引き継がない。リンク先自身の仮定だけを使う。
 - 親の include 経路で得た変数は親 env・送信データ・ホバーへ反映する。
 - include 先タブを単独表示するときは、親の include 直前 env を初期値にする（親で代入した値が内容表示に載る）。
+- 同じタブを複数の親が include しているときは、前提タブで親（include 行）を選ぶ。未選択・無効な選択は `allTabs` 順の先頭を使う。選択は子タブに保存し、閉じた親への参照は消す。閉じた親のあと、表示中の子は再解析する。
 - ループ include の反復別タブにはその反復の直前 env を渡す。全反復共通タブは最終反復の env でよい。ループが途中で `stopAll` した場合は、止まる反復の直前 env を使う。
 - ループ include のタブ紐づけはパスキーと `@loop:L行:値` の両方を `resolveIncludeBindingTabId` で解決する（リンク判定と `importedEnv` 取得で同じ関数を使う）。
 
@@ -59,7 +61,7 @@ alwaysApply: false
 
 ## 実装の要点（配線）
 
-- `analysisCoordinator.ts` … `evaluateTTL` へ `branchAssumptions` / `variableAssumptions` / `importedEnv` を渡す経路、include 解決時のリンク先仮定、limitation 収集
+- `analysisCoordinator.ts` … `evaluateTTL` へ `branchAssumptions` / `variableAssumptions` / `importedEnv` を渡す経路、include 解決時のリンク先仮定、limitation 収集、複数親の `importedEnvParentKey`
 - `includeRefs.ts` … `isLoopIncludeCommonTab` / `loopIncludeIterationValuesForTab`（リンク判定と importedEnv で共有）
 - `evaluator.ts` … 未確定根源 ID の継承（インプレース dest のみ）、ループ内 `beforeLine` は各反復で上書き、ループ include 直前 env（`beforeIncludeByLoopKey`）
 - `commandOutputs.ts` … `INDEPENDENT_OUTPUT_COMMANDS` / `isInPlaceStringCommand`

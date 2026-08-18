@@ -434,9 +434,14 @@ body {
   border-top: 1px solid var(--border-color);
 }
 
+.setup-panel .imported-env-parent-section:not([hidden]) + .variable-assumptions-section {
+  border-top: 1px solid var(--border-color);
+}
+
 .setup-panel .variable-assumptions-section,
 .setup-panel .branch-assumptions-section,
 .setup-panel .analysis-options-section,
+.setup-panel .imported-env-parent-section,
 .setup-panel .include-section {
   flex-shrink: 0;
 }
@@ -861,6 +866,27 @@ body {
   letter-spacing: 0.5px;
   color: var(--text-secondary);
   margin-bottom: 8px;
+}
+
+.imported-env-parent-section {
+  padding: 12px 14px;
+}
+
+.imported-env-parent-section[hidden] {
+  display: none;
+}
+
+.imported-env-parent-section h2 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.imported-env-parent-section .include-link-select {
+  width: 100%;
 }
 
 .include-list {
