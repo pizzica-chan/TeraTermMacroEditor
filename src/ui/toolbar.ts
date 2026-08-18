@@ -7,6 +7,7 @@ export interface ToolbarActions {
   onOpen: () => void
   onSave: () => void
   onThemeToggle: () => void
+  onOpenOptions?: () => void
   onEncodingChange: (encoding: TextEncoding) => void
   onNewlineChange: (newline: NewlineType) => void
   onCloseTab?: () => void
@@ -51,6 +52,7 @@ export function createToolbar(container: HTMLElement, editor: EditorInstance, ac
         </select>
       </label>
       <div class="toolbar-divider"></div>
+      <button id="btn-options" title="オプション">オプション</button>
       <button id="btn-theme" title="テーマ切替">🌙</button>
     </div>
   `
@@ -63,6 +65,7 @@ export function createToolbar(container: HTMLElement, editor: EditorInstance, ac
   container.querySelector('#btn-dryrun-start')!.addEventListener('click', () => actions.onDryRunStart?.())
   container.querySelector('#btn-dryrun-stop')!.addEventListener('click', () => actions.onDryRunStop?.())
   container.querySelector('#btn-theme')!.addEventListener('click', actions.onThemeToggle)
+  container.querySelector('#btn-options')!.addEventListener('click', () => actions.onOpenOptions?.())
 
   container.querySelector('#sel-encoding')!.addEventListener('change', (e) => {
     if (suppressSelectChange) return
@@ -76,7 +79,7 @@ export function createToolbar(container: HTMLElement, editor: EditorInstance, ac
 
   document.addEventListener('keydown', (e) => {
     if (
-      document.querySelector('.ttl-dialog-overlay, .goto-line-overlay') ||
+      document.querySelector('.ttl-dialog-overlay, .goto-line-overlay, .app-settings-overlay') ||
       (e.target instanceof Element && e.target.closest('[role="dialog"]'))
     ) {
       return

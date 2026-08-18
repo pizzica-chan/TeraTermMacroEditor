@@ -154,6 +154,44 @@ export function getLoopIncludeIterationBindingKey(
   return pathKey ?? includeLoopIterationBindingKey(ref.line, loopValue)
 }
 
+/** ループ include の全反復共通タブか（`@loop:L行:*` または `@dynamic`） */
+export function isLoopIncludeCommonTab(
+  ref: IncludeRef,
+  bindings: Record<string, string>,
+  tabId: string,
+): boolean {
+  if (!ref.loopContext) return false
+  if (bindings[includeLoopLineBindingKey(ref.line)] === tabId) return true
+  if (ref.raw && bindings[includeDynamicBindingKey(ref.raw)] === tabId) return true
+  return false
+}
+
+/**
+ * このタブへ紐づくループ反復値。
+ * パスキーと `@loop:L行:値` の両方を `resolveIncludeBindingTabId` で見る。
+ */
+export function loopIncludeIterationValuesForTab(
+  ref: IncludeRef,
+  bindings: Record<string, string>,
+  tabId: string,
+): number[] {
+  if (!ref.loopContext) return []
+  const matched: number[] = []
+  for (const value of ref.loopContext.values) {
+    const effectiveRaw = ref.loopContext.effectiveRawsByValue?.[value]
+    const pathKey = getLoopIncludeIterationBindingKey(ref, value)
+    const iterKey = includeLoopIterationBindingKey(ref.line, value)
+    const linked =
+      resolveIncludeBindingTabId(bindings, pathKey, ref.raw, effectiveRaw) === tabId
+      || (
+        pathKey !== iterKey
+        && resolveIncludeBindingTabId(bindings, iterKey, ref.raw, effectiveRaw) === tabId
+      )
+    if (linked) matched.push(value)
+  }
+  return matched
+}
+
 export function resolveLoopIncludeBindingKey(
   line: number,
   loopValue: number,

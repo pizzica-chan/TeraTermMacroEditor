@@ -11,6 +11,7 @@ export interface SavedTabState {
   branchAssumptions?: Record<string, boolean>
   variableAssumptions?: Record<string, string>
   flushrecvWarningIgnores?: Record<string, boolean>
+  consecutiveSendWarningIgnores?: Record<string, boolean>
 }
 
 export interface WorkspaceSession {

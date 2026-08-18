@@ -18,24 +18,34 @@ import {
   pruneFlushrecvWarningIgnores,
 } from '../ttl/flushrecvWarningIgnores'
 import {
+  collectActiveConsecutiveSendWarningLines,
+  consecutiveSendWarningIgnoresFromRecord,
+  pruneConsecutiveSendWarningIgnores,
+} from '../ttl/consecutiveSendWarningIgnores'
+import {
   type AnalysisLimitations,
 } from '../ttl/analysisLimitations'
 import {
   findIncludeRefs,
   includeDynamicBindingKey,
+  includeLoopIterationBindingKey,
   isIncludeRefLinked,
+  isLoopIncludeCommonTab,
+  loopIncludeIterationValuesForTab,
   migrateIncludeBindings,
   normalizeIncludePath,
   resolveIncludeBindingTabId,
   resolveLoopIncludeBindingKey,
+  type IncludeRef,
   type IncludeResolveContext,
 } from '../ttl/includeRefs'
-import { evaluateTTL } from '../ttl/evaluator'
+import { evaluateTTL, type EvaluationResult, type MacroEnvironment } from '../ttl/evaluator'
 import { buildFlowchart } from '../ttl/flowchart'
 import {
   setIncludeResolver,
   setIncludeCrossTabContext,
   setFlushrecvBeforeSendCheck,
+  setConsecutiveSendCheck,
   getEditorAnalyzeOptions,
   setAnalysisCache,
 } from '../ttl/analysisContext'
@@ -132,12 +142,125 @@ export function createIncludeResolver(
   }
 }
 
+/** この ref が指定タブへ紐づいているか（ループは反復ごとの別タブも見る） */
+function includeRefLinksTab(
+  ref: IncludeRef,
+  bindings: Record<string, string>,
+  tabId: string,
+): boolean {
+  if (ref.loopContext) {
+    if (isLoopIncludeCommonTab(ref, bindings, tabId)) return true
+    return loopIncludeIterationValuesForTab(ref, bindings, tabId).length > 0
+  }
+  if (ref.path) {
+    return resolveIncludeBindingTabId(bindings, normalizeIncludePath(ref.path), ref.raw) === tabId
+  }
+  if (ref.isDynamic && ref.raw) {
+    return resolveIncludeBindingTabId(bindings, includeDynamicBindingKey(ref.raw), ref.raw) === tabId
+  }
+  return false
+}
+
+/** 親評価から、このタブへ紐づく include 直前 env を取る（ループは反復キー優先） */
+function importedEnvFromParentEval(
+  parentEval: EvaluationResult,
+  ref: IncludeRef,
+  bindings: Record<string, string>,
+  tabId: string,
+): MacroEnvironment | undefined {
+  if (!ref.loopContext) return parentEval.beforeLine.get(ref.line)
+
+  if (isLoopIncludeCommonTab(ref, bindings, tabId)) {
+    return parentEval.beforeLine.get(ref.line)
+  }
+
+  const matchedValues = loopIncludeIterationValuesForTab(ref, bindings, tabId)
+  const matchedValue = matchedValues[matchedValues.length - 1]
+  if (matchedValue !== undefined) {
+    return (
+      parentEval.beforeIncludeByLoopKey.get(includeLoopIterationBindingKey(ref.line, matchedValue))
+      ?? parentEval.beforeLine.get(ref.line)
+    )
+  }
+  return parentEval.beforeLine.get(ref.line)
+}
+
+interface ImportedEnvResolveState {
+  importedEnvByTab: Map<string, MacroEnvironment | undefined>
+  parentEvalByTab: Map<string, EvaluationResult>
+}
+
+function createImportedEnvResolveState(): ImportedEnvResolveState {
+  return {
+    importedEnvByTab: new Map(),
+    parentEvalByTab: new Map(),
+  }
+}
+
+function parentEvalForImportedEnv(
+  host: IncludeWorkspaceHost,
+  parentTab: EditorTab,
+  state: ImportedEnvResolveState,
+  visiting: Set<string>,
+): EvaluationResult {
+  const cached = state.parentEvalByTab.get(parentTab.id)
+  if (cached) return cached
+  const parentEval = evaluateTTL(host.getTabContent(parentTab), {
+    includeResolver: createIncludeResolver(host, parentTab),
+    variableAssumptions: variableAssumptionsFromRecord(parentTab.variableAssumptions),
+    branchAssumptions: branchAssumptionsFromRecord(parentTab.branchAssumptions),
+    importedEnv: resolveImportedEnvFromParentIncludes(host, parentTab, state, visiting),
+  })
+  state.parentEvalByTab.set(parentTab.id, parentEval)
+  return parentEval
+}
+
+function resolveImportedEnvFromParentIncludes(
+  host: IncludeWorkspaceHost,
+  tab: EditorTab,
+  state: ImportedEnvResolveState,
+  visiting: Set<string> = new Set(),
+): MacroEnvironment | undefined {
+  if (state.importedEnvByTab.has(tab.id)) return state.importedEnvByTab.get(tab.id)
+  if (visiting.has(tab.id)) {
+    state.importedEnvByTab.set(tab.id, undefined)
+    return undefined
+  }
+  visiting.add(tab.id)
+
+  for (const parentTab of host.allTabs) {
+    if (parentTab.id === tab.id) continue
+    const bindings = parentTab.includeBindings ?? {}
+    if (!Object.values(bindings).includes(tab.id)) continue
+
+    const parentSource = host.getTabContent(parentTab)
+    const ref = findIncludeRefs(parentSource).find((item) => includeRefLinksTab(item, bindings, tab.id))
+    if (!ref) continue
+
+    const parentEval = parentEvalForImportedEnv(host, parentTab, state, visiting)
+    const env = importedEnvFromParentEval(parentEval, ref, bindings, tab.id)
+    state.importedEnvByTab.set(tab.id, env)
+    return env
+  }
+  state.importedEnvByTab.set(tab.id, undefined)
+  return undefined
+}
+
+/** include 先タブ評価用。親の include 直前 env（入れ子 include は親側も遡る） */
+export function importedEnvFromParentIncludes(
+  host: IncludeWorkspaceHost,
+  tab: EditorTab,
+): MacroEnvironment | undefined {
+  return resolveImportedEnvFromParentIncludes(host, tab, createImportedEnvResolveState())
+}
+
 export function collectWorkspaceAnalysisLimitations(
   host: IncludeWorkspaceHost,
   originTab: EditorTab,
   originSource: string,
   originBranches?: ReturnType<typeof collectIndeterminateIfBranches>,
   originVariables?: ReturnType<typeof collectIndeterminateVariables>,
+  importedEnvState: ImportedEnvResolveState = createImportedEnvResolveState(),
 ): AnalysisLimitations {
   const limitations: AnalysisLimitations = {
     unassumedBranches: [],
@@ -171,11 +294,13 @@ export function collectWorkspaceAnalysisLimitations(
       ? null
       : evaluateTTL(current.source, {
           includeResolver: createIncludeResolver(host, current.tab),
+          importedEnv: resolveImportedEnvFromParentIncludes(host, current.tab, importedEnvState),
         })
     const evalForLimitations = () =>
       evalForCollect
       ?? evaluateTTL(current.source, {
         includeResolver: createIncludeResolver(host, current.tab),
+        importedEnv: resolveImportedEnvFromParentIncludes(host, current.tab, importedEnvState),
       })
 
     const branches =
@@ -273,7 +398,9 @@ export interface AnalysisCoordinatorHost {
     indeterminateVariables: ReturnType<typeof collectIndeterminateVariables>
     variableAssumptions: Record<string, string>
     flushrecvWarningIgnores: Record<string, boolean>
+    consecutiveSendWarningIgnores: Record<string, boolean>
     checkFlushrecvBeforeSend: boolean
+    checkConsecutiveSend: boolean
     analysisLimitations: AnalysisLimitations
   }): void
   updateFlowchart(model: ReturnType<typeof buildFlowchart> | null): void
@@ -283,6 +410,7 @@ export interface AnalysisCoordinatorHost {
   flowchartShowDetailedWaits: () => boolean
   flowchartShowAssignments: () => boolean
   checkFlushrecvBeforeSend: () => boolean
+  checkConsecutiveSend: () => boolean
 }
 
 const ANALYSIS_DEBOUNCE_MS = 250
@@ -290,6 +418,7 @@ const ANALYSIS_DEBOUNCE_MS = 250
 export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
   let analysisTimer: ReturnType<typeof setTimeout> | null = null
   setFlushrecvBeforeSendCheck(host.checkFlushrecvBeforeSend())
+  setConsecutiveSendCheck(host.checkConsecutiveSend())
 
   function syncTabIncludeBindings(tab: EditorTab, source: string): void {
     const migrated = migrateIncludeBindings(source, tab.includeBindings)
@@ -325,6 +454,7 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
     setIncludeCrossTabContext(crossTab)
 
     const checkFlushrecv = host.checkFlushrecvBeforeSend()
+    const checkConsecutive = host.checkConsecutiveSend()
     if (tab && checkFlushrecv) {
       const activeLines = collectActiveFlushrecvWarningLines(text)
       tab.flushrecvWarningIgnores = pruneFlushrecvWarningIgnores(
@@ -332,15 +462,31 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
         activeLines,
       )
     }
+    if (tab && checkConsecutive) {
+      const activeLines = collectActiveConsecutiveSendWarningLines(text)
+      tab.consecutiveSendWarningIgnores = pruneConsecutiveSendWarningIgnores(
+        tab.consecutiveSendWarningIgnores ?? {},
+        activeLines,
+      )
+    }
 
     const ignoredFlushrecvLines = tab
       ? flushrecvWarningIgnoresFromRecord(tab.flushrecvWarningIgnores)
       : new Set<number>()
+    const ignoredConsecutiveSendLines = tab
+      ? consecutiveSendWarningIgnoresFromRecord(tab.consecutiveSendWarningIgnores)
+      : new Set<number>()
     setFlushrecvBeforeSendCheck(checkFlushrecv, ignoredFlushrecvLines)
+    setConsecutiveSendCheck(checkConsecutive, ignoredConsecutiveSendLines)
 
     const result = analyzeTTL(text, getEditorAnalyzeOptions())
+    const importedEnvState = createImportedEnvResolveState()
+    const importedEnv = tab
+      ? resolveImportedEnvFromParentIncludes(host.includeHost, tab, importedEnvState)
+      : undefined
     const evaluationForCollect = evaluateTTL(text, {
       includeResolver: resolver,
+      importedEnv,
     })
     const indeterminateVariables = collectIndeterminateVariables(
       text,
@@ -374,6 +520,7 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
         ? evaluateTTL(text, {
             includeResolver: resolver,
             variableAssumptions,
+            importedEnv,
           })
         : evaluationForCollect
     const indeterminateBranches = collectIndeterminateIfBranches(
@@ -395,6 +542,7 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
             includeResolver: resolver,
             variableAssumptions,
             branchAssumptions,
+            importedEnv,
           })
         : evaluationForBranches
 
@@ -407,6 +555,7 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
           text,
           indeterminateBranches,
           indeterminateVariables,
+          importedEnvState,
         )
       : { unassumedBranches: [], unassumedVariables: [], unlinkedIncludes: [] }
     host.setBranchAssumptionDecorations(
@@ -429,7 +578,9 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
       indeterminateVariables,
       variableAssumptions: tab?.variableAssumptions ?? {},
       flushrecvWarningIgnores: tab?.flushrecvWarningIgnores ?? {},
+      consecutiveSendWarningIgnores: tab?.consecutiveSendWarningIgnores ?? {},
       checkFlushrecvBeforeSend: checkFlushrecv,
+      checkConsecutiveSend: checkConsecutive,
       analysisLimitations,
     })
     host.updateFlowchart(buildFlowchartForActiveTab(text))

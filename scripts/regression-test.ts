@@ -9,6 +9,8 @@ import { runBranchAssumptionTests } from './test-branch-assumptions'
 import { runVariableAssumptionTests } from './test-variable-assumptions'
 import { runAssignmentCommandMisuseTests } from './test-assignment-command-misuse'
 import { runFlushrecvBeforeSendTests } from './test-flushrecv-before-send'
+import { runConsecutiveSendTests } from './test-consecutive-send'
+import { runUnresolvedDisplayTests } from './test-unresolved-display'
 import { runCommandHintTests } from './test-command-hints'
 
 let passed = 0
@@ -186,6 +188,20 @@ console.log('=== B5. 代入右辺のコマンド名誤用 ===')
 console.log('=== B5a. flushrecv → send → wait チェック ===')
 {
   const r = runFlushrecvBeforeSendTests()
+  passed += r.passed
+  failed += r.failed
+}
+
+console.log('=== B5b. 連続 send チェック ===')
+{
+  const r = runConsecutiveSendTests()
+  passed += r.passed
+  failed += r.failed
+}
+
+console.log('=== B5c. 未確定値の表示 ===')
+{
+  const r = runUnresolvedDisplayTests()
   passed += r.passed
   failed += r.failed
 }

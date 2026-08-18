@@ -15,9 +15,12 @@ import { createIncludePanel } from './ui/includePanel'
 import { clearAnalysisCache } from './ttl/analysisContext'
 import { variableAssumptionKey } from './ttl/variableAssumptions'
 import { flushrecvWarningIgnoreKey } from './ttl/flushrecvWarningIgnores'
+import { consecutiveSendWarningIgnoreKey } from './ttl/consecutiveSendWarningIgnores'
 import type { TextEncoding, NewlineType } from './text/types'
 import { ENCODING_LABELS, NEWLINE_LABELS } from './text/types'
 import { loadAppSettings, saveAppSettings } from './storage/appSettings'
+import { showAppOptionsDialog } from './ui/appSettingsDialog'
+import { setUnresolvedValueDisplay } from './ttl/unresolvedDisplay'
 import { loadWorkspaceSession, saveWorkspaceSession } from './storage/sessionState'
 import { showGotoLineDialog } from './ui/gotoLineDialog'
 import { setupSidePanelResize } from './ui/sidePanelResize'
@@ -32,6 +35,9 @@ let isDark = appSettings.isDark
 let flowchartShowDetailedWaits = appSettings.flowchartShowDetailedWaits
 let flowchartShowAssignments = appSettings.flowchartShowAssignments
 let checkFlushrecvBeforeSend = appSettings.checkFlushrecvBeforeSend
+let checkConsecutiveSend = appSettings.checkConsecutiveSend
+let unresolvedValueDisplay = appSettings.unresolvedValueDisplay
+setUnresolvedValueDisplay(unresolvedValueDisplay)
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
@@ -67,6 +73,7 @@ const sidePanel = createSidePanel(document.querySelector('#side-panel')!, {
   showDetailedWaits: flowchartShowDetailedWaits,
   showAssignments: flowchartShowAssignments,
   checkFlushrecvBeforeSend,
+  checkConsecutiveSend,
 })
 const includePanel = createIncludePanel(sidePanel.includeMount)
 sidePanel.onGotoLine((line) => editor.gotoLine(line))
@@ -196,6 +203,7 @@ const analysis = createAnalysisCoordinator({
   flowchartShowDetailedWaits: () => flowchartShowDetailedWaits,
   flowchartShowAssignments: () => flowchartShowAssignments,
   checkFlushrecvBeforeSend: () => checkFlushrecvBeforeSend,
+  checkConsecutiveSend: () => checkConsecutiveSend,
 })
 
 const dryRunDialogAdapter = createBrowserDialogAdapter()
@@ -402,6 +410,48 @@ function handleThemeToggle() {
   applyTheme(!isDark)
 }
 
+function handleOpenOptions() {
+  showAppOptionsDialog({
+    values: {
+      unresolvedValueDisplay,
+      checkFlushrecvBeforeSend,
+      checkConsecutiveSend,
+      flowchartShowDetailedWaits,
+      flowchartShowAssignments,
+    },
+    onChange(partial) {
+      if (partial.unresolvedValueDisplay !== undefined) {
+        unresolvedValueDisplay = partial.unresolvedValueDisplay
+        setUnresolvedValueDisplay(unresolvedValueDisplay)
+        saveAppSettings({ unresolvedValueDisplay })
+        sidePanel.refresh()
+      }
+      if (partial.checkFlushrecvBeforeSend !== undefined) {
+        checkFlushrecvBeforeSend = partial.checkFlushrecvBeforeSend
+        saveAppSettings({ checkFlushrecvBeforeSend })
+        analysis.runAnalysisNow(editor.getValue())
+      }
+      if (partial.checkConsecutiveSend !== undefined) {
+        checkConsecutiveSend = partial.checkConsecutiveSend
+        saveAppSettings({ checkConsecutiveSend })
+        analysis.runAnalysisNow(editor.getValue())
+      }
+      if (partial.flowchartShowDetailedWaits !== undefined) {
+        flowchartShowDetailedWaits = partial.flowchartShowDetailedWaits
+        saveAppSettings({ flowchartShowDetailedWaits })
+        sidePanel.syncViewOptions({ showDetailedWaits: flowchartShowDetailedWaits })
+        sidePanel.updateFlowchart(analysis.buildFlowchartForActiveTab(editor.getValue()))
+      }
+      if (partial.flowchartShowAssignments !== undefined) {
+        flowchartShowAssignments = partial.flowchartShowAssignments
+        saveAppSettings({ flowchartShowAssignments })
+        sidePanel.syncViewOptions({ showAssignments: flowchartShowAssignments })
+        sidePanel.updateFlowchart(analysis.buildFlowchartForActiveTab(editor.getValue()))
+      }
+    },
+  })
+}
+
 function handleGotoLine() {
   const pos = editor.view.state.selection.main.head
   const currentLine = editor.view.state.doc.lineAt(pos).number
@@ -429,6 +479,7 @@ createToolbar(document.querySelector('#toolbar')!, editor, {
     void files.handleSave()
   },
   onThemeToggle: handleThemeToggle,
+  onOpenOptions: handleOpenOptions,
   onEncodingChange: (encoding: TextEncoding) => files.handleEncodingChange(encoding),
   onNewlineChange: (newline: NewlineType) => files.handleNewlineChange(newline),
   onCloseTab: handleCloseTab,
@@ -454,11 +505,6 @@ sidePanel.onFlowchartAssignmentsChange((show) => {
   saveAppSettings({ flowchartShowAssignments: show })
   sidePanel.updateFlowchart(analysis.buildFlowchartForActiveTab(editor.getValue()))
 })
-sidePanel.onCheckFlushrecvBeforeSendChange((enabled) => {
-  checkFlushrecvBeforeSend = enabled
-  saveAppSettings({ checkFlushrecvBeforeSend: enabled })
-  analysis.runAnalysisNow(editor.getValue())
-})
 sidePanel.onFlushrecvWarningIgnoreChange((line, ignored) => {
   const tab = tabManager.activeTab
   if (!tab) return
@@ -467,6 +513,17 @@ sidePanel.onFlushrecvWarningIgnoreChange((line, ignored) => {
   if (ignored) next[key] = true
   else delete next[key]
   tab.flushrecvWarningIgnores = next
+  schedulePersistWorkspaceSession()
+  analysis.runAnalysisNow(editor.getValue())
+})
+sidePanel.onConsecutiveSendWarningIgnoreChange((line, ignored) => {
+  const tab = tabManager.activeTab
+  if (!tab) return
+  const next = { ...(tab.consecutiveSendWarningIgnores ?? {}) }
+  const key = consecutiveSendWarningIgnoreKey(line)
+  if (ignored) next[key] = true
+  else delete next[key]
+  tab.consecutiveSendWarningIgnores = next
   schedulePersistWorkspaceSession()
   analysis.runAnalysisNow(editor.getValue())
 })

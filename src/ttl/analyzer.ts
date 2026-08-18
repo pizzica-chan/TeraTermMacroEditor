@@ -6,6 +6,7 @@ import {
 import { checkCommandArgs, findAssignmentIndex } from './argChecker'
 import { checkAssignmentRhsCommandMisuse } from './assignmentCommandMisuse'
 import { collectFlushrecvBeforeSendDiagnostics } from './flushrecvBeforeSend'
+import { collectConsecutiveSendDiagnostics } from './consecutiveSend'
 import {
   isGroupedStringExprStart,
   resolveStaticControlPart,
@@ -133,6 +134,10 @@ export interface AnalyzeOptions {
   checkFlushrecvBeforeSend?: boolean
   /** flushrecv 警告を無視する行（1-based） */
   ignoredFlushrecvWarningLines?: ReadonlySet<number>
+  /** 連続 send / sendln の間に wait・ダイアログがあるか（オプション ON 時のみ） */
+  checkConsecutiveSend?: boolean
+  /** 連続 send 警告を無視する行（1-based） */
+  ignoredConsecutiveSendWarningLines?: ReadonlySet<number>
 }
 
 /** include 親子タブ間の変数連携 */
@@ -1453,6 +1458,14 @@ export function analyzeTTL(source: string, options?: AnalyzeOptions): AnalysisRe
   if (options?.checkFlushrecvBeforeSend) {
     const ignored = options.ignoredFlushrecvWarningLines
     for (const d of collectFlushrecvBeforeSendDiagnostics(lines)) {
+      if (ignored?.has(d.line)) continue
+      pushDiagnostic(ctx, d)
+    }
+  }
+
+  if (options?.checkConsecutiveSend) {
+    const ignored = options.ignoredConsecutiveSendWarningLines
+    for (const d of collectConsecutiveSendDiagnostics(lines)) {
       if (ignored?.has(d.line)) continue
       pushDiagnostic(ctx, d)
     }

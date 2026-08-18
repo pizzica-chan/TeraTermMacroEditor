@@ -29,6 +29,7 @@ import {
   type StaticValueContext,
 } from './staticCommandEval'
 import { formatSendPayloadForDisplay } from './sendText'
+import { formatUnresolvedDisplay } from './unresolvedDisplay'
 import {
   isSendRecordCommand,
   sendAddsNewline,
@@ -119,7 +120,7 @@ export function formatDryRunEventMessage(event: DryRunEvent): string {
 export function formatDryRunEventPayload(event: DryRunEvent): string | undefined {
   if (event.maskPayload) return undefined
   if (event.payload === undefined) return undefined
-  const text = formatSendPayloadForDisplay(event.payload)
+  const text = formatSendPayloadForDisplay(formatUnresolvedDisplay(event.payload))
   return event.addsNewline ? `${text} ↵` : text
 }
 

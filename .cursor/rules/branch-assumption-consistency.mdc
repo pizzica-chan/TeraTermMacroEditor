@@ -4,6 +4,8 @@ globs:
   - src/ttl/evaluator.ts
   - src/ttl/branchAssumptions.ts
   - src/ttl/variableAssumptions.ts
+  - src/ttl/includeRefs.ts
+  - src/ttl/commandOutputs.ts
   - src/ttl/analysisLimitations.ts
   - src/app/analysisCoordinator.ts
   - src/app/dryRunController.ts
@@ -35,27 +37,37 @@ alwaysApply: false
 
 - 仮定は `processLine` の後（その行で生まれた未確定値は次行以降へ反映）に適用する。
 - 未確定変数の収集は仮定なし評価の beforeLine / afterLine を使う（UI リストは仮定後も残す）。
+- リストは未確定の根源（getdate / getenv / inputbox / random 等）だけにする。代入・連結で伝播した派生変数は出さない（根源の仮定が親 env・送信・ホバーへ伝播する）。
+- `strreplace` / `strinsert` / `strconcat` 等のインプレース変換も新しい根源にしない（dest の既存未確定 ID を継承する）。
+- `sprintf2` / `strcopy` / `int2str` 等の出力専用 dest は上書き前の dest から継承しない（引数側の ID だけを継承する）。
+- 原因変数の内容表示は、同じ根源 ID 集合を持つ派生（リテラル連結など）だけを使う。別の未確定根源と混ぜた値は使わない。
 - `result` / `timeout` / `param` 等のシステム変数は仮定対象にしない。
 - 整数仮定は TTL 整数として解釈できない入力を保存・適用しない。
 - 行番号キーを include 先へ引き継がない。リンク先自身の仮定だけを使う。
 - 親の include 経路で得た変数は親 env・送信データ・ホバーへ反映する。
+- include 先タブを単独表示するときは、親の include 直前 env を初期値にする（親で代入した値が内容表示に載る）。
+- ループ include の反復別タブにはその反復の直前 env を渡す。全反復共通タブは最終反復の env でよい。ループが途中で `stopAll` した場合は、止まる反復の直前 env を使う。
+- ループ include のタブ紐づけはパスキーと `@loop:L行:値` の両方を `resolveIncludeBindingTabId` で解決する（リンク判定と `importedEnv` 取得で同じ関数を使う）。
 
 ## 共通の不変条件
 
 - フロー図と `dryRun.ts` / `dryRunController.ts` には仮定を適用しない。実行時条件と静的な仮定を混同しない。
 - エディタ表示には「仮定」であることを明記し、実行結果のように見せない。
 - 未確定分岐・未確定変数の入力 UI と include リンク UI は「前提」タブにまとめる（送信データ・ドライラン・フロー・変数タブには出さない）。
-- 前提タブと送信データタブでは未仮定の分岐・変数とタブ未指定 include を警告する。
+- 前提タブと送信データタブでは未仮定の分岐とタブ未指定 include を警告する。未確定変数は警告しない（前提タブの入力 UI は残す）。
 - フローとドライラン開始時はタブ未指定 include だけを警告し、分岐・変数仮定の選択状況は参照しない。
 
 ## 実装の要点（配線）
 
-- `analysisCoordinator.ts` … `evaluateTTL` へ `branchAssumptions` / `variableAssumptions` を渡す経路、include 解決時のリンク先仮定、limitation 収集
+- `analysisCoordinator.ts` … `evaluateTTL` へ `branchAssumptions` / `variableAssumptions` / `importedEnv` を渡す経路、include 解決時のリンク先仮定、limitation 収集
+- `includeRefs.ts` … `isLoopIncludeCommonTab` / `loopIncludeIterationValuesForTab`（リンク判定と importedEnv で共有）
+- `evaluator.ts` … 未確定根源 ID の継承（インプレース dest のみ）、ループ内 `beforeLine` は各反復で上書き、ループ include 直前 env（`beforeIncludeByLoopKey`）
+- `commandOutputs.ts` … `INDEPENDENT_OUTPUT_COMMANDS` / `isInPlaceStringCommand`
 - `dryRunController.ts` … スナップショット／ドライラン開始に静的仮定を混入させない（実行時プロンプトのみ）
 
 ## 変更時の横展開確認
 
-ブロック if、単行 if、elseif、else、ネスト、include、`end`、True/False/クリア、inputbox/getenv/random 等を確認する。
+ブロック if、単行 if、elseif、else、ネスト、include、`end`、True/False/クリア、inputbox/getenv/random、インプレース変換、`sprintf2` の dest 上書き、ループ反復別 include タブ、ループ途中 `stopAll` を確認する。
 特に制御フロー変更では、送信データだけでなく `beforeLine` と include 後の env も確認する。
 
 ```bash

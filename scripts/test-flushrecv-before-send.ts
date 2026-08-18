@@ -179,7 +179,7 @@ export function runFlushrecvBeforeSendTests(): TestRunResult {
   const sampleWarnLines = analyzeWithOption(sample)
     .diagnostics.filter((d) => d.message.includes('flushrecv'))
     .map((d) => d.line)
-  if (JSON.stringify(sampleWarnLines) === JSON.stringify([39, 47, 55, 66, 81, 90]))
+  if (JSON.stringify(sampleWarnLines) === JSON.stringify([38, 46, 54, 65, 80, 89]))
     ok('検証用サンプルの警告行')
   else ng('検証用サンプルの警告行', sampleWarnLines)
 

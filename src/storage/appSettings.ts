@@ -1,5 +1,9 @@
 import { DocumentSettings } from '../text/documentSettings'
 import type { TextEncoding, NewlineType } from '../text/types'
+import {
+  isUnresolvedValueDisplay,
+  type UnresolvedValueDisplay,
+} from '../ttl/unresolvedDisplay'
 
 export interface AppSettings {
   isDark: boolean
@@ -10,6 +14,10 @@ export interface AppSettings {
   flowchartShowAssignments: boolean
   /** send 系の前に flushrecv があるか（flushrecv→wait 系の並び、およびその間の 2 つ目以降の send） */
   checkFlushrecvBeforeSend: boolean
+  /** 連続する send / sendln の間に wait 系またはダイアログがあるか */
+  checkConsecutiveSend: boolean
+  /** 静的解析の未確定値を連結式で出すか、文字列へ埋め込んで出すか */
+  unresolvedValueDisplay: UnresolvedValueDisplay
 }
 
 const STORAGE_KEY = 'ttl-macro-editor-settings'
@@ -22,6 +30,8 @@ const DEFAULTS: AppSettings = {
   flowchartShowDetailedWaits: false,
   flowchartShowAssignments: false,
   checkFlushrecvBeforeSend: false,
+  checkConsecutiveSend: false,
+  unresolvedValueDisplay: 'expression',
 }
 
 function isEncoding(v: unknown): v is TextEncoding {
@@ -57,6 +67,13 @@ export function loadAppSettings(): AppSettings {
         typeof parsed.checkFlushrecvBeforeSend === 'boolean'
           ? parsed.checkFlushrecvBeforeSend
           : DEFAULTS.checkFlushrecvBeforeSend,
+      checkConsecutiveSend:
+        typeof parsed.checkConsecutiveSend === 'boolean'
+          ? parsed.checkConsecutiveSend
+          : DEFAULTS.checkConsecutiveSend,
+      unresolvedValueDisplay: isUnresolvedValueDisplay(parsed.unresolvedValueDisplay)
+        ? parsed.unresolvedValueDisplay
+        : DEFAULTS.unresolvedValueDisplay,
     }
   } catch {
     return { ...DEFAULTS }

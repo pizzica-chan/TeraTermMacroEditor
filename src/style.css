@@ -1187,6 +1187,10 @@ body {
   border-bottom: 1px solid var(--border-color);
 }
 
+.analysis-options-section[hidden] {
+  display: none;
+}
+
 .analysis-options-section h2 {
   font-size: 11px;
   font-weight: 600;
@@ -1811,6 +1815,116 @@ body {
 
 .goto-line-ok:hover {
   background: var(--accent-hover) !important;
+}
+
+/* App options dialog */
+.app-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.app-settings-dialog {
+  width: min(480px, 92vw);
+  max-height: 80vh;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.app-settings-title {
+  margin-bottom: 12px;
+  font-size: 15px;
+}
+
+.app-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.app-settings-fieldset {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.app-settings-fieldset legend {
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.app-settings-label {
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.app-settings-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin: 0 0 8px;
+}
+
+.app-settings-choice,
+.app-settings-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.app-settings-choice input,
+.app-settings-check input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.app-settings-choice-title {
+  display: block;
+  font-weight: 600;
+}
+
+.app-settings-example {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.app-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.app-settings-close {
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.app-settings-close:hover {
+  background: var(--accent-hover);
 }
 
 /* File drop overlay */

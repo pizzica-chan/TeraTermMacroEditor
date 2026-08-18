@@ -22,6 +22,8 @@ export interface EditorTab {
   variableAssumptions?: Record<string, string>
   /** flushrecv 警告を無視する行（行番号文字列キー → true） */
   flushrecvWarningIgnores?: Record<string, boolean>
+  /** 連続 send 警告を無視する行（行番号文字列キー → true） */
+  consecutiveSendWarningIgnores?: Record<string, boolean>
 }
 
 let nextTabId = 1
@@ -169,6 +171,7 @@ export class TabManager {
     branchAssumptions?: Record<string, boolean>
     variableAssumptions?: Record<string, string>
     flushrecvWarningIgnores?: Record<string, boolean>
+    consecutiveSendWarningIgnores?: Record<string, boolean>
     activate?: boolean
   }): EditorTab | null {
     if (!this.canAddTab()) {
@@ -192,6 +195,9 @@ export class TabManager {
       branchAssumptions: options.branchAssumptions ? { ...options.branchAssumptions } : {},
       variableAssumptions: options.variableAssumptions ? { ...options.variableAssumptions } : {},
       flushrecvWarningIgnores: options.flushrecvWarningIgnores ? { ...options.flushrecvWarningIgnores } : {},
+      consecutiveSendWarningIgnores: options.consecutiveSendWarningIgnores
+        ? { ...options.consecutiveSendWarningIgnores }
+        : {},
     }
 
     this.tabs.push(tab)
@@ -338,6 +344,7 @@ export class TabManager {
       branchAssumptions: { ...(tab.branchAssumptions ?? {}) },
       variableAssumptions: { ...(tab.variableAssumptions ?? {}) },
       flushrecvWarningIgnores: { ...(tab.flushrecvWarningIgnores ?? {}) },
+      consecutiveSendWarningIgnores: { ...(tab.consecutiveSendWarningIgnores ?? {}) },
     }))
     return {
       version: 1,
@@ -372,6 +379,7 @@ export class TabManager {
         branchAssumptions: { ...(saved.branchAssumptions ?? {}) },
         variableAssumptions: { ...(saved.variableAssumptions ?? {}) },
         flushrecvWarningIgnores: { ...(saved.flushrecvWarningIgnores ?? {}) },
+        consecutiveSendWarningIgnores: { ...(saved.consecutiveSendWarningIgnores ?? {}) },
       })
     }
 

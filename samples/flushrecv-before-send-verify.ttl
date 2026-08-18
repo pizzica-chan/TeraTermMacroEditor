@@ -5,28 +5,27 @@
 ; 【開き方】ファイル → 開く でこのファイルを選択
 ;
 ; 【有効化】
-;   サイドパネル「前提」タブ → 「解析オプション」
-;   → 「flushrecv チェック: ON」にする（デフォルト OFF）
+;   ヘッダ「オプション」→ 解析 → 「flushrecv チェック」（デフォルト OFF）
 ;
 ; 【確認場所】
 ;   ・画面下「診断」… flushrecv 関連の警告（⚠）
 ;   ・エディタ行上の lint マーカー（診断と同期）
 ;   ・診断の各行に「無視」ボタン（チェック ON 時のみ）
-;   ・前提タブ「無視した flushrecv 警告」… 無視行の一覧と「解除」
+;   ・前提タブ「無視した解析警告」… 無視行の一覧と「解除」
 ;
 ; 【期待結果（チェック ON）】
-;   ケース A … L39 sendln に警告（flushrecv より前で flushrecv なし）
-;   ケース B … L47 sendln に警告（最小例: aaa）
-;   ケース C … L55 sendln に警告 / L57 sendln は警告なし
-;   ケース D … L66 sendln に警告 / L65 sendln は警告なし
+;   ケース A … L38 sendln に警告（flushrecv より前で flushrecv なし）
+;   ケース B … L46 sendln に警告（最小例: aaa）
+;   ケース C … L54 sendln に警告 / L56 sendln は警告なし
+;   ケース D … L65 sendln に警告 / L64 sendln は警告なし
 ;   ケース E … 警告なし（flushrecv → sendln → wait）
-;   ケース F … L81 sendln に警告 / L83 sendln は警告なし（ケース C と同型）
-;   ケース G … L90 sendln に警告（waitn も wait 系）
-;   ケース H … L98 sendln / L103 sendln は警告なし（end で区間が切れる）
+;   ケース F … L80 sendln に警告 / L82 sendln は警告なし（ケース C と同型）
+;   ケース G … L89 sendln に警告（waitn も wait 系）
+;   ケース H … L97 sendln / L102 sendln は警告なし（end で区間が切れる）
 ;
 ; 【無視の確認】
-;   1. ケース A の L39 警告で「無視」→ 診断・lint から消える
-;   2. 前提タブに「L39」が表示 → 「解除」で警告が戻る
+;   1. ケース A の L38 警告で「無視」→ 診断・lint から消える
+;   2. 前提タブに「L38」が表示 → 「解除」で警告が戻る
 ;   3. 無視設定はタブごとに保存（セッション復元で残る）
 ;
 ; 【チェック OFF】
@@ -39,7 +38,7 @@
 sendln 'case-a'
 flushrecv
 wait '$'
-; ↑ L39 case-a に警告
+; ↑ L38 case-a に警告
 
 
 ; --- ケース B: 同上（最小パターン）---
@@ -47,7 +46,7 @@ wait '$'
 sendln 'aaa'
 flushrecv
 wait '$'
-; ↑ L47 aaa に警告
+; ↑ L46 aaa に警告
 
 
 ; --- ケース C: send → flushrecv → send → wait（間に send 1 つ）---
@@ -56,7 +55,7 @@ sendln 'case-c-before'
 flushrecv
 sendln 'case-c-after'
 wait '$'
-; ↑ L55 case-c-before に警告 / L57 case-c-after は警告なし
+; ↑ L54 case-c-before に警告 / L56 case-c-after は警告なし
 
 
 ; --- ケース D: flushrecv → send ×2 → wait（2 つ目に警告）---
@@ -65,7 +64,7 @@ flushrecv
 sendln 'case-d-first'
 sendln 'case-d-second'
 wait '$'
-; ↑ L66 case-d-second に警告 / L65 case-d-first は警告なし
+; ↑ L65 case-d-second に警告 / L64 case-d-first は警告なし
 
 
 ; --- ケース E: 正しい順序（警告なし）---
@@ -82,7 +81,7 @@ sendln 'case-f-skip'
 flushrecv
 sendln 'case-f-ok'
 wait '$'
-; ↑ L81 case-f-skip に警告 / L83 case-f-ok は警告なし
+; ↑ L80 case-f-skip に警告 / L82 case-f-ok は警告なし
 
 
 ; --- ケース G: waitn（公式も flushrecv の後に waitn）---
@@ -90,7 +89,7 @@ wait '$'
 sendln 'case-g'
 flushrecv
 waitn 10
-; ↑ L90 case-g に警告
+; ↑ L89 case-g に警告
 
 
 ; --- ケース H: end 後のサブルーチンは別区間 ---
@@ -102,4 +101,4 @@ end
 flushrecv
 sendln 'retry-cmd'
 wait '$'
-; ↑ L98 goodbye / L103 retry-cmd は警告なし
+; ↑ L97 goodbye / L102 retry-cmd は警告なし

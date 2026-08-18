@@ -13,6 +13,8 @@ let includeCrossTabContext:
 
 let checkFlushrecvBeforeSend = false
 let ignoredFlushrecvWarningLines: ReadonlySet<number> = new Set()
+let checkConsecutiveSend = false
+let ignoredConsecutiveSendWarningLines: ReadonlySet<number> = new Set()
 
 let cachedSource = ''
 let cachedAnalysis: AnalysisResult | null = null
@@ -85,6 +87,14 @@ export function setFlushrecvBeforeSendCheck(
   ignoredFlushrecvWarningLines = new Set(ignoredLines)
 }
 
+export function setConsecutiveSendCheck(
+  enabled: boolean,
+  ignoredLines: ReadonlySet<number> = new Set(),
+): void {
+  checkConsecutiveSend = enabled
+  ignoredConsecutiveSendWarningLines = new Set(ignoredLines)
+}
+
 /** linter / 補完のキャッシュ未ヒット時も coordinator と同じ解析オプションにする */
 export function getEditorAnalyzeOptions(): AnalyzeOptions {
   const crossTab = includeCrossTabContext
@@ -94,6 +104,8 @@ export function getEditorAnalyzeOptions(): AnalyzeOptions {
     externallyDeclaredVars: crossTab?.externallyDeclared,
     checkFlushrecvBeforeSend,
     ignoredFlushrecvWarningLines,
+    checkConsecutiveSend,
+    ignoredConsecutiveSendWarningLines,
   }
 }
 

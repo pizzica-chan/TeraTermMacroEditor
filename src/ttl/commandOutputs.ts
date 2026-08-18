@@ -254,6 +254,20 @@ export function getOutputVariableIndices(cmd: string): ReadonlySet<number> {
   return new Set(effect.variables.map((v) => v.index))
 }
 
+/** dest を読んで書き戻す文字列コマンド。sprintf2 / strcopy 等の出力専用 dest は含まない */
+const IN_PLACE_STRING_COMMANDS = new Set([
+  'strconcat',
+  'strinsert',
+  'strremove',
+  'strreplace',
+  'strtrim',
+  'strspecial',
+])
+
+export function isInPlaceStringCommand(cmd: string): boolean {
+  return IN_PLACE_STRING_COMMANDS.has(cmd.toLowerCase())
+}
+
 /** 第1引数が出力変数のコマンド（後方互換・補完等） */
 export function isArg1OutputCommand(cmd: string): boolean {
   const effect = getCommandOutputEffect(cmd)
@@ -262,4 +276,53 @@ export function isArg1OutputCommand(cmd: string): boolean {
 
 export function getOutputVariableType(cmd: string, index = 1): OutputVarType | undefined {
   return getCommandOutputEffect(cmd)?.variables?.find((v) => v.index === index)?.type
+}
+
+/**
+ * 出力が TTL 引数から導出せず、実行時に新たに決まるコマンド。
+ * これらが未確定変数の「原因」（仮定対象）。sprintf2 / strconcat 等の変換は含まない。
+ */
+export const INDEPENDENT_OUTPUT_COMMANDS = new Set([
+  'random',
+  'uptime',
+  'getmodemstatus',
+  'gethostname',
+  'gettitle',
+  'getttdir',
+  'getdir',
+  'getver',
+  'getspecialfolder',
+  'clipb2var',
+  'loginfo',
+  'expandenv',
+  'getdate',
+  'gettime',
+  'getenv',
+  'filecreate',
+  'fileopen',
+  'filereadln',
+  'fileread',
+  'findfirst',
+  'findnext',
+  'getpassword',
+  'getpassword2',
+  'getttpos',
+  'filestat',
+  'getipv4addr',
+  'getipv6addr',
+  'checksum8file',
+  'checksum16file',
+  'checksum32file',
+  'crc16file',
+  'crc32file',
+  'inputbox',
+  'passwordbox',
+  'filenamebox',
+  'dirnamebox',
+  'recvln',
+  'waitrecv',
+])
+
+export function commandIntroducesIndependentOutput(cmd: string): boolean {
+  return INDEPENDENT_OUTPUT_COMMANDS.has(cmd.toLowerCase())
 }

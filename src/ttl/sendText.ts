@@ -1,4 +1,5 @@
 import type { SendEntry } from './evaluator'
+import { formatUnresolvedDisplay } from './unresolvedDisplay'
 
 const CONTROL_CHAR_NAMES: Readonly<Record<number, string>> = {
   0: 'NUL',
@@ -67,7 +68,7 @@ export function renderSendPayloadHtml(payload: string): string {
 export function buildSendPlainTextForCopy(entries: SendEntry[]): string {
   let out = ''
   for (const entry of entries) {
-    out += entry.payload
+    out += formatUnresolvedDisplay(entry.payload)
     if (entry.addsNewline) out += '\n'
   }
   return out

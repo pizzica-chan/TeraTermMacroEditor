@@ -15,13 +15,21 @@ import {
 import type { FlowchartModel } from '../ttl/flowchart'
 import type { AnalysisLimitations } from '../ttl/analysisLimitations'
 import { FLUSHRECV_BEFORE_SEND_DIAG_CODE } from '../ttl/flushrecvWarningIgnores'
+import { CONSECUTIVE_SEND_DIAG_CODE } from '../ttl/consecutiveSendWarningIgnores'
+import { formatUnresolvedDisplay } from '../ttl/unresolvedDisplay'
 import { mountFlowchart } from './flowchart/mountFlowchart'
 
 export type SidePanelTab = 'setup' | 'sends' | 'dryrun' | 'flowchart' | 'variables'
 
 export function createSidePanel(
   container: HTMLElement,
-  options?: { dark?: boolean; showDetailedWaits?: boolean; showAssignments?: boolean; checkFlushrecvBeforeSend?: boolean },
+  options?: {
+    dark?: boolean
+    showDetailedWaits?: boolean
+    showAssignments?: boolean
+    checkFlushrecvBeforeSend?: boolean
+    checkConsecutiveSend?: boolean
+  },
 ): {
   update: (data: {
     analysis: AnalysisResult
@@ -31,7 +39,9 @@ export function createSidePanel(
     indeterminateVariables?: IndeterminateVariable[]
     variableAssumptions?: Record<string, string>
     flushrecvWarningIgnores?: Record<string, boolean>
+    consecutiveSendWarningIgnores?: Record<string, boolean>
     checkFlushrecvBeforeSend?: boolean
+    checkConsecutiveSend?: boolean
     analysisLimitations?: AnalysisLimitations
   }) => void
   updateDryRun: (state: DryRunState | null) => void
@@ -46,11 +56,13 @@ export function createSidePanel(
   onGotoFlowchartLocation: (handler: (location: string) => void) => void
   onFlowchartDetailedWaitsChange: (handler: (show: boolean) => void) => void
   onFlowchartAssignmentsChange: (handler: (show: boolean) => void) => void
-  onCheckFlushrecvBeforeSendChange: (handler: (enabled: boolean) => void) => void
   onFlushrecvWarningIgnoreChange: (handler: (line: number, ignored: boolean) => void) => void
+  onConsecutiveSendWarningIgnoreChange: (handler: (line: number, ignored: boolean) => void) => void
   onClearDryRun: (handler: () => void) => void
   onBranchAssumptionChange: (handler: (line: number, value: boolean | null) => void) => void
   onVariableAssumptionChange: (handler: (line: number, name: string, value: string | null) => void) => void
+  refresh: () => void
+  syncViewOptions: (options: { showDetailedWaits?: boolean; showAssignments?: boolean }) => void
 } {
   let gotoHandler: ((line: number) => void) | null = null
   let dryRunGotoHandler: ((location: string) => void) | null = null
@@ -58,8 +70,8 @@ export function createSidePanel(
   let flowchartGotoHandler: ((location: string) => void) | null = null
   let flowchartDetailedWaitsHandler: ((show: boolean) => void) | null = null
   let flowchartAssignmentsHandler: ((show: boolean) => void) | null = null
-  let checkFlushrecvBeforeSendHandler: ((enabled: boolean) => void) | null = null
   let flushrecvWarningIgnoreHandler: ((line: number, ignored: boolean) => void) | null = null
+  let consecutiveSendWarningIgnoreHandler: ((line: number, ignored: boolean) => void) | null = null
   let clearDryRunHandler: (() => void) | null = null
   let branchAssumptionHandler: ((line: number, value: boolean | null) => void) | null = null
   let variableAssumptionHandler: ((line: number, name: string, value: string | null) => void) | null = null
@@ -72,7 +84,9 @@ export function createSidePanel(
     indeterminateVariables: IndeterminateVariable[]
     variableAssumptions: Record<string, string>
     flushrecvWarningIgnores: Record<string, boolean>
+    consecutiveSendWarningIgnores: Record<string, boolean>
     checkFlushrecvBeforeSend: boolean
+    checkConsecutiveSend: boolean
     analysisLimitations: AnalysisLimitations
   } | null = null
   let dryRunState: DryRunState | null = null
@@ -80,6 +94,7 @@ export function createSidePanel(
   let showDetailedWaits = options?.showDetailedWaits ?? false
   let showAssignments = options?.showAssignments ?? false
   let checkFlushrecvBeforeSend = options?.checkFlushrecvBeforeSend ?? false
+  let checkConsecutiveSend = options?.checkConsecutiveSend ?? false
   let setupWarningDetailsOpen = false
 
   container.innerHTML = ''
@@ -159,14 +174,10 @@ export function createSidePanel(
 
   const analysisOptionsSection = document.createElement('div')
   analysisOptionsSection.className = 'analysis-options-section'
+  analysisOptionsSection.hidden = true
   analysisOptionsSection.innerHTML = `
-    <h2>解析オプション</h2>
-    <p class="branch-assumptions-hint">静的解析の追加チェックです。デフォルトはオフです。</p>
-    <div class="analysis-options-actions">
-      <button type="button" id="check-flushrecv-before-send-btn" class="panel-action-btn" title="flushrecv の後に wait 系（waitn / recvln 含む）がある並びを検査。send / sendln の前に flushrecv がない行を警告（flushrecv と wait の間に send が2つ以上のときは2つ目以降も）。end / exit / return で区間を区切る"></button>
-    </div>
     <div class="flushrecv-warning-ignores-section" id="flushrecv-warning-ignores-section" hidden>
-      <h3 class="flushrecv-warning-ignores-title">無視した flushrecv 警告</h3>
+      <h3 class="flushrecv-warning-ignores-title">無視した解析警告</h3>
       <div class="flushrecv-warning-ignores-list" id="flushrecv-warning-ignores-list"></div>
     </div>
   `
@@ -176,7 +187,7 @@ export function createSidePanel(
   variableSection.id = 'variable-assumptions-section'
   variableSection.innerHTML = `
     <h2>未確定変数</h2>
-    <p class="branch-assumptions-hint">静的に値が決まらない変数です。値を入力すると送信データ・変数ホバーに反映されます。ドライランの実行値は変わりません。</p>
+    <p class="branch-assumptions-hint">静的に値が決まらない変数のうち、原因となる代入だけを表示します。参照や連結で派生した変数は、原因側の仮定が伝われば足ります。値を入力すると送信データ・変数ホバーに反映されます。ドライランの実行値は変わりません。</p>
     <div class="variable-assumptions-list" id="variable-assumptions-list"></div>
   `
 
@@ -201,7 +212,6 @@ export function createSidePanel(
   const dryRunClearBtn = header.querySelector<HTMLButtonElement>('#dryrun-clear-btn')!
   const flowchartWaitsBtn = flowchartToolbar.querySelector<HTMLButtonElement>('#flowchart-waits-btn')!
   const flowchartAssignmentsBtn = flowchartToolbar.querySelector<HTMLButtonElement>('#flowchart-assignments-btn')!
-  const checkFlushrecvBeforeSendBtn = analysisOptionsSection.querySelector<HTMLButtonElement>('#check-flushrecv-before-send-btn')!
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
   container.append(tabs, header, analysisWarning, body, diagSection)
@@ -220,13 +230,8 @@ export function createSidePanel(
     flowchartAssignmentsBtn.textContent = `代入: ${showAssignments ? 'ON' : 'OFF'}`
     flowchartAssignmentsBtn.setAttribute('aria-pressed', String(showAssignments))
   }
-  function updateCheckFlushrecvBeforeSendButton() {
-    checkFlushrecvBeforeSendBtn.textContent = `flushrecv チェック: ${checkFlushrecvBeforeSend ? 'ON' : 'OFF'}`
-    checkFlushrecvBeforeSendBtn.setAttribute('aria-pressed', String(checkFlushrecvBeforeSend))
-  }
   updateFlowchartWaitsButton()
   updateFlowchartAssignmentsButton()
-  updateCheckFlushrecvBeforeSendButton()
   flowchartWaitsBtn.addEventListener('click', () => {
     showDetailedWaits = !showDetailedWaits
     updateFlowchartWaitsButton()
@@ -236,11 +241,6 @@ export function createSidePanel(
     showAssignments = !showAssignments
     updateFlowchartAssignmentsButton()
     flowchartAssignmentsHandler?.(showAssignments)
-  })
-  checkFlushrecvBeforeSendBtn.addEventListener('click', () => {
-    checkFlushrecvBeforeSend = !checkFlushrecvBeforeSend
-    updateCheckFlushrecvBeforeSendButton()
-    checkFlushrecvBeforeSendHandler?.(checkFlushrecvBeforeSend)
   })
 
   function isDryRunCopyAvailable(state: DryRunState | null): boolean {
@@ -476,7 +476,9 @@ export function createSidePanel(
         ? `<button type="button" class="dryrun-goto" data-location="${escapeAttr(event.location)}" title="行へ移動">⌖</button>`
         : ''
   const displayPayload =
-      !event.maskPayload && event.payload !== undefined ? event.payload : undefined
+      !event.maskPayload && event.payload !== undefined
+        ? formatUnresolvedDisplay(event.payload)
+        : undefined
   const payload =
       displayPayload !== undefined
         ? `<div class="dryrun-payload">${renderSendPayloadHtml(displayPayload)}${event.addsNewline ? '<span class="send-nl-mark">↵</span>' : ''}</div>`
@@ -531,14 +533,11 @@ export function createSidePanel(
     const showUnassumedBranches =
       (activeTab === 'setup' || activeTab === 'sends')
       && (limitations?.unassumedBranches.length ?? 0) > 0
-    const showUnassumedVariables =
-      (activeTab === 'setup' || activeTab === 'sends')
-      && (limitations?.unassumedVariables.length ?? 0) > 0
     const showUnlinkedIncludes =
       (activeTab === 'setup' || activeTab === 'sends' || activeTab === 'flowchart')
       && (limitations?.unlinkedIncludes.length ?? 0) > 0
     const shouldShow =
-      !!limitations && (showUnassumedBranches || showUnassumedVariables || showUnlinkedIncludes)
+      !!limitations && (showUnassumedBranches || showUnlinkedIncludes)
     analysisWarning.hidden = !shouldShow
     if (!shouldShow || !limitations) {
       analysisWarning.innerHTML = ''
@@ -547,9 +546,6 @@ export function createSidePanel(
     }
 
     const summaryParts: string[] = []
-    if (showUnassumedVariables) {
-      summaryParts.push(`未確定変数 ${limitations.unassumedVariables.length} 件`)
-    }
     if (showUnassumedBranches) {
       summaryParts.push(`未確定分岐 ${limitations.unassumedBranches.length} 件`)
     }
@@ -562,7 +558,7 @@ export function createSidePanel(
       activeTab === 'flowchart'
         ? 'include の参照タブを指定してください。分岐仮定・変数仮定はフロー表示に影響しません。'
         : activeTab === 'sends'
-          ? '「前提」タブで未確定変数の値、未確定分岐の True/False、include の参照タブを指定してください。'
+          ? '「前提」タブで未確定分岐の True/False、include の参照タブを指定してください。'
           : '下の各セクションで値を入力・選択してください。'
 
     if (activeTab === 'setup') {
@@ -584,11 +580,6 @@ export function createSidePanel(
     }
 
     const items: string[] = []
-    if (showUnassumedVariables) {
-      items.push(
-        `<li>値が未仮定の変数: ${limitations.unassumedVariables.length} 件</li>`,
-      )
-    }
     if (showUnassumedBranches) {
       items.push(
         `<li>True/False 未選択の分岐: ${limitations.unassumedBranches.length} 件</li>`,
@@ -688,7 +679,7 @@ export function createSidePanel(
               <span class="branch-assumption-cmd">${escapeHtml(variable.name)}</span>
               <span class="variable-assumption-type">${typeLabel}</span>
             </div>
-            <div class="branch-assumption-cond">${escapeHtml(variable.reason)}</div>
+            <div class="branch-assumption-cond">${escapeHtml(formatUnresolvedDisplay(variable.reason))}</div>
             <div class="variable-assumption-actions">
               <input
                 type="text"
@@ -756,28 +747,49 @@ export function createSidePanel(
     bindPanelGotoItems(list)
   }
 
-  function renderFlushrecvWarningIgnores(ignores: Record<string, boolean>) {
-    const section = container.querySelector<HTMLElement>('#flushrecv-warning-ignores-section')!
-    const list = container.querySelector<HTMLElement>('#flushrecv-warning-ignores-list')!
-    const lines = Object.entries(ignores)
+  function ignoredLines(record: Record<string, boolean>): number[] {
+    return Object.entries(record)
       .filter(([, value]) => value)
       .map(([key]) => Number(key))
       .filter((line) => Number.isFinite(line) && line > 0)
       .sort((a, b) => a - b)
+  }
 
-    if (!checkFlushrecvBeforeSend || lines.length === 0) {
+  function renderLintWarningIgnores(
+    flushrecvIgnores: Record<string, boolean>,
+    consecutiveIgnores: Record<string, boolean>,
+  ) {
+    const section = container.querySelector<HTMLElement>('#flushrecv-warning-ignores-section')!
+    const list = container.querySelector<HTMLElement>('#flushrecv-warning-ignores-list')!
+    const items: Array<{ line: number; label: string; code: string }> = []
+    if (checkFlushrecvBeforeSend) {
+      for (const line of ignoredLines(flushrecvIgnores)) {
+        items.push({ line, label: 'flushrecv', code: FLUSHRECV_BEFORE_SEND_DIAG_CODE })
+      }
+    }
+    if (checkConsecutiveSend) {
+      for (const line of ignoredLines(consecutiveIgnores)) {
+        items.push({ line, label: '連続 send', code: CONSECUTIVE_SEND_DIAG_CODE })
+      }
+    }
+    items.sort((a, b) => a.line - b.line || a.label.localeCompare(b.label, 'ja'))
+
+    if (items.length === 0) {
       section.hidden = true
+      analysisOptionsSection.hidden = true
       list.innerHTML = ''
       return
     }
 
+    analysisOptionsSection.hidden = false
     section.hidden = false
-    list.innerHTML = lines
+    list.innerHTML = items
       .map(
-        (line) => `
-          <div class="flushrecv-warning-ignore-item panel-goto-item" data-line="${line}" title="L${line} へ移動">
-            <span class="branch-assumption-line">L${line}</span>
-            <button type="button" class="branch-assumption-btn clear flushrecv-warning-unignore-btn" data-line="${line}">解除</button>
+        (item) => `
+          <div class="flushrecv-warning-ignore-item panel-goto-item" data-line="${item.line}" title="L${item.line} へ移動">
+            <span class="branch-assumption-line">L${item.line}</span>
+            <span class="variable-assumption-type">${escapeHtml(item.label)}</span>
+            <button type="button" class="branch-assumption-btn clear flushrecv-warning-unignore-btn" data-line="${item.line}" data-code="${escapeAttr(item.code)}">解除</button>
           </div>
         `,
       )
@@ -788,9 +800,10 @@ export function createSidePanel(
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
         const line = Number(btn.dataset.line)
-        if (flushrecvWarningIgnoreHandler && Number.isFinite(line) && line > 0) {
-          flushrecvWarningIgnoreHandler(line, false)
-        }
+        const code = btn.dataset.code
+        if (!Number.isFinite(line) || line <= 0) return
+        if (code === CONSECUTIVE_SEND_DIAG_CODE) consecutiveSendWarningIgnoreHandler?.(line, false)
+        else flushrecvWarningIgnoreHandler?.(line, false)
       })
     }
   }
@@ -820,7 +833,9 @@ export function createSidePanel(
     indeterminateVariables: IndeterminateVariable[]
     variableAssumptions: Record<string, string>
     flushrecvWarningIgnores: Record<string, boolean>
+    consecutiveSendWarningIgnores: Record<string, boolean>
     checkFlushrecvBeforeSend: boolean
+    checkConsecutiveSend: boolean
     analysisLimitations: AnalysisLimitations
   }) {
     const {
@@ -831,10 +846,13 @@ export function createSidePanel(
       indeterminateVariables,
       variableAssumptions,
       flushrecvWarningIgnores,
+      consecutiveSendWarningIgnores,
       checkFlushrecvBeforeSend: checkFlushrecvOption,
+      checkConsecutiveSend: checkConsecutiveOption,
       analysisLimitations,
     } = data
     checkFlushrecvBeforeSend = checkFlushrecvOption
+    checkConsecutiveSend = checkConsecutiveOption
     updateStats(analysis, sendEntries)
     renderAnalysisWarning(analysisLimitations)
 
@@ -847,7 +865,7 @@ export function createSidePanel(
     if (activeTab === 'setup') {
       renderVariableAssumptions(indeterminateVariables, variableAssumptions)
       renderBranchAssumptions(indeterminateBranches, branchAssumptions)
-      renderFlushrecvWarningIgnores(flushrecvWarningIgnores)
+      renderLintWarningIgnores(flushrecvWarningIgnores, consecutiveSendWarningIgnores)
     }
     if (activeTab !== 'flowchart') {
       renderDiagnostics(analysis)
@@ -875,7 +893,8 @@ export function createSidePanel(
   }
 
   function renderSend(entry: SendEntry, index: number): string {
-    const payloadHtml = entry.payload ? renderSendPayloadHtml(entry.payload) : '（空）'
+    const displayPayload = entry.payload ? formatUnresolvedDisplay(entry.payload) : ''
+    const payloadHtml = displayPayload ? renderSendPayloadHtml(displayPayload) : '（空）'
     const newlineBadge = entry.addsNewline ? '<span class="badge send-nl">+改行</span>' : ''
     const unresolved = entry.unresolved ? '<span class="badge unused">未解決</span>' : ''
     const loopBadge = entry.loopInfo
@@ -905,9 +924,16 @@ export function createSidePanel(
 
   function renderDiagnostic(d: { severity: string; message: string; line: number; code?: string }): string {
     const clickable = d.line > 0 ? ' panel-goto-item' : ''
-    const ignoreBtn =
+    const canIgnoreFlushrecv =
       checkFlushrecvBeforeSend && d.code === FLUSHRECV_BEFORE_SEND_DIAG_CODE
-        ? `<button type="button" class="diagnostic-ignore-btn branch-assumption-btn" data-line="${d.line}" title="この行の flushrecv 警告を無視">無視</button>`
+    const canIgnoreConsecutive =
+      checkConsecutiveSend && d.code === CONSECUTIVE_SEND_DIAG_CODE
+    const ignoreTitle = canIgnoreConsecutive
+      ? 'この行の連続 send 警告を無視'
+      : 'この行の flushrecv 警告を無視'
+    const ignoreBtn =
+      canIgnoreFlushrecv || canIgnoreConsecutive
+        ? `<button type="button" class="diagnostic-ignore-btn branch-assumption-btn" data-line="${d.line}" data-code="${escapeAttr(d.code ?? '')}" title="${escapeAttr(ignoreTitle)}">無視</button>`
         : ''
     return `
       <div class="diagnostic-item severity-${d.severity}${clickable}"${d.line > 0 ? ` data-line="${d.line}" title="L${d.line} へ移動"` : ''}>
@@ -939,9 +965,10 @@ export function createSidePanel(
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
         const line = Number(btn.dataset.line)
-        if (flushrecvWarningIgnoreHandler && Number.isFinite(line) && line > 0) {
-          flushrecvWarningIgnoreHandler(line, true)
-        }
+        const code = btn.dataset.code
+        if (!Number.isFinite(line) || line <= 0) return
+        if (code === CONSECUTIVE_SEND_DIAG_CODE) consecutiveSendWarningIgnoreHandler?.(line, true)
+        else flushrecvWarningIgnoreHandler?.(line, true)
       })
     }
   }
@@ -975,11 +1002,11 @@ export function createSidePanel(
     onFlowchartAssignmentsChange(handler) {
       flowchartAssignmentsHandler = handler
     },
-    onCheckFlushrecvBeforeSendChange(handler) {
-      checkFlushrecvBeforeSendHandler = handler
-    },
     onFlushrecvWarningIgnoreChange(handler) {
       flushrecvWarningIgnoreHandler = handler
+    },
+    onConsecutiveSendWarningIgnoreChange(handler) {
+      consecutiveSendWarningIgnoreHandler = handler
     },
     onClearDryRun(handler) {
       clearDryRunHandler = handler
@@ -1002,7 +1029,9 @@ export function createSidePanel(
       indeterminateVariables = [],
       variableAssumptions = {},
       flushrecvWarningIgnores = {},
+      consecutiveSendWarningIgnores = {},
       checkFlushrecvBeforeSend: checkFlushrecvOption = false,
+      checkConsecutiveSend: checkConsecutiveOption = false,
       analysisLimitations = { unassumedBranches: [], unassumedVariables: [], unlinkedIncludes: [] },
     }) {
       cached = {
@@ -1013,7 +1042,9 @@ export function createSidePanel(
         indeterminateVariables,
         variableAssumptions,
         flushrecvWarningIgnores,
+        consecutiveSendWarningIgnores,
         checkFlushrecvBeforeSend: checkFlushrecvOption,
+        checkConsecutiveSend: checkConsecutiveOption,
         analysisLimitations,
       }
       render(cached)
@@ -1042,6 +1073,22 @@ export function createSidePanel(
     },
     setFlowchartTheme(dark) {
       flowchart.setTheme(dark)
+    },
+    refresh() {
+      if (cached) render(cached)
+      if (activeTab === 'dryrun') {
+        renderDryRun(dryRunState ?? { status: 'idle', currentLine: 0, events: [] })
+      }
+    },
+    syncViewOptions(options) {
+      if (options.showDetailedWaits !== undefined) {
+        showDetailedWaits = options.showDetailedWaits
+        updateFlowchartWaitsButton()
+      }
+      if (options.showAssignments !== undefined) {
+        showAssignments = options.showAssignments
+        updateFlowchartAssignmentsButton()
+      }
     },
   }
 }

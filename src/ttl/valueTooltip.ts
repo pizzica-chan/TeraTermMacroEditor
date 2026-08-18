@@ -11,10 +11,12 @@ import {
   getCachedEvaluation,
   includeGraphRevisionField,
 } from './analysisContext'
+import { formatUnresolvedDisplay } from './unresolvedDisplay'
 
 const emptyEvaluation: EvaluationResult = {
   beforeLine: new Map(),
   afterLine: new Map(),
+  beforeIncludeByLoopKey: new Map(),
   sendEntries: [],
   getHoverAt: () => null,
 }
@@ -54,7 +56,7 @@ function createTooltipDom(info: {
 
   const value = document.createElement('div')
   value.className = `cm-var-tooltip-value${info.valueKind ? ` value-${info.valueKind}` : ''}`
-  value.textContent = info.display
+  value.textContent = formatUnresolvedDisplay(info.display)
   dom.appendChild(value)
 
   if (info.note) {

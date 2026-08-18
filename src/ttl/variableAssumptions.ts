@@ -3,6 +3,7 @@ import { lineKeyword } from './controlFlow'
 import { isSystemVariable } from './commands'
 import {
   isIndeterminateRuntimeScalar,
+  unresolvedSourceIdsOf,
   type MacroEnvironment,
   type RuntimeValue,
 } from './evaluator'
@@ -89,7 +90,72 @@ function scalarType(value: RuntimeValue): AssumedValueType | undefined {
   return undefined
 }
 
-/** 静的に値が決まらない代入先を列挙する（各行の before/after env を使用） */
+function envUnresolvedSourceIds(env: MacroEnvironment | undefined): Set<number> {
+  const ids = new Set<number>()
+  if (!env) return ids
+  for (const value of env.values()) {
+    for (const id of unresolvedSourceIdsOf(value)) ids.add(id)
+  }
+  return ids
+}
+
+function introducesNewUnresolvedSource(
+  before: MacroEnvironment | undefined,
+  value: RuntimeValue,
+): boolean {
+  const afterIds = unresolvedSourceIdsOf(value)
+  if (afterIds.length === 0) return true
+  const beforeIds = envUnresolvedSourceIds(before)
+  return afterIds.some((id) => !beforeIds.has(id))
+}
+
+function valueKeepsUnresolvedSources(
+  value: RuntimeValue,
+  originIds: readonly number[],
+): boolean {
+  if (originIds.length === 0) return false
+  if (value.kind !== 'int' && value.kind !== 'str') return false
+  if (!isIndeterminateRuntimeScalar(value)) return false
+  const ids = unresolvedSourceIdsOf(value)
+  if (ids.length !== originIds.length) return false
+  const set = new Set(ids)
+  return originIds.every((id) => set.has(id))
+}
+
+/** 導入行より後の代入・include 内の連結を反映した、最も具体的な未確定値 */
+function richestMatchingValue(
+  name: string,
+  originLine: number,
+  originValue: RuntimeValue,
+  afterLine: ReadonlyMap<number, MacroEnvironment>,
+): RuntimeValue {
+  const originIds = unresolvedSourceIdsOf(originValue)
+  if (originIds.length === 0) return originValue
+  let best = originValue
+  let bestScore = describeIndeterminateReason(originValue).length
+  let bestSameName = true
+  let bestLine = originLine
+  for (const [line, env] of afterLine) {
+    if (line < originLine) continue
+    for (const [varName, next] of env) {
+      if (!valueKeepsUnresolvedSources(next, originIds)) continue
+      const score = describeIndeterminateReason(next).length
+      const sameName = varName === name
+      const better =
+        score > bestScore
+        || (score === bestScore && sameName && !bestSameName)
+        || (score === bestScore && sameName === bestSameName && line >= bestLine)
+      if (!better) continue
+      best = next
+      bestScore = score
+      bestSameName = sameName
+      bestLine = line
+    }
+  }
+  return best
+}
+
+/** 静的に値が決まらない代入先のうち、原因となる変数だけを列挙する */
 export function collectIndeterminateVariables(
   source: string,
   beforeLine: ReadonlyMap<number, MacroEnvironment>,
@@ -115,15 +181,17 @@ export function collectIndeterminateVariables(
       if (!valueType) continue
       const prev = before?.get(name)
       if (prev === value) continue
+      if (!introducesNewUnresolvedSource(before, value)) continue
 
       const key = variableAssumptionKey(lineNum, name)
       if (seen.has(key)) continue
       seen.add(key)
+      const displayValue = richestMatchingValue(name, lineNum, value, afterLine)
       items.push({
         line: lineNum,
         name,
         valueType,
-        reason: describeIndeterminateReason(value),
+        reason: describeIndeterminateReason(displayValue),
       })
     }
   }

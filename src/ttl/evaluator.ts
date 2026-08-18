@@ -15,7 +15,15 @@ import {
   resolveStaticLiteralPart,
   tokenGapBefore,
 } from './argOperands'
-import { commandOutputHint, getCommandOutputEffect, isCommandOutputHint, REGEX_MATCH_HINT } from './commandOutputs'
+import {
+  commandIntroducesIndependentOutput,
+  commandOutputHint,
+  getCommandOutputEffect,
+  getOutputVariableIndices,
+  isCommandOutputHint,
+  isInPlaceStringCommand,
+  REGEX_MATCH_HINT,
+} from './commandOutputs'
 import { formatResultSetByNote } from './resultCommandMeta'
 import {
   buildCommandLineParamsSnapshot,
@@ -71,6 +79,8 @@ export type RuntimeScalar =
       hint?: string
       /** result 等: 値を設定した直前のコマンド名 */
       setBy?: string
+      /** 未確定の根源（getdate / inputbox 等）。コピー・連結では継承する */
+      unresolvedSourceIds?: readonly number[]
     }
   | {
       kind: 'str'
@@ -81,6 +91,8 @@ export type RuntimeScalar =
       hasUnresolvedParts?: boolean
       /** passwordbox 等の機密入力を含む */
       sensitive?: boolean
+      /** 未確定の根源（getdate / inputbox 等）。コピー・連結では継承する */
+      unresolvedSourceIds?: readonly number[]
     }
 
 export type RuntimeValue =
@@ -315,7 +327,7 @@ export function collectWaitPatterns(tokens: Token[], start: number, env: Env): s
   return patterns
 }
 
-function cloneEnv(env: Env): Env {
+function cloneEnv(env: ReadonlyMap<string, RuntimeValue>): Env {
   const next = new Map<string, RuntimeValue>()
   for (const [k, v] of env) {
     if (v.kind === 'array') {
@@ -488,6 +500,95 @@ function operandDisplayPart(v: RuntimeScalar): string | undefined {
   return undefined
 }
 
+function mintUnresolvedSourceId(seq: { next: number }): number {
+  return seq.next++
+}
+
+function mergeUnresolvedSourceIds(scalars: readonly RuntimeScalar[]): number[] | undefined {
+  const ids: number[] = []
+  const seen = new Set<number>()
+  for (const scalar of scalars) {
+    for (const id of scalar.unresolvedSourceIds ?? []) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      ids.push(id)
+    }
+  }
+  return ids.length > 0 ? ids : undefined
+}
+
+function withUnresolvedSourceIds<T extends RuntimeScalar>(
+  scalar: T,
+  seq: { next: number },
+  ids?: readonly number[],
+): T {
+  const unresolvedSourceIds = ids && ids.length > 0 ? [...ids] : [mintUnresolvedSourceId(seq)]
+  return { ...scalar, unresolvedSourceIds }
+}
+
+/**
+ * コマンド引数の識別子が持つ未確定根源 ID。
+ * strreplace 等のインプレース dest は含める。sprintf2 等の出力専用 dest は含めない。
+ */
+function collectInputUnresolvedIds(tokens: Token[], env: Env, cmd: string): number[] {
+  const ids: number[] = []
+  const seen = new Set<number>()
+  const outputIndices = getOutputVariableIndices(cmd)
+  const inPlace = isInPlaceStringCommand(cmd)
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i]
+    if (tok?.kind !== 'identifier') continue
+    if (tok.text.toLowerCase() === cmd) continue
+    if (outputIndices.has(i) && !inPlace) continue
+    const value = env.get(tok.text.toLowerCase())
+    if (!value) continue
+    const scalars: RuntimeScalar[] =
+      value.kind === 'array'
+        ? [...value.elements.values()]
+        : value.kind === 'int' || value.kind === 'str'
+          ? [value]
+          : []
+    for (const id of mergeUnresolvedSourceIds(scalars) ?? []) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      ids.push(id)
+    }
+  }
+  return ids
+}
+
+function commandOutputSourceIds(
+  cmd: string,
+  tokens: Token[],
+  env: Env,
+  seq: { next: number },
+): number[] {
+  if (!commandIntroducesIndependentOutput(cmd)) {
+    const inherited = collectInputUnresolvedIds(tokens, env, cmd)
+    if (inherited.length > 0) return inherited
+  }
+  return [mintUnresolvedSourceId(seq)]
+}
+
+/** 変数・配列要素が持つ未確定根源 ID */
+export function unresolvedSourceIdsOf(value: RuntimeValue): readonly number[] {
+  if (value.kind === 'int' || value.kind === 'str') return value.unresolvedSourceIds ?? []
+  if (value.kind === 'array') {
+    return mergeUnresolvedSourceIds([...value.elements.values()]) ?? []
+  }
+  return []
+}
+
+function maxUnresolvedSourceId(env: ReadonlyMap<string, RuntimeValue>): number {
+  let max = 0
+  for (const value of env.values()) {
+    for (const id of unresolvedSourceIdsOf(value)) {
+      if (id > max) max = id
+    }
+  }
+  return max
+}
+
 export function buildStringFromOperands(operands: RuntimeScalar[]): RuntimeScalar & { kind: 'str' } {
   const value = operands
     .map((v) => (v.kind === 'str' ? v.value : v.kind === 'int' ? String(v.value) : ''))
@@ -504,6 +605,7 @@ export function buildStringFromOperands(operands: RuntimeScalar[]): RuntimeScala
 
   const hasUnresolvedParts = operands.some(isUnresolvedOperand)
   const sensitive = operands.some((v) => v.kind === 'str' && v.sensitive)
+  const unresolvedSourceIds = mergeUnresolvedSourceIds(operands)
 
   return {
     kind: 'str',
@@ -512,6 +614,7 @@ export function buildStringFromOperands(operands: RuntimeScalar[]): RuntimeScala
     hint: hintParts.length > 0 ? hintParts.join(' + ') : undefined,
     hasUnresolvedParts: hasUnresolvedParts ? true : undefined,
     sensitive: sensitive || undefined,
+    unresolvedSourceIds,
   }
 }
 
@@ -875,28 +978,53 @@ function setArrayElement(env: Env, name: string, index: number, value: RuntimeSc
   arr.elements.set(index, value)
 }
 
-function applyCommandOutputEffects(cmd: string, tokens: Token[], env: Env): boolean {
+function applyCommandOutputEffects(
+  cmd: string,
+  tokens: Token[],
+  env: Env,
+  seq: { next: number },
+): boolean {
   const effect = getCommandOutputEffect(cmd)
   if (!effect) return false
 
   let applied = false
+  const inheritedSourceIds = commandIntroducesIndependentOutput(cmd)
+    ? undefined
+    : commandOutputSourceIds(cmd, tokens, env, seq)
 
   for (const slot of effect.variables ?? []) {
     const tok = tokens[slot.index]
     if (tok?.kind !== 'identifier') continue
     applied = true
+    const sourceIds = inheritedSourceIds ?? [mintUnresolvedSourceId(seq)]
     if (slot.type === 'integer') {
-      setScalar(env, tok.text, {
-        kind: 'int',
-        value: 0,
-        hint: commandOutputHint(cmd),
-      })
+      setScalar(
+        env,
+        tok.text,
+        withUnresolvedSourceIds(
+          {
+            kind: 'int',
+            value: 0,
+            hint: commandOutputHint(cmd),
+          },
+          seq,
+          sourceIds,
+        ),
+      )
     } else {
-      setScalar(env, tok.text, {
-        kind: 'str',
-        value: '',
-        hint: commandOutputHint(cmd),
-      })
+      setScalar(
+        env,
+        tok.text,
+        withUnresolvedSourceIds(
+          {
+            kind: 'str',
+            value: '',
+            hint: commandOutputHint(cmd),
+          },
+          seq,
+          sourceIds,
+        ),
+      )
     }
   }
 
@@ -908,18 +1036,27 @@ function applyCommandOutputEffects(cmd: string, tokens: Token[], env: Env): bool
         : sys.name === 'matchstr' || sys.name.startsWith('groupmatchstr')
           ? 'match-received'
           : 'dialog-result'
+    const sourceIds = inheritedSourceIds ?? [mintUnresolvedSourceId(seq)]
     if (sys.type === 'integer') {
-      setScalar(env, sys.name, { kind: 'int', value: 0, origin })
+      setScalar(env, sys.name, withUnresolvedSourceIds({ kind: 'int', value: 0, origin }, seq, sourceIds))
     } else {
-      setScalar(env, sys.name, {
-        kind: 'str',
-        value: '',
-        origin,
-        hint:
-          sys.name === 'matchstr' || sys.name.startsWith('groupmatchstr')
-            ? REGEX_MATCH_HINT
-            : undefined,
-      })
+      setScalar(
+        env,
+        sys.name,
+        withUnresolvedSourceIds(
+          {
+            kind: 'str',
+            value: '',
+            origin,
+            hint:
+              sys.name === 'matchstr' || sys.name.startsWith('groupmatchstr')
+                ? REGEX_MATCH_HINT
+                : undefined,
+          },
+          seq,
+          sourceIds,
+        ),
+      )
     }
   }
 
@@ -938,7 +1075,13 @@ function applyCommandOutputEffects(cmd: string, tokens: Token[], env: Env): bool
   return applied
 }
 
-function processLine(env: Env, line: string, lineNum: number, knownLabels?: ReadonlySet<string>): void {
+function processLine(
+  env: Env,
+  line: string,
+  lineNum: number,
+  knownLabels: ReadonlySet<string> | undefined,
+  seq: { next: number },
+): void {
   const tokens = tokenizeLine(line, lineNum)
   if (tokens.length === 0) return
 
@@ -1026,28 +1169,45 @@ function processLine(env: Env, line: string, lineNum: number, knownLabels?: Read
 
   if (applyStaticCommandEffects(cmd, tokens, offset, env, knownLabels)) return
 
-  if (applyWaitReceiveEffects(env, tokens, offset, cmd)) return
+  if (applyWaitReceiveEffects(env, tokens, offset, cmd, seq)) return
 
-  if (applyCommandOutputEffects(cmd, tokens, env)) return
+  if (applyCommandOutputEffects(cmd, tokens, env, seq)) return
 }
 
 const WAIT_RECEIVE_COMMANDS = new Set(['wait', 'waitln', 'waitregex', 'wait4all'])
 
-function applyWaitReceiveEffects(env: Env, tokens: Token[], offset: number, cmd: string): boolean {
+function applyWaitReceiveEffects(
+  env: Env,
+  tokens: Token[],
+  offset: number,
+  cmd: string,
+  seq: { next: number },
+): boolean {
   if (cmd === 'recvln') {
     setResult(env, cmd, 1, 'literal')
-    setScalar(env, 'inputstr', { kind: 'str', value: '〈受信行〉', origin: 'match-received' })
+    setScalar(
+      env,
+      'inputstr',
+      withUnresolvedSourceIds({ kind: 'str', value: '〈受信行〉', origin: 'match-received' }, seq),
+    )
     return true
   }
   if (cmd === 'waitrecv') {
     const parsed = parseWaitPatternAt(tokens, offset + 1, env)
     const sub = parsed?.pattern ?? ''
     setResult(env, cmd, 1, 'literal')
-    setScalar(env, 'inputstr', {
-      kind: 'str',
-      value: sub || '〈受信行〉',
-      origin: 'match-received',
-    })
+    setScalar(
+      env,
+      'inputstr',
+      withUnresolvedSourceIds(
+        {
+          kind: 'str',
+          value: sub || '〈受信行〉',
+          origin: 'match-received',
+        },
+        seq,
+      ),
+    )
     return true
   }
   if (!WAIT_RECEIVE_COMMANDS.has(cmd)) return false
@@ -1061,13 +1221,17 @@ function applyWaitReceiveEffects(env: Env, tokens: Token[], offset: number, cmd:
   } else {
     matchstrValue = patterns[0]!
   }
-  const origin =
+  const origin: ValueOrigin =
     patterns.length > 0 &&
     tokens[offset + 1]?.kind === 'string' &&
     patterns[0] === unquoteString(tokens[offset + 1]!.text)
       ? 'literal'
       : 'match-received'
-  setScalar(env, 'matchstr', { kind: 'str', value: matchstrValue, origin })
+  const matchstr =
+    origin === 'match-received'
+      ? withUnresolvedSourceIds({ kind: 'str', value: matchstrValue, origin }, seq)
+      : { kind: 'str' as const, value: matchstrValue, origin }
+  setScalar(env, 'matchstr', matchstr)
   setResult(env, cmd, 1, 'literal')
   return true
 }
@@ -1373,6 +1537,10 @@ interface EvalOptions {
   /** 未確定変数のユーザー仮定（行番号 1-based → 変数名 → 入力テキスト） */
   variableAssumptions?: Map<number, Map<string, string>>
   knownLabels?: ReadonlySet<string>
+  /** この評価内で未確定根源 ID を一意にする */
+  unresolvedIdSeq: { next: number }
+  /** ループ内 include の反復ごとの直前 env（キーは `@loop:L行:値`） */
+  beforeIncludeByLoopKey?: Map<string, Env>
   /**
    * ホバー用の投機実行。親の送信・ループ制御・ジャンプと隔離する。
    * then/elseif 本体の jumpTo は追わない。未訪問行の afterLine フォールバックは意図的。
@@ -1472,7 +1640,8 @@ function processBlock(
   let i = startIdx
   while (i <= endIdx) {
     const lineNum = i + 1
-    if (captureLineEnv && beforeLine) beforeLine.set(lineNum, cloneEnv(env))
+    // 各反復で上書きし、最終反復（または途中の stopAll）の直前 env を残す
+    if (beforeLine) beforeLine.set(lineNum, cloneEnv(env))
     const result = processStatement(env, lines, i, beforeLine, afterLine, { ...opts, inBlock: true })
     if (captureLineEnv && afterLine) afterLine.set(lineNum, cloneEnv(env))
     if (result.stopAll) return 'stopAll'
@@ -1512,7 +1681,7 @@ function processSingleLineIfTail(
     else opts.loopControl.continueRequested = true
     return { nextIdx: lineIdx, stopBlock: true }
   }
-  if (applyWaitReceiveEffects(env, tokens, tailStart, tailCmd)) {
+  if (applyWaitReceiveEffects(env, tokens, tailStart, tailCmd, opts.unresolvedIdSeq)) {
     return { nextIdx: lineIdx }
   }
   if (isSendRecordCommand(tailCmd)) {
@@ -1561,6 +1730,12 @@ function processStatement(
   }
 
   if (cmd === 'include') {
+    if (opts.loopFrame && opts.beforeIncludeByLoopKey && !opts.inInclude) {
+      opts.beforeIncludeByLoopKey.set(
+        includeLoopIterationBindingKey(lineNum, opts.loopFrame.value),
+        cloneEnv(env),
+      )
+    }
     const arg = tokens[offset + 1]
     if (arg && opts.includeResolver) {
       let bindingKey: string
@@ -1802,7 +1977,7 @@ function processStatement(
     }
   }
 
-  processLine(env, line, lineNum, opts.knownLabels)
+  processLine(env, line, lineNum, opts.knownLabels, opts.unresolvedIdSeq)
   applyVariableAssumptionsForLine(env, lineNum, opts)
   return { nextIdx: lineIdx }
 }
@@ -1820,6 +1995,12 @@ export interface EvaluateOptions {
   branchAssumptions?: Map<number, boolean>
   /** 未確定変数のユーザー仮定（行番号 1-based → 変数名 → 入力テキスト） */
   variableAssumptions?: Map<number, Map<string, string>>
+  /**
+   * include 先タブを単独評価するとき、親の include 直前 env を初期値にする。
+   * 親で代入した値が include 先の送信・ホバー・未確定表示に載る。
+   * 未確定根源 ID は env 内の最大値の次から振り、親の ID と衝突させない。
+   */
+  importedEnv?: ReadonlyMap<string, RuntimeValue>
 }
 
 export interface EvaluationResult {
@@ -1828,6 +2009,8 @@ export interface EvaluationResult {
   /** 各行の実行直後の環境 */
   afterLine: Map<number, Env>
   sendEntries: SendEntry[]
+  /** ループ内 include の反復ごとの直前 env（キーは `@loop:L行:値`） */
+  beforeIncludeByLoopKey: Map<string, Env>
   /** ステップ上限等で評価が打ち切られた */
   truncated?: boolean
   getHoverAt(line: number, column: number): HoverAtResult | null
@@ -1853,8 +2036,10 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   const lines = stripComments(source)
   const beforeLine = new Map<number, Env>()
   const afterLine = new Map<number, Env>()
+  const beforeIncludeByLoopKey = new Map<string, Env>()
   const sendEntries: SendEntry[] = []
-  const env = initEnv(options?.macroArgv)
+  const env = options?.importedEnv ? cloneEnv(options.importedEnv) : initEnv(options?.macroArgv)
+  const unresolvedIdSeq = { next: maxUnresolvedSourceId(env) + 1 }
   const labels = collectLabelLineMap(lines)
   const knownLabels = new Set(labels.keys())
   const evalOpts: EvalOptions = {
@@ -1866,6 +2051,8 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
     branchAssumptions: options?.branchAssumptions,
     variableAssumptions: options?.variableAssumptions,
     knownLabels,
+    unresolvedIdSeq,
+    beforeIncludeByLoopKey,
   }
 
   let lineIdx = 0
@@ -1893,6 +2080,7 @@ export function evaluateTTL(source: string, options?: EvaluateOptions): Evaluati
   return {
     beforeLine,
     afterLine,
+    beforeIncludeByLoopKey,
     sendEntries,
     truncated: truncated || undefined,
     getHoverAt(line: number, column: number): HoverAtResult | null {
@@ -1984,7 +2172,7 @@ function computeEnvAtColumn(
 
   if (assignEnd > tokenFrom) {
     const tempEnv = cloneEnv(base)
-    processLine(tempEnv, line, lineNum)
+    processLine(tempEnv, line, lineNum, undefined, { next: 1 })
     return tempEnv
   }
 
