@@ -904,6 +904,136 @@ end`
     })
   }
 
+  const deadLiveChild = stubTab('dead-live-child')
+  const deadLiveSrc = `if 0 then
+  include 'child.ttl'
+endif
+prefix = 'live'
+include 'child.ttl'
+end`
+  const deadLiveRefs = findIncludeRefs(deadLiveSrc)
+  const deadLine = deadLiveRefs[0]?.line ?? 0
+  const liveLine = deadLiveRefs[1]?.line ?? 0
+  const deadLiveParent = stubTab('dead-live-parent', {
+    [normalizeIncludePath('child.ttl')]: deadLiveChild.id,
+  })
+  const deadLiveHost: IncludeWorkspaceHost = {
+    allTabs: [deadLiveParent, deadLiveChild],
+    getTabContent: (tab) => (tab.id === deadLiveParent.id ? deadLiveSrc : 'sendln prefix'),
+  }
+  const deadLiveCandidates = collectImportedEnvParentCandidates(deadLiveHost, deadLiveChild)
+  if (
+    deadLiveCandidates.length === 1
+    && deadLiveCandidates[0]?.includeLine === liveLine
+    && liveLine !== deadLine
+    && importedPrefixOf(deadLiveChild, deadLiveHost) === 'live'
+  ) {
+    ok('if 0 内の include は親候補に出さず到達する行の env を使う')
+  } else {
+    ng('if 0 内の include は親候補に出さず到達する行の env を使う', {
+      candidates: deadLiveCandidates,
+      deadLine,
+      liveLine,
+      prefix: importedPrefixOf(deadLiveChild, deadLiveHost),
+    })
+  }
+  deadLiveChild.importedEnvParentKey = importedEnvParentKey(deadLiveParent.id, deadLine)
+  if (
+    pruneImportedEnvParentKey(deadLiveChild, deadLiveCandidates)
+    && importedPrefixOf(deadLiveChild, deadLiveHost) === 'live'
+  ) {
+    ok('到達しない include の選択は prune して到達行へ戻す')
+  } else {
+    ng('到達しない include の選択は prune して到達行へ戻す', {
+      key: deadLiveChild.importedEnvParentKey,
+      prefix: importedPrefixOf(deadLiveChild, deadLiveHost),
+    })
+  }
+
+  const deadOnlyChild = stubTab('dead-only-child')
+  const deadOnlyParent = stubTab('dead-only-parent', {
+    [normalizeIncludePath('child.ttl')]: deadOnlyChild.id,
+  })
+  const deadOnlyHost: IncludeWorkspaceHost = {
+    allTabs: [deadOnlyParent, deadOnlyChild],
+    getTabContent: (tab) =>
+      tab.id === deadOnlyParent.id
+        ? `if 0 then
+  include 'child.ttl'
+endif
+end`
+        : 'sendln prefix',
+  }
+  if (
+    collectImportedEnvParentCandidates(deadOnlyHost, deadOnlyChild).length === 0
+    && importedPrefixOf(deadOnlyChild, deadOnlyHost) === undefined
+  ) {
+    ok('到達する include が無ければ親 env を渡さない')
+  } else {
+    ng('到達する include が無ければ親 env を渡さない', {
+      candidates: collectImportedEnvParentCandidates(deadOnlyHost, deadOnlyChild),
+      prefix: importedPrefixOf(deadOnlyChild, deadOnlyHost),
+    })
+  }
+
+  const gotoChild = stubTab('goto-child')
+  const gotoSrc = `goto skip
+include 'child.ttl'
+:skip
+prefix = 'after-goto'
+include 'child.ttl'
+end`
+  const gotoRefs = findIncludeRefs(gotoSrc)
+  const skippedIncludeLine = gotoRefs[0]?.line ?? 0
+  const afterGotoLine = gotoRefs[1]?.line ?? 0
+  const gotoParent = stubTab('goto-parent', {
+    [normalizeIncludePath('child.ttl')]: gotoChild.id,
+  })
+  const gotoHost: IncludeWorkspaceHost = {
+    allTabs: [gotoParent, gotoChild],
+    getTabContent: (tab) => (tab.id === gotoParent.id ? gotoSrc : 'sendln prefix'),
+  }
+  const gotoCandidates = collectImportedEnvParentCandidates(gotoHost, gotoChild)
+  if (
+    gotoCandidates.length === 1
+    && gotoCandidates[0]?.includeLine === afterGotoLine
+    && afterGotoLine !== skippedIncludeLine
+    && importedPrefixOf(gotoChild, gotoHost) === 'after-goto'
+  ) {
+    ok('goto で飛ばした include は親候補に出さない')
+  } else {
+    ng('goto で飛ばした include は親候補に出さない', {
+      candidates: gotoCandidates,
+      skippedIncludeLine,
+      afterGotoLine,
+      prefix: importedPrefixOf(gotoChild, gotoHost),
+    })
+  }
+
+  const maybeChild = stubTab('maybe-child')
+  const maybeSrc = `prefix = 'maybe'
+yesnobox 'a' 'b'
+if result = 1 then
+  include 'child.ttl'
+endif
+end`
+  const maybeParent = stubTab('maybe-parent', {
+    [normalizeIncludePath('child.ttl')]: maybeChild.id,
+  })
+  const maybeHost: IncludeWorkspaceHost = {
+    allTabs: [maybeParent, maybeChild],
+    getTabContent: (tab) => (tab.id === maybeParent.id ? maybeSrc : 'sendln prefix'),
+  }
+  const maybeCandidates = collectImportedEnvParentCandidates(maybeHost, maybeChild)
+  if (maybeCandidates.length === 1 && importedPrefixOf(maybeChild, maybeHost) === 'maybe') {
+    ok('未確定 if 内の include は投機 beforeLine があれば親候補にする')
+  } else {
+    ng('未確定 if 内の include は投機 beforeLine があれば親候補にする', {
+      candidates: maybeCandidates,
+      prefix: importedPrefixOf(maybeChild, maybeHost),
+    })
+  }
+
   const sameNameA = {
     key: 'tab-a:2',
     parentTabId: 'tab-a',

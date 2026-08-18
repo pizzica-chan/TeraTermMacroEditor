@@ -217,11 +217,47 @@ function collectImportedEnvParentMatches(
   return matches
 }
 
+function importedEnvForParentMatch(
+  host: IncludeWorkspaceHost,
+  tab: EditorTab,
+  match: ImportedEnvParentMatch,
+  state: ImportedEnvResolveState,
+  visiting: Set<string>,
+): MacroEnvironment | undefined {
+  const parentEval = parentEvalForImportedEnv(host, match.parentTab, state, visiting)
+  return importedEnvFromParentEval(
+    parentEval,
+    match.ref,
+    match.parentTab.includeBindings ?? {},
+    tab.id,
+  )
+}
+
+/** 親評価でその include 行の直前 env があるものだけ（if 0 / goto 飛ばしは除く） */
+function collectReachableImportedEnvParentMatches(
+  host: IncludeWorkspaceHost,
+  tab: EditorTab,
+  state: ImportedEnvResolveState,
+  visiting: Set<string>,
+): ImportedEnvParentMatch[] {
+  return collectImportedEnvParentMatches(host, tab).filter(
+    (match) => importedEnvForParentMatch(host, tab, match, state, visiting) !== undefined,
+  )
+}
+
 export function collectImportedEnvParentCandidates(
   host: IncludeWorkspaceHost,
   tab: EditorTab,
 ): ImportedEnvParentCandidate[] {
-  return collectImportedEnvParentMatches(host, tab).map((match) => ({
+  return collectImportedEnvParentCandidateList(host, tab, createImportedEnvResolveState())
+}
+
+function collectImportedEnvParentCandidateList(
+  host: IncludeWorkspaceHost,
+  tab: EditorTab,
+  state: ImportedEnvResolveState,
+): ImportedEnvParentCandidate[] {
+  return collectReachableImportedEnvParentMatches(host, tab, state, new Set([tab.id])).map((match) => ({
     key: importedEnvParentKey(match.parentTab.id, match.ref.line),
     parentTabId: match.parentTab.id,
     parentFileName: match.parentTab.fileName,
@@ -316,7 +352,7 @@ function resolveImportedEnvFromParentIncludes(
   visiting.add(tab.id)
 
   const match = pickImportedEnvParentMatch(
-    collectImportedEnvParentMatches(host, tab),
+    collectReachableImportedEnvParentMatches(host, tab, state, visiting),
     tab.importedEnvParentKey,
   )
   if (!match) {
@@ -324,13 +360,7 @@ function resolveImportedEnvFromParentIncludes(
     return undefined
   }
 
-  const parentEval = parentEvalForImportedEnv(host, match.parentTab, state, visiting)
-  const env = importedEnvFromParentEval(
-    parentEval,
-    match.ref,
-    match.parentTab.includeBindings ?? {},
-    tab.id,
-  )
+  const env = importedEnvForParentMatch(host, tab, match, state, visiting)
   state.importedEnvByTab.set(tab.id, env)
   return env
 }
@@ -572,13 +602,13 @@ export function createAnalysisCoordinator(host: AnalysisCoordinatorHost) {
     setConsecutiveSendCheck(checkConsecutive, ignoredConsecutiveSendLines)
 
     const result = analyzeTTL(text, getEditorAnalyzeOptions())
+    const importedEnvState = createImportedEnvResolveState()
     const importedEnvParentCandidates = tab
-      ? collectImportedEnvParentCandidates(host.includeHost, tab)
+      ? collectImportedEnvParentCandidateList(host.includeHost, tab, importedEnvState)
       : []
     if (tab && pruneImportedEnvParentKey(tab, importedEnvParentCandidates)) {
       host.schedulePersistWorkspaceSession()
     }
-    const importedEnvState = createImportedEnvResolveState()
     const importedEnv = tab
       ? resolveImportedEnvFromParentIncludes(host.includeHost, tab, importedEnvState)
       : undefined

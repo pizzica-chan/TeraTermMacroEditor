@@ -197,7 +197,7 @@ export function createSidePanel(
   importedEnvParentSection.hidden = true
   importedEnvParentSection.innerHTML = `
     <h2 id="imported-env-parent-title">親マクロの環境</h2>
-    <p class="branch-assumptions-hint">このファイルを include している箇所が複数あります。送信データと変数ホバーに使う親（include 行）を選んでください。</p>
+    <p class="branch-assumptions-hint">このファイルを include している箇所が複数あります。送信データ・変数ホバー・未確定変数と未確定分岐に使う親（include 行）を選んでください。静的に到達しない include は出ません。</p>
     <select class="include-link-select" id="imported-env-parent-select" aria-labelledby="imported-env-parent-title"></select>
   `
 
