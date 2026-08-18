@@ -50,6 +50,9 @@ import {
   setAnalysisCache,
 } from '../ttl/analysisContext'
 import type { EditorTab } from '../ui/tabManager'
+import { importedEnvParentKey } from '../storage/importedEnvParentKey'
+
+export { importedEnvParentKey }
 
 export interface DryRunSnapshot {
   contents: Map<string, string>
@@ -183,10 +186,6 @@ function importedEnvFromParentEval(
     )
   }
   return parentEval.beforeLine.get(ref.line)
-}
-
-export function importedEnvParentKey(parentTabId: string, includeLine: number): string {
-  return `${parentTabId}:${includeLine}`
 }
 
 export interface ImportedEnvParentCandidate {
@@ -442,6 +441,7 @@ export function collectWorkspaceAnalysisLimitations(
   return limitations
 }
 
+/** 未使用・外部宣言の診断は全親を見る。選択した importedEnv 元は送信データとホバー専用 */
 export function getIncludeCrossTabContext(
   host: IncludeWorkspaceHost,
   tab: EditorTab,

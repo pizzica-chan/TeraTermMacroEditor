@@ -2,6 +2,7 @@ import type { EditorState } from '@codemirror/state'
 import type { EditorInstance } from '../editor/createEditor'
 import { DocumentSettings } from '../text/documentSettings'
 import type { WorkspaceSession } from '../storage/sessionState'
+import { isImportedEnvParentKeyForTab } from '../storage/importedEnvParentKey'
 import { migrateIncludeBindings } from '../ttl/includeRefs'
 
 export const MAX_TABS = 10
@@ -317,12 +318,13 @@ export class TabManager {
 
   /** 閉じたタブへのリンクを他タブから除去 */
   clearBindingsToTab(closedTabId: string): void {
-    const parentKeyPrefix = `${closedTabId}:`
     for (const tab of this.tabs) {
       for (const [path, tabId] of Object.entries(tab.includeBindings)) {
         if (tabId === closedTabId) delete tab.includeBindings[path]
       }
-      if (tab.importedEnvParentKey?.startsWith(parentKeyPrefix)) delete tab.importedEnvParentKey
+      if (isImportedEnvParentKeyForTab(tab.importedEnvParentKey, closedTabId)) {
+        delete tab.importedEnvParentKey
+      }
     }
   }
 

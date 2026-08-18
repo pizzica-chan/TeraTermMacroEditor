@@ -35,6 +35,11 @@ import {
   normalizeIncludePath,
 } from '../src/ttl/includeRefs'
 import type { EditorTab } from '../src/ui/tabManager'
+import {
+  isImportedEnvParentKeyForTab,
+  parseImportedEnvParentKey,
+  sanitizeImportedEnvParentKey,
+} from '../src/storage/importedEnvParentKey'
 
 export interface TestRunResult {
   passed: number
@@ -957,6 +962,65 @@ end`
     ng('同一親の複数 include 行はファイル名を重複させず行番号で区別する', {
       line2: formatImportedEnvParentOptionLabel(sameParentLine2, [sameParentLine2, sameParentLine4]),
       line4: formatImportedEnvParentOptionLabel(sameParentLine4, [sameParentLine2, sameParentLine4]),
+    })
+  }
+
+  const parsedKey = parseImportedEnvParentKey(importedEnvParentKey('tab-10', 2))
+  if (parsedKey?.parentTabId === 'tab-10' && parsedKey.includeLine === 2) {
+    ok('親キーは末尾のコロンで親タブIDと行番号に分ける')
+  } else {
+    ng('親キーは末尾のコロンで親タブIDと行番号に分ける', parsedKey)
+  }
+  if (
+    parseImportedEnvParentKey('tab-1:') === undefined
+    && parseImportedEnvParentKey(':2') === undefined
+    && parseImportedEnvParentKey('tab-1') === undefined
+    && parseImportedEnvParentKey('tab-1:0') === undefined
+    && parseImportedEnvParentKey('tab-1:02') === undefined
+    && parseImportedEnvParentKey('tab-1:abc') === undefined
+  ) {
+    ok('不正な親キーは parse しない')
+  } else {
+    ng('不正な親キーは parse しない', {
+      emptyLine: parseImportedEnvParentKey('tab-1:'),
+      emptyId: parseImportedEnvParentKey(':2'),
+      noColon: parseImportedEnvParentKey('tab-1'),
+      zero: parseImportedEnvParentKey('tab-1:0'),
+      padded: parseImportedEnvParentKey('tab-1:02'),
+      text: parseImportedEnvParentKey('tab-1:abc'),
+    })
+  }
+  if (
+    isImportedEnvParentKeyForTab('tab-1:2', 'tab-1')
+    && !isImportedEnvParentKeyForTab('tab-10:2', 'tab-1')
+    && !isImportedEnvParentKeyForTab('tab-1:2', 'tab-10')
+    && isImportedEnvParentKeyForTab('ns:tab:2', 'ns:tab')
+    && !isImportedEnvParentKeyForTab('ns:tab:2', 'ns')
+  ) {
+    ok('閉じた親の判定は prefix ではなく解析したタブIDで行う')
+  } else {
+    ng('閉じた親の判定は prefix ではなく解析したタブIDで行う', {
+      exact: isImportedEnvParentKeyForTab('tab-1:2', 'tab-1'),
+      longerId: isImportedEnvParentKeyForTab('tab-10:2', 'tab-1'),
+      shorterId: isImportedEnvParentKeyForTab('tab-1:2', 'tab-10'),
+      idWithColon: isImportedEnvParentKeyForTab('ns:tab:2', 'ns:tab'),
+      prefixOfColonId: isImportedEnvParentKeyForTab('ns:tab:2', 'ns'),
+    })
+  }
+  const sessionTabIds = new Set(['tab-1', 'tab-2'])
+  if (
+    sanitizeImportedEnvParentKey('tab-2:4', sessionTabIds) === 'tab-2:4'
+    && sanitizeImportedEnvParentKey('tab-9:4', sessionTabIds) === undefined
+    && sanitizeImportedEnvParentKey('tab-1:abc', sessionTabIds) === undefined
+    && sanitizeImportedEnvParentKey(1, sessionTabIds) === undefined
+  ) {
+    ok('セッション復元は存在する親の正当なキーだけ残す')
+  } else {
+    ng('セッション復元は存在する親の正当なキーだけ残す', {
+      kept: sanitizeImportedEnvParentKey('tab-2:4', sessionTabIds),
+      missingParent: sanitizeImportedEnvParentKey('tab-9:4', sessionTabIds),
+      badLine: sanitizeImportedEnvParentKey('tab-1:abc', sessionTabIds),
+      notString: sanitizeImportedEnvParentKey(1, sessionTabIds),
     })
   }
 

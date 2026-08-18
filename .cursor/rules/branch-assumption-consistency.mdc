@@ -12,6 +12,8 @@ globs:
   - src/main.ts
   - src/editor/branchAssumptionDecorations.ts
   - src/editor/variableAssumptionDecorations.ts
+  - src/storage/sessionState.ts
+  - src/storage/importedEnvParentKey.ts
   - src/ui/sidePanel.ts
   - src/ui/tabManager.ts
   - scripts/test-branch-assumptions.ts
@@ -48,6 +50,7 @@ alwaysApply: false
 - 親の include 経路で得た変数は親 env・送信データ・ホバーへ反映する。
 - include 先タブを単独表示するときは、親の include 直前 env を初期値にする（親で代入した値が内容表示に載る）。
 - 同じタブを複数の親が include しているときは、前提タブで親（include 行）を選ぶ。未選択・無効な選択は `allTabs` 順の先頭を使う。選択は子タブに保存し、閉じた親への参照は消す。閉じた親のあと、表示中の子は再解析する。
+- 親キーは `${親タブID}:${include行}`。閉じた親やセッション復元では `parseImportedEnvParentKey`（末尾の `:` で親タブIDを切る）を使い、prefix の `startsWith` は使わない。
 - ループ include の反復別タブにはその反復の直前 env を渡す。全反復共通タブは最終反復の env でよい。ループが途中で `stopAll` した場合は、止まる反復の直前 env を使う。
 - ループ include のタブ紐づけはパスキーと `@loop:L行:値` の両方を `resolveIncludeBindingTabId` で解決する（リンク判定と `importedEnv` 取得で同じ関数を使う）。
 
@@ -58,10 +61,12 @@ alwaysApply: false
 - 未確定分岐・未確定変数の入力 UI と include リンク UI は「前提」タブにまとめる（送信データ・ドライラン・フロー・変数タブには出さない）。
 - 前提タブと送信データタブでは未仮定の分岐とタブ未指定 include を警告する。未確定変数は警告しない（前提タブの入力 UI は残す）。
 - フローとドライラン開始時はタブ未指定 include だけを警告し、分岐・変数仮定の選択状況は参照しない。
+- 未使用変数・外部宣言の診断は全親を見る。選択した親は送信データとホバー専用。
 
 ## 実装の要点（配線）
 
 - `analysisCoordinator.ts` … `evaluateTTL` へ `branchAssumptions` / `variableAssumptions` / `importedEnv` を渡す経路、include 解決時のリンク先仮定、limitation 収集、複数親の `importedEnvParentKey`
+- `importedEnvParentKey.ts` … 親キーの生成・解析（タブ閉じとセッション復元で共有）
 - `includeRefs.ts` … `isLoopIncludeCommonTab` / `loopIncludeIterationValuesForTab`（リンク判定と importedEnv で共有）
 - `evaluator.ts` … 未確定根源 ID の継承（インプレース dest のみ）、ループ内 `beforeLine` は各反復で上書き、ループ include 直前 env（`beforeIncludeByLoopKey`）
 - `commandOutputs.ts` … `INDEPENDENT_OUTPUT_COMMANDS` / `isInPlaceStringCommand`

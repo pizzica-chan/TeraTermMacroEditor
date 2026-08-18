@@ -1,4 +1,5 @@
 import type { TextEncoding, NewlineType } from '../text/types'
+import { sanitizeImportedEnvParentKey } from './importedEnvParentKey'
 
 export interface SavedTabState {
   id: string
@@ -71,12 +72,9 @@ export function loadWorkspaceSession(): WorkspaceSession | null {
       tab.variableAssumptions = isStringRecord(tab.variableAssumptions)
         ? tab.variableAssumptions
         : {}
-      if (typeof tab.importedEnvParentKey === 'string' && tab.importedEnvParentKey.includes(':')) {
-        const parentTabId = tab.importedEnvParentKey.slice(0, tab.importedEnvParentKey.lastIndexOf(':'))
-        if (!tabIds.has(parentTabId)) delete tab.importedEnvParentKey
-      } else {
-        delete tab.importedEnvParentKey
-      }
+      const sanitizedParentKey = sanitizeImportedEnvParentKey(tab.importedEnvParentKey, tabIds)
+      if (sanitizedParentKey) tab.importedEnvParentKey = sanitizedParentKey
+      else delete tab.importedEnvParentKey
     }
 
     const activeTabId =
