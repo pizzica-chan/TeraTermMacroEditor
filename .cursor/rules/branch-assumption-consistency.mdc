@@ -44,7 +44,7 @@ alwaysApply: false
 - `strreplace` / `strinsert` / `strconcat` 等のインプレース変換も新しい根源にしない（dest の既存未確定 ID を継承する）。
 - `sprintf2` / `strcopy` / `int2str` 等の出力専用 dest は上書き前の dest から継承しない（引数側の ID だけを継承する）。
 - 原因変数の内容表示は、同じ根源 ID 集合を持つ派生（リテラル連結など）だけを使う。別の未確定根源と混ぜた値は使わない。
-- 導入時 hint の後ろだけが伸びた別変数は内容表示に使わない（`dir2 = dir` の後の `strconcat dir2 …` や `dir2 = dir 'aaaa'`）。原因の前に付く派生（`'hoge' + （getdate の出力）`）と、原因変数自身への後付け（`strconcat d '_x'`）は含める。
+- 導入時 hint と同じ、または後ろだけが伸びた別変数は内容表示に使わない（純コピー `dir2 = dir`、その後の `strconcat dir2 …`、`dir2 = dir'aaaa'`）。原因の前に付く派生（`'hoge' + （getdate の出力）` や `dir2 = 'prefix'dir`、前後を付ける `'pre'dir'post'`）と、原因変数自身への後付け（`strconcat d '_x'`）は含める。
 - `result` / `timeout` / `param` 等のシステム変数は仮定対象にしない。
 - 整数仮定は TTL 整数として解釈できない入力を保存・適用しない。
 - 行番号キーを include 先へ引き継がない。リンク先自身の仮定だけを使う。

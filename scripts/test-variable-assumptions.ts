@@ -17,6 +17,7 @@ import {
 import { evaluateTTL, unresolvedSourceIdsOf, type RuntimeValue } from '../src/ttl/evaluator'
 import {
   collectIndeterminateVariables,
+  describeIndeterminateReason,
   isValidVariableAssumptionInput,
   variableAssumptionKey,
   variableAssumptionsFromRecord,
@@ -52,6 +53,16 @@ function hoverAt(src: string, lineNo: number, name: string, opts?: Parameters<ty
   const col = line.toLowerCase().indexOf(name.toLowerCase())
   if (col < 0) return undefined
   return evaluateTTL(src, opts).getHoverAt(lineNo, col)?.info
+}
+
+function afterHint(
+  evaluation: Pick<ReturnType<typeof evaluateTTL>, 'afterLine'>,
+  line: number,
+  name: string,
+): string | undefined {
+  const value = evaluation.afterLine.get(line)?.get(name)
+  if (!value) return undefined
+  return describeIndeterminateReason(value)
 }
 
 export function runVariableAssumptionTests(): TestRunResult {
@@ -324,20 +335,25 @@ end`
     copyThenConcatEval.afterLine,
   )
   const copyThenConcatItem = copyThenConcatVars.find((v) => v.name === 'dir' && v.line === 1)
+  const copyThenConcatDerived = afterHint(copyThenConcatEval, 4, 'dir2')
   if (
     copyThenConcatVars.length === 1
     && copyThenConcatItem
     && copyThenConcatItem.reason.includes('getdir')
     && !copyThenConcatItem.reason.includes('aaaa')
     && !copyThenConcatVars.some((v) => v.name === 'dir2')
+    && copyThenConcatDerived?.includes('aaaa')
   ) {
     ok('コピー先への後付け strconcat を原因変数の内容表示に混ぜない')
   } else {
-    ng('コピー先への後付け strconcat を原因変数の内容表示に混ぜない', copyThenConcatVars)
+    ng('コピー先への後付け strconcat を原因変数の内容表示に混ぜない', {
+      listed: copyThenConcatVars,
+      derived: copyThenConcatDerived,
+    })
   }
 
   const copyThenAssignSrc = `getdir dir
-dir2 = dir 'aaaa'
+dir2 = dir'aaaa'
 end`
   const copyThenAssignEval = evaluateTTL(copyThenAssignSrc)
   const copyThenAssignVars = collectIndeterminateVariables(
@@ -346,14 +362,98 @@ end`
     copyThenAssignEval.afterLine,
   )
   const copyThenAssignItem = copyThenAssignVars.find((v) => v.name === 'dir' && v.line === 1)
+  const copyThenAssignDerived = afterHint(copyThenAssignEval, 2, 'dir2')
   if (
     copyThenAssignVars.length === 1
     && copyThenAssignItem
+    && copyThenAssignItem.reason.includes('getdir')
     && !copyThenAssignItem.reason.includes('aaaa')
+    && copyThenAssignDerived?.includes('aaaa')
   ) {
     ok('コピー先への後付け連結代入を原因変数の内容表示に混ぜない')
   } else {
-    ng('コピー先への後付け連結代入を原因変数の内容表示に混ぜない', copyThenAssignVars)
+    ng('コピー先への後付け連結代入を原因変数の内容表示に混ぜない', {
+      listed: copyThenAssignVars,
+      derived: copyThenAssignDerived,
+    })
+  }
+
+  const copyOnlySrc = `getdir dir
+dir2 = dir
+end`
+  const copyOnlyEval = evaluateTTL(copyOnlySrc)
+  const copyOnlyVars = collectIndeterminateVariables(
+    copyOnlySrc,
+    copyOnlyEval.beforeLine,
+    copyOnlyEval.afterLine,
+  )
+  const copyOnlyItem = copyOnlyVars.find((v) => v.name === 'dir' && v.line === 1)
+  const copyOnlyDerived = afterHint(copyOnlyEval, 2, 'dir2')
+  if (
+    copyOnlyVars.length === 1
+    && copyOnlyItem?.reason === '（getdir の出力）'
+    && copyOnlyDerived === '（getdir の出力）'
+    && !copyOnlyVars.some((v) => v.name === 'dir2')
+  ) {
+    ok('純コピーだけでは原因変数の内容表示を変えない')
+  } else {
+    ng('純コピーだけでは原因変数の内容表示を変えない', {
+      listed: copyOnlyVars,
+      derived: copyOnlyDerived,
+    })
+  }
+
+  // 空白があると隣接連結にならないため、前置は 'prefix'dir と書く
+  const prefixAssignSrc = `getdir dir
+dir2 = 'prefix'dir
+end`
+  const prefixAssignEval = evaluateTTL(prefixAssignSrc)
+  const prefixAssignVars = collectIndeterminateVariables(
+    prefixAssignSrc,
+    prefixAssignEval.beforeLine,
+    prefixAssignEval.afterLine,
+  )
+  const prefixAssignItem = prefixAssignVars.find((v) => v.name === 'dir' && v.line === 1)
+  const prefixAssignDerived = afterHint(prefixAssignEval, 2, 'dir2')
+  if (
+    prefixAssignVars.length === 1
+    && prefixAssignItem?.reason.includes('prefix')
+    && prefixAssignItem.reason.includes('getdir')
+    && prefixAssignDerived?.includes('prefix')
+  ) {
+    ok('コピー先への前置連結代入は原因変数の内容表示に含める')
+  } else {
+    ng('コピー先への前置連結代入は原因変数の内容表示に含める', {
+      listed: prefixAssignVars,
+      derived: prefixAssignDerived,
+    })
+  }
+
+  const wrapAssignSrc = `getdir dir
+dir2 = 'pre'dir'post'
+end`
+  const wrapAssignEval = evaluateTTL(wrapAssignSrc)
+  const wrapAssignVars = collectIndeterminateVariables(
+    wrapAssignSrc,
+    wrapAssignEval.beforeLine,
+    wrapAssignEval.afterLine,
+  )
+  const wrapAssignItem = wrapAssignVars.find((v) => v.name === 'dir' && v.line === 1)
+  const wrapAssignDerived = afterHint(wrapAssignEval, 2, 'dir2')
+  if (
+    wrapAssignVars.length === 1
+    && wrapAssignItem?.reason.includes('pre')
+    && wrapAssignItem.reason.includes('post')
+    && wrapAssignItem.reason.includes('getdir')
+    && wrapAssignDerived?.includes('pre')
+    && wrapAssignDerived.includes('post')
+  ) {
+    ok('コピー先への前後連結代入は原因変数の内容表示に含める')
+  } else {
+    ng('コピー先への前後連結代入は原因変数の内容表示に含める', {
+      listed: wrapAssignVars,
+      derived: wrapAssignDerived,
+    })
   }
 
   const INCLUDE_COPY = `msg = 'from-sub'
@@ -378,6 +478,42 @@ end`
     ok('include 先の別変数へ代入・連結した内容を原因変数の表示に含める')
   } else {
     ng('include 先の別変数へ代入・連結した内容を原因変数の表示に含める', includeCopyItem)
+  }
+
+  const INCLUDE_COPY_APPEND = `dir2 = dir
+strconcat dir2 'x'`
+  const includeCopyAppendParentSrc = `getdir dir
+include 'sub.ttl'
+end`
+  const includeCopyAppendResolver: IncludeResolver = {
+    resolve: (path) => (path === 'sub.ttl' ? INCLUDE_COPY_APPEND : null),
+    resolveDynamic: () => null,
+    getLinkedTabId: () => 'sub-tab',
+    resolverForLinkedTab: () => includeCopyAppendResolver,
+  }
+  const includeCopyAppendEval = evaluateTTL(includeCopyAppendParentSrc, {
+    includeResolver: includeCopyAppendResolver,
+  })
+  const includeCopyAppendVars = collectIndeterminateVariables(
+    includeCopyAppendParentSrc,
+    includeCopyAppendEval.beforeLine,
+    includeCopyAppendEval.afterLine,
+  )
+  const includeCopyAppendItem = includeCopyAppendVars.find((v) => v.name === 'dir' && v.line === 1)
+  const includeCopyAppendDerived = afterHint(includeCopyAppendEval, 2, 'dir2')
+  if (
+    includeCopyAppendVars.length === 1
+    && includeCopyAppendItem
+    && includeCopyAppendItem.reason.includes('getdir')
+    && !includeCopyAppendItem.reason.includes("'x'")
+    && includeCopyAppendDerived?.includes("'x'")
+  ) {
+    ok('include 先のコピー先への後付け連結を原因変数の内容表示に混ぜない')
+  } else {
+    ng('include 先のコピー先への後付け連結を原因変数の内容表示に混ぜない', {
+      listed: includeCopyAppendVars,
+      derived: includeCopyAppendDerived,
+    })
   }
 
   const INCLUDE_MUTATE = `suffix = '_from_sub'

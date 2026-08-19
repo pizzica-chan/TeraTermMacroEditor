@@ -123,12 +123,14 @@ function valueKeepsUnresolvedSources(
 }
 
 /**
- * コピー先への後付け連結か。
- * `dir2 = dir` のあと `strconcat dir2 'aaaa'` のように、原因変数自体は変わらず
- * 派生側だけが後ろに伸びた hint は、原因変数の入力欄に出さない。
- * `'hoge' + （getdir の出力）` のように原因の前に付く派生は対象外。
+ * 別変数への純コピー、またはコピー先への後付け連結か。
+ * `dir2 = dir` や、そのあと `strconcat dir2 'aaaa'` のように原因変数自体は変わらず
+ * 派生側だけが同じ／後ろに伸びた hint は、原因変数の入力欄に出さない。
+ * `'hoge' + （getdir の出力）` のように原因の前に付く派生、および
+ * `'pre' + （getdir の出力） + 'post'` のように前後を付ける派生は origin で始まらないので対象外。
+ * hint は evaluator の `hintParts.join(' + ')` 形式を前提とする。
  */
-function isCopyThenAppendHint(candidateHint: string, originHint: string): boolean {
+function isCopyDerivedHint(candidateHint: string, originHint: string): boolean {
   if (!originHint) return false
   if (candidateHint === originHint) return true
   return candidateHint.startsWith(`${originHint} + `)
@@ -154,7 +156,7 @@ function richestMatchingValue(
       if (!valueKeepsUnresolvedSources(next, originIds)) continue
       const sameName = varName === name
       const hint = describeIndeterminateReason(next)
-      if (!sameName && isCopyThenAppendHint(hint, originHint)) continue
+      if (!sameName && isCopyDerivedHint(hint, originHint)) continue
       const score = hint.length
       const better =
         score > bestScore
