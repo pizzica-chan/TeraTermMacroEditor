@@ -312,6 +312,50 @@ end`
     ng('後続 strconcat を原因変数の内容表示に含める', laterConcatItem)
   }
 
+  const copyThenConcatSrc = `getdir dir
+sendln dir
+dir2 = dir
+strconcat dir2 'aaaa'
+end`
+  const copyThenConcatEval = evaluateTTL(copyThenConcatSrc)
+  const copyThenConcatVars = collectIndeterminateVariables(
+    copyThenConcatSrc,
+    copyThenConcatEval.beforeLine,
+    copyThenConcatEval.afterLine,
+  )
+  const copyThenConcatItem = copyThenConcatVars.find((v) => v.name === 'dir' && v.line === 1)
+  if (
+    copyThenConcatVars.length === 1
+    && copyThenConcatItem
+    && copyThenConcatItem.reason.includes('getdir')
+    && !copyThenConcatItem.reason.includes('aaaa')
+    && !copyThenConcatVars.some((v) => v.name === 'dir2')
+  ) {
+    ok('コピー先への後付け strconcat を原因変数の内容表示に混ぜない')
+  } else {
+    ng('コピー先への後付け strconcat を原因変数の内容表示に混ぜない', copyThenConcatVars)
+  }
+
+  const copyThenAssignSrc = `getdir dir
+dir2 = dir 'aaaa'
+end`
+  const copyThenAssignEval = evaluateTTL(copyThenAssignSrc)
+  const copyThenAssignVars = collectIndeterminateVariables(
+    copyThenAssignSrc,
+    copyThenAssignEval.beforeLine,
+    copyThenAssignEval.afterLine,
+  )
+  const copyThenAssignItem = copyThenAssignVars.find((v) => v.name === 'dir' && v.line === 1)
+  if (
+    copyThenAssignVars.length === 1
+    && copyThenAssignItem
+    && !copyThenAssignItem.reason.includes('aaaa')
+  ) {
+    ok('コピー先への後付け連結代入を原因変数の内容表示に混ぜない')
+  } else {
+    ng('コピー先への後付け連結代入を原因変数の内容表示に混ぜない', copyThenAssignVars)
+  }
+
   const INCLUDE_COPY = `msg = 'from-sub'
 strconcat msg d`
   const includeCopyParentSrc = `getdate d

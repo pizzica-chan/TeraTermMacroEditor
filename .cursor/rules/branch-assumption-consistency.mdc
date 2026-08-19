@@ -44,6 +44,7 @@ alwaysApply: false
 - `strreplace` / `strinsert` / `strconcat` 等のインプレース変換も新しい根源にしない（dest の既存未確定 ID を継承する）。
 - `sprintf2` / `strcopy` / `int2str` 等の出力専用 dest は上書き前の dest から継承しない（引数側の ID だけを継承する）。
 - 原因変数の内容表示は、同じ根源 ID 集合を持つ派生（リテラル連結など）だけを使う。別の未確定根源と混ぜた値は使わない。
+- 導入時 hint の後ろだけが伸びた別変数は内容表示に使わない（`dir2 = dir` の後の `strconcat dir2 …` や `dir2 = dir 'aaaa'`）。原因の前に付く派生（`'hoge' + （getdate の出力）`）と、原因変数自身への後付け（`strconcat d '_x'`）は含める。
 - `result` / `timeout` / `param` 等のシステム変数は仮定対象にしない。
 - 整数仮定は TTL 整数として解釈できない入力を保存・適用しない。
 - 行番号キーを include 先へ引き継がない。リンク先自身の仮定だけを使う。
@@ -76,7 +77,7 @@ alwaysApply: false
 
 ## 変更時の横展開確認
 
-ブロック if、単行 if、elseif、else、ネスト、include、`end`、True/False/クリア、inputbox/getenv/random、インプレース変換、`sprintf2` の dest 上書き、ループ反復別 include タブ、ループ途中 `stopAll` を確認する。
+ブロック if、単行 if、elseif、else、ネスト、include、`end`、True/False/クリア、inputbox/getenv/random、インプレース変換、`sprintf2` の dest 上書き、コピー先への後付け連結、ループ反復別 include タブ、ループ途中 `stopAll` を確認する。
 特に制御フロー変更では、送信データだけでなく `beforeLine` と include 後の env も確認する。
 
 ```bash

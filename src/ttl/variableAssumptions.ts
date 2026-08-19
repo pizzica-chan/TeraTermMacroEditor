@@ -122,6 +122,18 @@ function valueKeepsUnresolvedSources(
   return originIds.every((id) => set.has(id))
 }
 
+/**
+ * コピー先への後付け連結か。
+ * `dir2 = dir` のあと `strconcat dir2 'aaaa'` のように、原因変数自体は変わらず
+ * 派生側だけが後ろに伸びた hint は、原因変数の入力欄に出さない。
+ * `'hoge' + （getdir の出力）` のように原因の前に付く派生は対象外。
+ */
+function isCopyThenAppendHint(candidateHint: string, originHint: string): boolean {
+  if (!originHint) return false
+  if (candidateHint === originHint) return true
+  return candidateHint.startsWith(`${originHint} + `)
+}
+
 /** 導入行より後の代入・include 内の連結を反映した、最も具体的な未確定値 */
 function richestMatchingValue(
   name: string,
@@ -131,16 +143,19 @@ function richestMatchingValue(
 ): RuntimeValue {
   const originIds = unresolvedSourceIdsOf(originValue)
   if (originIds.length === 0) return originValue
+  const originHint = describeIndeterminateReason(originValue)
   let best = originValue
-  let bestScore = describeIndeterminateReason(originValue).length
+  let bestScore = originHint.length
   let bestSameName = true
   let bestLine = originLine
   for (const [line, env] of afterLine) {
     if (line < originLine) continue
     for (const [varName, next] of env) {
       if (!valueKeepsUnresolvedSources(next, originIds)) continue
-      const score = describeIndeterminateReason(next).length
       const sameName = varName === name
+      const hint = describeIndeterminateReason(next)
+      if (!sameName && isCopyThenAppendHint(hint, originHint)) continue
+      const score = hint.length
       const better =
         score > bestScore
         || (score === bestScore && sameName && !bestSameName)
