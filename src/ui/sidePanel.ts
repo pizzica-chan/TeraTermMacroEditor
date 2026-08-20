@@ -206,7 +206,7 @@ export function createSidePanel(
   variableSection.id = 'variable-assumptions-section'
   variableSection.innerHTML = `
     <h2>未確定変数</h2>
-    <p class="branch-assumptions-hint">静的に値が決まらない変数のうち、原因となる代入だけを表示します。参照や連結で派生した変数は、原因側の仮定が伝われば足ります。値を入力すると送信データ・変数ホバーに反映されます。ドライランの実行値は変わりません。</p>
+    <p class="branch-assumptions-hint">入力すると送信データ・変数ホバーに反映されます。ドライランは変わりません。</p>
     <div class="variable-assumptions-list" id="variable-assumptions-list"></div>
   `
 

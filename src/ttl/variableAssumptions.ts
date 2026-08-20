@@ -109,69 +109,6 @@ function introducesNewUnresolvedSource(
   return afterIds.some((id) => !beforeIds.has(id))
 }
 
-function valueKeepsUnresolvedSources(
-  value: RuntimeValue,
-  originIds: readonly number[],
-): boolean {
-  if (originIds.length === 0) return false
-  if (value.kind !== 'int' && value.kind !== 'str') return false
-  if (!isIndeterminateRuntimeScalar(value)) return false
-  const ids = unresolvedSourceIdsOf(value)
-  if (ids.length !== originIds.length) return false
-  const set = new Set(ids)
-  return originIds.every((id) => set.has(id))
-}
-
-/**
- * 別変数への純コピー、またはコピー先への後付け連結か。
- * `dir2 = dir` や、そのあと `strconcat dir2 'aaaa'` のように原因変数自体は変わらず
- * 派生側だけが同じ／後ろに伸びた hint は、原因変数の入力欄に出さない。
- * `'hoge' + （getdir の出力）` のように原因の前に付く派生、および
- * `'pre' + （getdir の出力） + 'post'` のように前後を付ける派生は origin で始まらないので対象外。
- * hint は evaluator の `hintParts.join(' + ')` 形式を前提とする。
- */
-function isCopyDerivedHint(candidateHint: string, originHint: string): boolean {
-  if (!originHint) return false
-  if (candidateHint === originHint) return true
-  return candidateHint.startsWith(`${originHint} + `)
-}
-
-/** 導入行より後の代入・include 内の連結を反映した、最も具体的な未確定値 */
-function richestMatchingValue(
-  name: string,
-  originLine: number,
-  originValue: RuntimeValue,
-  afterLine: ReadonlyMap<number, MacroEnvironment>,
-): RuntimeValue {
-  const originIds = unresolvedSourceIdsOf(originValue)
-  if (originIds.length === 0) return originValue
-  const originHint = describeIndeterminateReason(originValue)
-  let best = originValue
-  let bestScore = originHint.length
-  let bestSameName = true
-  let bestLine = originLine
-  for (const [line, env] of afterLine) {
-    if (line < originLine) continue
-    for (const [varName, next] of env) {
-      if (!valueKeepsUnresolvedSources(next, originIds)) continue
-      const sameName = varName === name
-      const hint = describeIndeterminateReason(next)
-      if (!sameName && isCopyDerivedHint(hint, originHint)) continue
-      const score = hint.length
-      const better =
-        score > bestScore
-        || (score === bestScore && sameName && !bestSameName)
-        || (score === bestScore && sameName === bestSameName && line >= bestLine)
-      if (!better) continue
-      best = next
-      bestScore = score
-      bestSameName = sameName
-      bestLine = line
-    }
-  }
-  return best
-}
-
 /** 静的に値が決まらない代入先のうち、原因となる変数だけを列挙する */
 export function collectIndeterminateVariables(
   source: string,
@@ -203,12 +140,11 @@ export function collectIndeterminateVariables(
       const key = variableAssumptionKey(lineNum, name)
       if (seen.has(key)) continue
       seen.add(key)
-      const displayValue = richestMatchingValue(name, lineNum, value, afterLine)
       items.push({
         line: lineNum,
         name,
         valueType,
-        reason: describeIndeterminateReason(displayValue),
+        reason: describeIndeterminateReason(value),
       })
     }
   }

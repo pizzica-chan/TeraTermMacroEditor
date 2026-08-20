@@ -162,10 +162,10 @@ end`
   } else {
     ng('getdate の出力だけを未確定変数として検出し派生の msg/cmd は出さない', derivedNames)
   }
-  if (derivedItem?.reason.includes('hoge')) {
-    ok('派生変数へ代入・連結した内容を原因変数の表示に含める')
+  if (derivedItem?.reason === '（getdate の出力）' && !derivedItem.reason.includes('hoge')) {
+    ok('別変数へ代入・連結した内容を原因変数の表示に混ぜない')
   } else {
-    ng('派生変数へ代入・連結した内容を原因変数の表示に含める', derivedItem)
+    ng('別変数へ代入・連結した内容を原因変数の表示に混ぜない', derivedItem)
   }
 
   const derivedAssumed = evaluateTTL(derivedSrc, {
@@ -298,6 +298,7 @@ sendln msg
 end`
   const groupedEval = evaluateTTL(groupedSrc)
   const groupedVars = collectIndeterminateVariables(groupedSrc, groupedEval.beforeLine, groupedEval.afterLine)
+  const groupedItem = groupedVars.find((v) => v.name === 'd' && v.line === 1)
   if (
     groupedVars.some((v) => v.name === 'd' && v.line === 1)
     && !groupedVars.some((v) => v.name === 'msg')
@@ -305,6 +306,11 @@ end`
     ok('連結代入の左辺 msg は原因変数リストに出さない')
   } else {
     ng('連結代入の左辺 msg は原因変数リストに出さない', groupedVars)
+  }
+  if (groupedItem?.reason === '（getdate の出力）' && !groupedItem.reason.includes('hoge')) {
+    ok('連結代入の派生値を原因変数の内容表示に混ぜない')
+  } else {
+    ng('連結代入の派生値を原因変数の内容表示に混ぜない', groupedItem)
   }
 
   const laterConcatSrc = `getdate d
@@ -317,10 +323,19 @@ end`
     laterConcatEval.afterLine,
   )
   const laterConcatItem = laterConcatVars.find((v) => v.name === 'd' && v.line === 1)
-  if (laterConcatItem?.reason.includes('_x') && laterConcatVars.length === 1) {
-    ok('後続 strconcat を原因変数の内容表示に含める')
+  const laterConcatDerived = afterHint(laterConcatEval, 2, 'd')
+  if (
+    laterConcatItem?.reason === '（getdate の出力）'
+    && !laterConcatItem.reason.includes('_x')
+    && laterConcatVars.length === 1
+    && laterConcatDerived?.includes('_x')
+  ) {
+    ok('原因変数自身への後続 strconcat を導入行の内容表示に混ぜない')
   } else {
-    ng('後続 strconcat を原因変数の内容表示に含める', laterConcatItem)
+    ng('原因変数自身への後続 strconcat を導入行の内容表示に混ぜない', {
+      listed: laterConcatItem,
+      derived: laterConcatDerived,
+    })
   }
 
   const copyThenConcatSrc = `getdir dir
@@ -349,6 +364,37 @@ end`
     ng('コピー先への後付け strconcat を原因変数の内容表示に混ぜない', {
       listed: copyThenConcatVars,
       derived: copyThenConcatDerived,
+    })
+  }
+
+  const prefixStrconcatSrc = `getdir dir
+sendln dir
+dir2 = dir
+strconcat dir2 'aaaa'
+dir3 = 'test'
+strconcat dir3 dir
+end`
+  const prefixStrconcatEval = evaluateTTL(prefixStrconcatSrc)
+  const prefixStrconcatVars = collectIndeterminateVariables(
+    prefixStrconcatSrc,
+    prefixStrconcatEval.beforeLine,
+    prefixStrconcatEval.afterLine,
+  )
+  const prefixStrconcatItem = prefixStrconcatVars.find((v) => v.name === 'dir' && v.line === 1)
+  const prefixStrconcatDir3 = afterHint(prefixStrconcatEval, 6, 'dir3')
+  if (
+    prefixStrconcatVars.length === 1
+    && prefixStrconcatItem?.reason === '（getdir の出力）'
+    && !prefixStrconcatItem.reason.includes('test')
+    && !prefixStrconcatItem.reason.includes('aaaa')
+    && !prefixStrconcatVars.some((v) => v.name === 'dir2' || v.name === 'dir3')
+    && prefixStrconcatDir3?.includes('test')
+  ) {
+    ok('別変数への前置 strconcat を原因変数の内容表示に混ぜない')
+  } else {
+    ng('別変数への前置 strconcat を原因変数の内容表示に混ぜない', {
+      listed: prefixStrconcatVars,
+      derived: prefixStrconcatDir3,
     })
   }
 
@@ -417,13 +463,13 @@ end`
   const prefixAssignDerived = afterHint(prefixAssignEval, 2, 'dir2')
   if (
     prefixAssignVars.length === 1
-    && prefixAssignItem?.reason.includes('prefix')
-    && prefixAssignItem.reason.includes('getdir')
+    && prefixAssignItem?.reason === '（getdir の出力）'
+    && !prefixAssignItem.reason.includes('prefix')
     && prefixAssignDerived?.includes('prefix')
   ) {
-    ok('コピー先への前置連結代入は原因変数の内容表示に含める')
+    ok('コピー先への前置連結代入を原因変数の内容表示に混ぜない')
   } else {
-    ng('コピー先への前置連結代入は原因変数の内容表示に含める', {
+    ng('コピー先への前置連結代入を原因変数の内容表示に混ぜない', {
       listed: prefixAssignVars,
       derived: prefixAssignDerived,
     })
@@ -442,15 +488,15 @@ end`
   const wrapAssignDerived = afterHint(wrapAssignEval, 2, 'dir2')
   if (
     wrapAssignVars.length === 1
-    && wrapAssignItem?.reason.includes('pre')
-    && wrapAssignItem.reason.includes('post')
-    && wrapAssignItem.reason.includes('getdir')
+    && wrapAssignItem?.reason === '（getdir の出力）'
+    && !wrapAssignItem.reason.includes('pre')
+    && !wrapAssignItem.reason.includes('post')
     && wrapAssignDerived?.includes('pre')
     && wrapAssignDerived.includes('post')
   ) {
-    ok('コピー先への前後連結代入は原因変数の内容表示に含める')
+    ok('コピー先への前後連結代入を原因変数の内容表示に混ぜない')
   } else {
-    ng('コピー先への前後連結代入は原因変数の内容表示に含める', {
+    ng('コピー先への前後連結代入を原因変数の内容表示に混ぜない', {
       listed: wrapAssignVars,
       derived: wrapAssignDerived,
     })
@@ -474,10 +520,19 @@ end`
     includeCopyEval.afterLine,
   )
   const includeCopyItem = includeCopyVars.find((v) => v.name === 'd' && v.line === 1)
-  if (includeCopyItem?.reason.includes('from-sub') && includeCopyVars.length === 1) {
-    ok('include 先の別変数へ代入・連結した内容を原因変数の表示に含める')
+  const includeCopyDerived = afterHint(includeCopyEval, 2, 'msg')
+  if (
+    includeCopyItem?.reason === '（getdate の出力）'
+    && !includeCopyItem.reason.includes('from-sub')
+    && includeCopyVars.length === 1
+    && includeCopyDerived?.includes('from-sub')
+  ) {
+    ok('include 先の別変数へ代入・連結した内容を原因変数の表示に混ぜない')
   } else {
-    ng('include 先の別変数へ代入・連結した内容を原因変数の表示に含める', includeCopyItem)
+    ng('include 先の別変数へ代入・連結した内容を原因変数の表示に混ぜない', {
+      listed: includeCopyItem,
+      derived: includeCopyDerived,
+    })
   }
 
   const INCLUDE_COPY_APPEND = `dir2 = dir
@@ -534,13 +589,19 @@ end`
     includeMutateEval.afterLine,
   )
   const includeMutateItem = includeMutateVars.find((v) => v.name === 'd' && v.line === 1)
+  const includeMutateDerived = afterHint(includeMutateEval, 2, 'd')
   if (
-    includeMutateItem?.reason.includes('_from_sub')
+    includeMutateItem?.reason === '（getdate の出力）'
+    && !includeMutateItem.reason.includes('_from_sub')
     && includeMutateVars.length === 1
+    && includeMutateDerived?.includes('_from_sub')
   ) {
-    ok('include 先で連結した値を原因変数の内容表示に含める')
+    ok('include 先で連結した値を原因行の内容表示に混ぜない')
   } else {
-    ng('include 先で連結した値を原因変数の内容表示に含める', includeMutateItem)
+    ng('include 先で連結した値を原因行の内容表示に混ぜない', {
+      listed: includeMutateItem,
+      derived: includeMutateDerived,
+    })
   }
 
   const includeOwnSrc = `getdate d
@@ -554,10 +615,18 @@ end`
     includeOwnEval.afterLine,
   )
   const includeOwnItem = includeOwnVars.find((v) => v.name === 'd')
-  if (includeOwnItem?.reason.includes('_own')) {
-    ok('同一ファイル内で代入した連結先を内容表示に含める')
+  const includeOwnDerived = afterHint(includeOwnEval, 3, 'd')
+  if (
+    includeOwnItem?.reason === '（getdate の出力）'
+    && !includeOwnItem.reason.includes('_own')
+    && includeOwnDerived?.includes('_own')
+  ) {
+    ok('同一ファイル内の後続連結を導入行の内容表示に混ぜない')
   } else {
-    ng('同一ファイル内で代入した連結先を内容表示に含める', includeOwnItem)
+    ng('同一ファイル内の後続連結を導入行の内容表示に混ぜない', {
+      listed: includeOwnItem,
+      derived: includeOwnDerived,
+    })
   }
 
   const includeTabSrc = `msg = 'from-sub'
@@ -571,10 +640,19 @@ end`
     includeTabEval.afterLine,
   )
   const includeTabItem = includeTabVars.find((v) => v.name === 'd')
-  if (includeTabItem?.reason.includes('from-sub') && includeTabVars.length === 1) {
-    ok('include 先タブ内で別変数に代入した内容を原因変数の表示に含める')
+  const includeTabDerived = afterHint(includeTabEval, 3, 'msg')
+  if (
+    includeTabItem?.reason === '（getdate の出力）'
+    && !includeTabItem.reason.includes('from-sub')
+    && includeTabVars.length === 1
+    && includeTabDerived?.includes('from-sub')
+  ) {
+    ok('include 先タブ内の別変数への代入を原因変数の表示に混ぜない')
   } else {
-    ng('include 先タブ内で別変数に代入した内容を原因変数の表示に含める', includeTabItem)
+    ng('include 先タブ内の別変数への代入を原因変数の表示に混ぜない', {
+      listed: includeTabItem,
+      derived: includeTabDerived,
+    })
   }
 
   const orphanA: RuntimeValue = { kind: 'str', value: '', hint: '（getdate の出力）' }
@@ -622,10 +700,18 @@ end`
     importedEval.afterLine,
   )
   const importedItem = importedVars.find((v) => v.name === 'd')
-  if (importedItem?.reason.includes('hello')) {
-    ok('親から渡した env の代入値が include 先の内容表示に載る')
+  const importedDerived = afterHint(importedEval, 2, 'd')
+  if (
+    importedItem?.reason === '（getdate の出力）'
+    && !importedItem.reason.includes('hello')
+    && importedDerived?.includes('hello')
+  ) {
+    ok('親から渡した env の代入値は後続連結には載るが導入行の表示には混ぜない')
   } else {
-    ng('親から渡した env の代入値が include 先の内容表示に載る', importedItem)
+    ng('親から渡した env の代入値は後続連結には載るが導入行の表示には混ぜない', {
+      listed: importedItem,
+      derived: importedDerived,
+    })
   }
 
   const parentWithDate = evaluateTTL(`getdate d
