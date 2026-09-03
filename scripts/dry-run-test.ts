@@ -1361,5 +1361,15 @@ console.log('\n=== 70. inputbox + str2int result ===')
   assert(eventsOfKind(waitState.events, 'send')[0]?.payload === '42', 'match-received matchstr str2int', eventsOfKind(waitState.events, 'send')[0]?.payload)
 }
 
+console.log('\n=== 71. guaranteed-true if with an empty body does not fall through to else ===')
+{
+  const state = await runDryRun({
+    source: `if 1 then\nelse\nsend 'else_leak'\nendif\nsend 'after'`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const sends = eventsOfKind(state.events, 'send').map((e) => e.payload)
+  assert(sends.join(',') === 'after', 'if 1 then / else with an empty then-body skips the else body', sends)
+}
+
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)
 if (failed > 0) process.exit(1)

@@ -379,6 +379,23 @@ assert(
   selfReferentialAssignment.getHoverAt(2, 1),
 )
 
+const emptyTrueBranchLiteral = evaluateTTL(`if 1 then\nelse\nsend 'else_leak'\nendif\nsend 'after'`)
+assert(
+  emptyTrueBranchLiteral.sendEntries.map((e) => e.payload).join(',') === 'after',
+  'a guaranteed-true if with an empty body does not fall through to else',
+  emptyTrueBranchLiteral.sendEntries,
+)
+
+const emptyTrueBranchAssumed = evaluateTTL(
+  `yesnobox '' ''\nif result <> 0 then\nelse\nsend 'else_leak'\nendif\nsend 'after'`,
+  { branchAssumptions: new Map([[2, true]]) },
+)
+assert(
+  emptyTrueBranchAssumed.sendEntries.map((e) => e.payload).join(',') === 'after',
+  'a branch-assumption-true if with an empty body does not fall through to else',
+  emptyTrueBranchAssumed.sendEntries,
+)
+
 const loopSendBindingKey = includeLoopIterationBindingKey(4, 0)
 const loopSendResolver: IncludeResolver = {
   resolve: () => null,

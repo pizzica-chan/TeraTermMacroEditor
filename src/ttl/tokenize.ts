@@ -271,7 +271,7 @@ function getBlockCommentCache(source: string): { lines: string[]; startsInBlock:
 }
 
 /**
- * 複数行 `/* *\/` コメートをまたぐ状態を考慮し、`source` 内の (lineNum, col) が
+ * 複数行 `/* *\/` コメントをまたぐ状態を考慮し、`source` 内の (lineNum, col) が
  * ブロックコメント内かを判定する。ホバー・補完は行単位の `tokenizeLine` を使うため、
  * これらの呼び出し元で明示的にチェックする必要がある（stripComments を経由する
  * 静的解析本体は複数行状態を追跡済み）。
