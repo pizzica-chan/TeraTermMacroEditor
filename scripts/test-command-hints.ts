@@ -6,7 +6,7 @@ import {
   getCommandHint,
   isCommandHoverTarget,
 } from '../src/ttl/commandHints'
-import { tokenizeLine } from '../src/ttl/tokenize'
+import { isPositionInBlockComment, tokenizeLine } from '../src/ttl/tokenize'
 
 function tokenColumn(line: string, word: string): number {
   const tok = tokenizeLine(line, 1).find((t) => t.text.toLowerCase() === word.toLowerCase())
@@ -265,6 +265,34 @@ export function runCommandHintTests(): TestRunResult {
     ok('未整備コマンドはフォールバックヒント')
   } else {
     ng('未整備コマンドはフォールバックヒント', fallback)
+  }
+
+  const blockCommentSource = "/*\nsend 'foo'\n*/\nsend 'bar'"
+  if (isPositionInBlockComment(blockCommentSource, 2, 1)) {
+    ok('複数行ブロックコメント内の行はコメント扱い')
+  } else {
+    ng('複数行ブロックコメント内の行はコメント扱い')
+  }
+  if (!isPositionInBlockComment(blockCommentSource, 4, 1)) {
+    ok('ブロックコメント終了後の行はコメント扱いにならない')
+  } else {
+    ng('ブロックコメント終了後の行はコメント扱いにならない')
+  }
+
+  const singleLineBlockComment = "/* memo */ send 'after'"
+  const afterCommentCol = tokenColumn(singleLineBlockComment, 'send')
+  if (!isPositionInBlockComment(singleLineBlockComment, 1, afterCommentCol)) {
+    ok('同一行で閉じたブロックコメント後は対象外')
+  } else {
+    ng('同一行で閉じたブロックコメント後は対象外')
+  }
+
+  const commentMarkerInString = "send '/* not a comment */'"
+  const stringCol = tokenColumn(commentMarkerInString, 'send')
+  if (!isPositionInBlockComment(commentMarkerInString, 1, stringCol)) {
+    ok('文字列リテラル内の /* はブロックコメント開始とみなさない')
+  } else {
+    ng('文字列リテラル内の /* はブロックコメント開始とみなさない')
   }
 
   return { passed, failed }

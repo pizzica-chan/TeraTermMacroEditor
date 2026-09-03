@@ -887,7 +887,7 @@ console.log('\n=== 42. messagebox cancel sets result=0 ===')
   assert(sends[0] === 'cancelled', 'messagebox cancel sets result=0', sends)
 }
 
-console.log('\n=== 43. exit inside while in include stays in include ===')
+console.log('\n=== 43. exit inside while in include exits the include entirely ===')
 {
   const subMacro = `while 1\nsend 'loop'\nexit\nendwhile\nsend 'after_exit'`
   const resolver: IncludeResolver = {
@@ -910,7 +910,7 @@ console.log('\n=== 43. exit inside while in include stays in include ===')
     dialogAdapter: createMockDialogAdapter([]),
   })
   const sends = eventsOfKind(state.events, 'send').map((e) => e.payload)
-  assert(sends.join(',') === 'loop,after_exit,main', 'exit in while only exits loop inside include', sends)
+  assert(sends.join(',') === 'loop,main', 'exit inside a block in an include returns to the main file, skipping the rest of the include', sends)
 }
 
 console.log('\n=== 44. yesnobox cancel sets result=0 ===')

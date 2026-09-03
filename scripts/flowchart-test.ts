@@ -493,10 +493,10 @@ console.log('\n=== 21. include terminator semantics ===')
 
   const exitInLoop = buildWithChild(`while 1\nsend 'loop'\nexit\nendwhile\nsend 'child-after'`)
   const childExit = exitInLoop.nodes.find((node) => node.sourceId === 'child' && node.line === 3)
-  const childAfter = exitInLoop.nodes.find((node) => node.sourceId === 'child' && node.line === 5)
+  const childExitNode = exitInLoop.nodes.find((node) => node.sourceId === 'child' && node.kind === 'exit')
   assert(
-    exitInLoop.edges.some((edge) => edge.source === childExit?.id && edge.target === childAfter?.id),
-    'exit in include block resumes after block',
+    exitInLoop.edges.some((edge) => edge.source === childExit?.id && edge.target === childExitNode?.id),
+    'exit in include block leaves the include entirely, not just the enclosing block',
     exitInLoop.edges,
   )
 

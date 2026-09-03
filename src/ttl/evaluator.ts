@@ -1459,21 +1459,25 @@ function processIfChain(
       const bodyStart = cursor + 1
       const bodyEnd = nextSibling - 1
 
-      if (condResult === true && bodyStart <= bodyEnd) {
+      if (condResult === true) {
         // elseif の明示的な True 仮定は、その分岐を選ぶ指定でもあるため、
         // 先行 if/elseif の未仮定条件にかかわらず選択経路を確定扱いにする。
-        const selectedBranchGuaranteed =
-          conditionGuaranteed && (assumptionApplied || pathGuaranteed)
-        const run = processBlock(
-          env,
-          lines,
-          bodyStart,
-          bodyEnd,
-          beforeLine,
-          afterLine,
-          withIfBodyOpts(opts, selectedBranchGuaranteed),
-        )
-        if (run !== 'complete') return blockRunToStmtResult(run, endIdx)
+        // 本体が空でもこの分岐は確定選択されるため、以降の else を実行させない
+        // （executed を立てずに break を抜けると else が誤って走ってしまう）。
+        if (bodyStart <= bodyEnd) {
+          const selectedBranchGuaranteed =
+            conditionGuaranteed && (assumptionApplied || pathGuaranteed)
+          const run = processBlock(
+            env,
+            lines,
+            bodyStart,
+            bodyEnd,
+            beforeLine,
+            afterLine,
+            withIfBodyOpts(opts, selectedBranchGuaranteed),
+          )
+          if (run !== 'complete') return blockRunToStmtResult(run, endIdx)
+        }
         executed = true
         break
       }
@@ -2166,9 +2170,10 @@ function computeEnvAtColumn(
   const assignIdx = findAssignmentIndex(tokens, stmtOffset)
   if (assignIdx < 0) return base
 
-  const assignEnd = tokens[assignIdx + 1]
-    ? tokens[assignIdx + 1].column + tokens[assignIdx + 1].text.length
-    : tokens[assignIdx].column + 1
+  // 演算子（=, := 等）の終端を境界にする。RHS 側（自己参照を含む）は常に
+  // 代入前の env を見る必要があるため、最初の RHS トークン終端を境界にしてはいけない
+  // （`cnt = cnt + 1` の RHS `cnt` にホバーしたとき代入後の値を返してしまう）。
+  const assignEnd = tokens[assignIdx].column + tokens[assignIdx].text.length
 
   if (assignEnd > tokenFrom) {
     const tempEnv = cloneEnv(base)

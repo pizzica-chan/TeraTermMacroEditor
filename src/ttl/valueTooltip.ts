@@ -12,6 +12,7 @@ import {
   includeGraphRevisionField,
 } from './analysisContext'
 import { formatUnresolvedDisplay } from './unresolvedDisplay'
+import { isPositionInBlockComment } from './tokenize'
 
 const emptyEvaluation: EvaluationResult = {
   beforeLine: new Map(),
@@ -140,6 +141,8 @@ const varHoverTooltip = hoverTooltip(
   (view: EditorView, pos: number): Tooltip | null => {
     const line = view.state.doc.lineAt(pos)
     const column = pos - line.from
+
+    if (isPositionInBlockComment(view.state.doc.toString(), line.number, column)) return null
 
     const cmdTarget = findCommandHoverTarget(line.text, line.number, column)
     if (cmdTarget) {

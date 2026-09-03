@@ -367,6 +367,18 @@ assert(
   hoverReferences.getHoverAt(3, 7),
 )
 
+const selfReferentialAssignment = evaluateTTL(`cnt = 5\ncnt = cnt + 1`)
+assert(
+  selfReferentialAssignment.getHoverAt(2, 7)?.info.display === '5',
+  'hovering the RHS reference of a self-referential assignment shows the pre-assignment value',
+  selfReferentialAssignment.getHoverAt(2, 7),
+)
+assert(
+  selfReferentialAssignment.getHoverAt(2, 1)?.info.display === '6',
+  'hovering the LHS of a self-referential assignment shows the post-assignment value',
+  selfReferentialAssignment.getHoverAt(2, 1),
+)
+
 const loopSendBindingKey = includeLoopIterationBindingKey(4, 0)
 const loopSendResolver: IncludeResolver = {
   resolve: () => null,

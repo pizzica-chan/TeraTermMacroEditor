@@ -1802,11 +1802,15 @@ export class DryRunSession {
         }
         const bodyStart = cursor + 1
         const bodyEnd = nextSibling - 1
-        if (condResult === true && bodyStart <= bodyEnd) {
-          const run = await this.processBlock(env, lines, bodyStart, bodyEnd, execOpts)
-          if (run === 'stopAll') return { nextIdx: endIdx, stopAll: true }
-          if (run === 'stopInclude') return { nextIdx: endIdx, stopInclude: true }
-          if (this.blockRunNeedsStopBlock(run, execOpts)) return { nextIdx: endIdx, stopBlock: true }
+        if (condResult === true) {
+          // 本体が空でもこの分岐は選択されるため、else を実行させないよう
+          // executed を必ず立てる。
+          if (bodyStart <= bodyEnd) {
+            const run = await this.processBlock(env, lines, bodyStart, bodyEnd, execOpts)
+            if (run === 'stopAll') return { nextIdx: endIdx, stopAll: true }
+            if (run === 'stopInclude') return { nextIdx: endIdx, stopInclude: true }
+            if (this.blockRunNeedsStopBlock(run, execOpts)) return { nextIdx: endIdx, stopBlock: true }
+          }
           executed = true
           break
         }
@@ -1993,7 +1997,6 @@ export class DryRunSession {
     }
 
     if (cmd === 'exit') {
-      if (execOpts.inInclude && execOpts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
       if (execOpts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
       return { nextIdx: lineIdx, stopAll: true }
     }

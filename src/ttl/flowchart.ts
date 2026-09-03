@@ -475,14 +475,15 @@ function buildFileGraph(
       continue
     }
 
-    if (statement.cmd === 'end' || statement.cmd === 'exit') {
+    if (statement.cmd === 'end') {
       removeOutgoing(edges, nodeId)
-      if (statement.cmd === 'end' || !isIncludedFile) {
-        addEdge(edges, nodeId, effectiveGlobalExitId, 'flow', statement.cmd)
-      } else {
-        const block = innermostBlock(index)
-        addEdge(edges, nodeId, block ? nodeAfterStatement(block.end) : exitId, 'flow', statement.cmd)
-      }
+      addEdge(edges, nodeId, effectiveGlobalExitId, 'flow', statement.cmd)
+      continue
+    }
+
+    if (statement.cmd === 'exit') {
+      removeOutgoing(edges, nodeId)
+      addEdge(edges, nodeId, isIncludedFile ? exitId : effectiveGlobalExitId, 'flow', statement.cmd)
       continue
     }
 

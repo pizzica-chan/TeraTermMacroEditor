@@ -198,6 +198,92 @@ export function stripComments(source: string): string[] {
   return lines
 }
 
+interface BlockCommentLineState {
+  /** この行を最後まで処理した後もブロックコメントが閉じていないか */
+  endsInBlockComment: boolean
+  /** 0-based 列 col が `/* ... *\/` の範囲内か（文字列リテラル内の `/*` は対象外、stripComments と同じ規則） */
+  isColumnInBlockComment(col: number): boolean
+}
+
+function scanBlockCommentState(rawLine: string, startInBlockComment: boolean): BlockCommentLineState {
+  const ranges: Array<{ start: number; end: number }> = []
+  let inBlock = startInBlockComment
+  let inString: "'" | '"' | null = null
+  let i = 0
+
+  if (inBlock) ranges.push({ start: 0, end: Infinity })
+
+  while (i < rawLine.length) {
+    if (inBlock) {
+      const end = rawLine.indexOf('*/', i)
+      if (end === -1) break
+      inBlock = false
+      ranges[ranges.length - 1]!.end = end + 2
+      i = end + 2
+      continue
+    }
+
+    const ch = rawLine[i]!
+
+    if (inString) {
+      if (ch === inString) inString = null
+      i++
+      continue
+    }
+
+    if (rawLine.slice(i, i + 2) === '/*') {
+      inBlock = true
+      ranges.push({ start: i, end: Infinity })
+      i += 2
+      continue
+    }
+
+    if (ch === "'" || ch === '"') {
+      inString = ch
+      i++
+      continue
+    }
+
+    if (ch === ';') break
+
+    i++
+  }
+
+  return {
+    endsInBlockComment: inBlock,
+    isColumnInBlockComment: (col) => ranges.some((r) => col >= r.start && col < r.end),
+  }
+}
+
+let blockCommentCache: { source: string; lines: string[]; startsInBlock: boolean[] } | null = null
+
+function getBlockCommentCache(source: string): { lines: string[]; startsInBlock: boolean[] } {
+  if (blockCommentCache && blockCommentCache.source === source) return blockCommentCache
+  const lines = source.split('\n')
+  const startsInBlock: boolean[] = []
+  let inBlock = false
+  for (const raw of lines) {
+    startsInBlock.push(inBlock)
+    inBlock = scanBlockCommentState(raw, inBlock).endsInBlockComment
+  }
+  blockCommentCache = { source, lines, startsInBlock }
+  return blockCommentCache
+}
+
+/**
+ * 複数行 `/* *\/` コメートをまたぐ状態を考慮し、`source` 内の (lineNum, col) が
+ * ブロックコメント内かを判定する。ホバー・補完は行単位の `tokenizeLine` を使うため、
+ * これらの呼び出し元で明示的にチェックする必要がある（stripComments を経由する
+ * 静的解析本体は複数行状態を追跡済み）。
+ */
+export function isPositionInBlockComment(source: string, lineNum: number, col: number): boolean {
+  const { lines, startsInBlock } = getBlockCommentCache(source)
+  const idx = lineNum - 1
+  const line = lines[idx]
+  if (line === undefined) return false
+  return scanBlockCommentState(line, startsInBlock[idx] ?? false).isColumnInBlockComment(col)
+}
+
 export function unquoteString(text: string): string {
   if ((text.startsWith("'") && text.endsWith("'")) || (text.startsWith('"') && text.endsWith('"'))) {
     return text.slice(1, -1)

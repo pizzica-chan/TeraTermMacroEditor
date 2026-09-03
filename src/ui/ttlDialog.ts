@@ -182,12 +182,12 @@ export function createBrowserDialogAdapter(): DryRunDialogAdapter {
           closeActive()
           resolve(value)
         }
-        activeCancel = () => finish(false)
         const overlay = createOverlay(
           title,
           `<p class="ttl-dialog-message">${escapeHtml(message)}</p>`,
           `<button type="button" class="ttl-dialog-btn primary" data-action="ok">OK</button>`,
         )
+        activeCancel = () => finish(false)
         const okBtn = overlay.querySelector<HTMLButtonElement>('[data-action="ok"]')!
         okBtn.addEventListener('click', () => finish(true))
         overlay.addEventListener('keydown', (e) => {
@@ -328,7 +328,6 @@ export function createBrowserDialogAdapter(): DryRunDialogAdapter {
           closeActive()
           resolve(value)
         }
-        activeCancel = () => finish({ ok: false, path: '' })
         const overlay = createOverlay(
           title,
           `
@@ -340,6 +339,7 @@ export function createBrowserDialogAdapter(): DryRunDialogAdapter {
             <button type="button" class="ttl-dialog-btn primary" data-action="ok">OK</button>
           `,
         )
+        activeCancel = () => finish({ ok: false, path: '' })
         const input = overlay.querySelector<HTMLInputElement>('.ttl-dialog-input')!
         overlay.querySelector('[data-action="cancel"]')!.addEventListener('click', () => finish({ ok: false, path: '' }))
         overlay.querySelector('[data-action="ok"]')!.addEventListener('click', () => finish({ ok: true, path: input.value }))
@@ -356,7 +356,6 @@ export function createBrowserDialogAdapter(): DryRunDialogAdapter {
           closeActive()
           resolve(value)
         }
-        activeCancel = () => finish({ ok: false, path: '' })
         const overlay = createOverlay(
           title,
           `<input class="ttl-dialog-input" type="text" value="${escapeAttr(defaultPath)}" placeholder="フォルダパス" />`,
@@ -365,6 +364,7 @@ export function createBrowserDialogAdapter(): DryRunDialogAdapter {
             <button type="button" class="ttl-dialog-btn primary" data-action="ok">OK</button>
           `,
         )
+        activeCancel = () => finish({ ok: false, path: '' })
         const input = overlay.querySelector<HTMLInputElement>('.ttl-dialog-input')!
         overlay.querySelector('[data-action="cancel"]')!.addEventListener('click', () => finish({ ok: false, path: '' }))
         overlay.querySelector('[data-action="ok"]')!.addEventListener('click', () => finish({ ok: true, path: input.value }))
