@@ -1697,7 +1697,6 @@ function processSingleLineIfTail(
     return { nextIdx: lineIdx, stopAll: true }
   }
   if (tailCmd === 'exit') {
-    if (opts.inInclude && opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
     if (opts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
     return { nextIdx: lineIdx, stopAll: true }
   }
@@ -1808,7 +1807,6 @@ function processStatement(
   }
 
   if (cmd === 'exit') {
-    if (opts.inInclude && opts.inBlock) return { nextIdx: lineIdx, stopBlock: true }
     if (opts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
     return { nextIdx: lineIdx, stopAll: true }
   }

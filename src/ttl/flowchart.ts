@@ -511,6 +511,10 @@ function buildFileGraph(
           tailCmd === 'continue' ? 'loop' : 'false',
           tailCmd,
         )
+      } else if (tailCmd === 'end') {
+        addEdge(edges, nodeId, effectiveGlobalExitId, 'true', tailCmd)
+      } else if (tailCmd === 'exit') {
+        addEdge(edges, nodeId, isIncludedFile ? exitId : effectiveGlobalExitId, 'true', tailCmd)
       } else {
         addEdge(edges, nodeId, nodeAfterStatement(index), 'true', '真')
       }

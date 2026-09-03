@@ -508,6 +508,21 @@ console.log('\n=== 21. include terminator semantics ===')
     'return in include block resumes after block',
     returnInIf.edges,
   )
+
+  const singleLineExit = buildWithChild(`if 1 then exit\nsend 'child-after'`)
+  const singleLineExitNode = singleLineExit.nodes.find(
+    (node) => node.sourceId === 'child' && node.line === 1 && node.kind === 'decision',
+  )
+  const singleLineExitTarget = singleLineExit.nodes.find(
+    (node) => node.sourceId === 'child' && node.kind === 'exit',
+  )
+  assert(
+    singleLineExit.edges.some(
+      (edge) => edge.source === singleLineExitNode?.id && edge.target === singleLineExitTarget?.id && edge.kind === 'true',
+    ),
+    'single-line if ... then exit leaves the include entirely on its true edge',
+    singleLineExit.edges,
+  )
 }
 
 console.log(`\n=== FLOWCHART RESULT: ${passed} passed, ${failed} failed ===`)

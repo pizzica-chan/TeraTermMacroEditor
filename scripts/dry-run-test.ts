@@ -1371,5 +1371,31 @@ console.log('\n=== 71. guaranteed-true if with an empty body does not fall throu
   assert(sends.join(',') === 'after', 'if 1 then / else with an empty then-body skips the else body', sends)
 }
 
+console.log('\n=== 72. single-line if ... then exit inside an include leaves the include entirely ===')
+{
+  const subMacro = `if 1 then exit\nsend 'after_exit'`
+  const resolver: IncludeResolver = {
+    resolve(path) {
+      return path === 'sub.ttl' ? subMacro : null
+    },
+    resolveDynamic() {
+      return null
+    },
+    getLinkedTabId() {
+      return null
+    },
+    resolverForLinkedTab() {
+      return null
+    },
+  }
+  const state = await runDryRun({
+    source: `include 'sub.ttl'\nsend 'main'\nend`,
+    includeResolver: resolver,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const sends = eventsOfKind(state.events, 'send').map((e) => e.payload)
+  assert(sends.join(',') === 'main', 'single-line if ... then exit does not fall through to the next include line', sends)
+}
+
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)
 if (failed > 0) process.exit(1)

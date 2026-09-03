@@ -396,6 +396,30 @@ assert(
   emptyTrueBranchAssumed.sendEntries,
 )
 
+const exitInWhileResolver: IncludeResolver = {
+  ...includeResolver,
+  resolve: (path) => (path === 'sub.ttl' ? `while 1\nsend 'loop'\nexit\nendwhile\nsend 'after_exit'` : null),
+}
+const exitInWhileEval = evaluateTTL(`include 'sub.ttl'\nsend 'main'\nend`, { includeResolver: exitInWhileResolver })
+assert(
+  exitInWhileEval.sendEntries.map((e) => e.payload).join(',') === 'loop,main',
+  'exit inside a block in an include leaves the include entirely, not just the block, for static evaluation',
+  exitInWhileEval.sendEntries,
+)
+
+const exitSingleLineResolver: IncludeResolver = {
+  ...includeResolver,
+  resolve: (path) => (path === 'sub.ttl' ? `if 1 then exit\nsend 'after_exit'` : null),
+}
+const exitSingleLineEval = evaluateTTL(`include 'sub.ttl'\nsend 'main'\nend`, {
+  includeResolver: exitSingleLineResolver,
+})
+assert(
+  exitSingleLineEval.sendEntries.map((e) => e.payload).join(',') === 'main',
+  'single-line if ... then exit inside an include leaves the include entirely',
+  exitSingleLineEval.sendEntries,
+)
+
 const loopSendBindingKey = includeLoopIterationBindingKey(4, 0)
 const loopSendResolver: IncludeResolver = {
   resolve: () => null,

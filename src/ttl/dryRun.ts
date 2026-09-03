@@ -1131,6 +1131,13 @@ export class DryRunSession {
       if (tailCmd === 'goto' || tailCmd === 'call') {
         return this.processGotoCall(env, lines, lineIdx, tokens, tailStart, execOpts)
       }
+      if (tailCmd === 'exit') {
+        if (execOpts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
+        return { nextIdx: lineIdx, stopAll: true }
+      }
+      if (tailCmd === 'end') {
+        return { nextIdx: lineIdx, stopAll: true }
+      }
       if (isSendRecordCommand(tailCmd)) {
         this.pushSendEvent(lineNum, execOpts, tailCmd, tokens, tailStart)
       } else if (
