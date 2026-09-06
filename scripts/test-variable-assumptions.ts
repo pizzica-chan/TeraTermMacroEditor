@@ -1454,6 +1454,53 @@ end`,
     })
   }
 
+  const waitKnownVarSrc = `UsernamePrompt = 'login:'
+wait UsernamePrompt
+sendln 'x'
+end`
+  const waitKnownVarEval = evaluateTTL(waitKnownVarSrc)
+  const waitKnownVarVars = collectIndeterminateVariables(
+    waitKnownVarSrc,
+    waitKnownVarEval.beforeLine,
+    waitKnownVarEval.afterLine,
+  )
+  if (waitKnownVarVars.length === 0) {
+    ok('wait の引数が既知の定数変数なら matchstr を未確定にしない')
+  } else {
+    ng('wait の引数が既知の定数変数なら matchstr を未確定にしない', waitKnownVarVars)
+  }
+  const matchstrAfterKnownWait = waitKnownVarEval.afterLine.get(2)?.get('matchstr')
+  if (
+    matchstrAfterKnownWait?.kind === 'str'
+    && matchstrAfterKnownWait.value === 'login:'
+    && matchstrAfterKnownWait.origin === 'literal'
+  ) {
+    ok('matchstr は wait の変数引数が指す値そのものになる')
+  } else {
+    ng('matchstr は wait の変数引数が指す値そのものになる', matchstrAfterKnownWait)
+  }
+
+  const waitLiteralSrc = `wait '$'\nsendln 'x'\nend`
+  const waitLiteralEval = evaluateTTL(waitLiteralSrc)
+  const waitLiteralVars = collectIndeterminateVariables(
+    waitLiteralSrc,
+    waitLiteralEval.beforeLine,
+    waitLiteralEval.afterLine,
+  )
+  if (waitLiteralVars.length === 0) ok('wait のリテラル引数は従来どおり未確定にしない')
+  else ng('wait のリテラル引数は従来どおり未確定にしない', waitLiteralVars)
+
+  const waitUnknownVarSrc = `inputbox 'prompt' 'title'\np = inputstr\nwait p\nsendln 'x'\nend`
+  const waitUnknownVarEval = evaluateTTL(waitUnknownVarSrc)
+  const waitUnknownVarVars = collectIndeterminateVariables(
+    waitUnknownVarSrc,
+    waitUnknownVarEval.beforeLine,
+    waitUnknownVarEval.afterLine,
+  )
+  const matchstrItem = waitUnknownVarVars.find((v) => v.name === 'matchstr')
+  if (matchstrItem?.line === 3) ok('wait の引数が未確定変数なら matchstr も未確定のまま')
+  else ng('wait の引数が未確定変数なら matchstr も未確定のまま', waitUnknownVarVars)
+
   return { passed, failed }
 }
 

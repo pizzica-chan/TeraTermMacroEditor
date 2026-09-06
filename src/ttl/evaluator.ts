@@ -297,34 +297,49 @@ export function parseWaitPatternAt(
   tokens: Token[],
   start: number,
   env: Env,
-): { pattern: string; next: number } | null {
+): { pattern: string; next: number; determinate: boolean } | null {
   if (start >= tokens.length) return null
   const parts: string[] = []
+  let determinate = true
   let i = start
   while (i < tokens.length) {
     if (parts.length > 0 && tokenGapBefore(tokens, i)) break
     const operand = evalSendOperand(tokens, i, env)
     if (!operand) break
-    if (operand.scalar?.kind === 'str') parts.push(operand.scalar.value)
-    else if (operand.scalar?.kind === 'int') parts.push(String(operand.scalar.value))
-    else break
+    if (operand.scalar?.kind === 'str') {
+      parts.push(operand.scalar.value)
+      if (isUnresolvedOperand(operand.scalar)) determinate = false
+    } else if (operand.scalar?.kind === 'int') {
+      parts.push(String(operand.scalar.value))
+      if (isUnresolvedOperand(operand.scalar)) determinate = false
+    } else break
     i = operand.next
   }
   if (parts.length === 0) return null
-  return { pattern: parts.join(''), next: i }
+  return { pattern: parts.join(''), next: i, determinate }
 }
 
-/** wait 系コマンドの引数パターンを収集（1パターンは #NN 連結・隣接リテラル結合に対応） */
-export function collectWaitPatterns(tokens: Token[], start: number, env: Env): string[] {
-  const patterns: string[] = []
+interface WaitPatternDetail {
+  pattern: string
+  /** この pattern が静的に確定した値か（変数経由でも既知の定数なら true） */
+  determinate: boolean
+}
+
+function collectWaitPatternDetails(tokens: Token[], start: number, env: Env): WaitPatternDetail[] {
+  const patterns: WaitPatternDetail[] = []
   let i = start
   while (i < tokens.length) {
     const parsed = parseWaitPatternAt(tokens, i, env)
     if (!parsed) break
-    patterns.push(parsed.pattern)
+    patterns.push({ pattern: parsed.pattern, determinate: parsed.determinate })
     i = parsed.next
   }
   return patterns
+}
+
+/** wait 系コマンドの引数パターンを収集（1パターンは #NN 連結・隣接リテラル結合に対応） */
+export function collectWaitPatterns(tokens: Token[], start: number, env: Env): string[] {
+  return collectWaitPatternDetails(tokens, start, env).map((p) => p.pattern)
 }
 
 function cloneEnv(env: ReadonlyMap<string, RuntimeValue>): Env {
@@ -1212,21 +1227,20 @@ function applyWaitReceiveEffects(
   }
   if (!WAIT_RECEIVE_COMMANDS.has(cmd)) return false
 
-  const patterns = collectWaitPatterns(tokens, offset + 1, env)
+  const patterns = collectWaitPatternDetails(tokens, offset + 1, env)
   let matchstrValue: string
   if (patterns.length === 0) {
     matchstrValue = '〈受信データ〉'
-  } else if (patterns[0] === '') {
+  } else if (patterns[0]!.pattern === '') {
     matchstrValue = ''
   } else {
-    matchstrValue = patterns[0]!
+    matchstrValue = patterns[0]!.pattern
   }
+  // 先頭パターンが変数経由でも静的に確定していれば literal 扱いにする
+  // （wait 'x' と wait v（v = 'x'）を同じ扱いにする。他の候補パターンとの
+  // 一致可能性は元々未考慮で、表示している patterns[0] 自体の確定性だけを見る）。
   const origin: ValueOrigin =
-    patterns.length > 0 &&
-    tokens[offset + 1]?.kind === 'string' &&
-    patterns[0] === unquoteString(tokens[offset + 1]!.text)
-      ? 'literal'
-      : 'match-received'
+    patterns.length > 0 && patterns[0]!.determinate ? 'literal' : 'match-received'
   const matchstr =
     origin === 'match-received'
       ? withUnresolvedSourceIds({ kind: 'str', value: matchstrValue, origin }, seq)
