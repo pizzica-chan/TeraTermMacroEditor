@@ -319,13 +319,13 @@ export function parseWaitPatternAt(
   return { pattern: parts.join(''), next: i, determinate }
 }
 
-interface WaitPatternDetail {
+export interface WaitPatternDetail {
   pattern: string
   /** この pattern が静的に確定した値か（変数経由でも既知の定数なら true） */
   determinate: boolean
 }
 
-function collectWaitPatternDetails(tokens: Token[], start: number, env: Env): WaitPatternDetail[] {
+export function collectWaitPatternDetails(tokens: Token[], start: number, env: Env): WaitPatternDetail[] {
   const patterns: WaitPatternDetail[] = []
   let i = start
   while (i < tokens.length) {

@@ -51,7 +51,7 @@ import { formatGetdate, formatGettime } from './ttlDateTime'
 import {
   buildStringFromOperands,
   collectSendPayload,
-  collectWaitPatterns,
+  collectWaitPatternDetails,
   evalGroupedStringExprAt,
   parseWaitPatternAt,
   createIfdefinedLookup,
@@ -1315,24 +1315,23 @@ export class DryRunSession {
     }
 
     if (WAIT_COMMANDS.has(cmd)) {
-      const patterns = collectWaitPatterns(tokens, offset + 1, env)
-      const simulated = patterns[0] ?? ''
-      this.pushEvent(buildWaitReceiveEvent(cmd, patterns, lineNum, execOpts.locationPrefix))
+      const patterns = collectWaitPatternDetails(tokens, offset + 1, env)
+      const simulated = patterns[0]?.pattern ?? ''
+      this.pushEvent(
+        buildWaitReceiveEvent(cmd, patterns.map((p) => p.pattern), lineNum, execOpts.locationPrefix),
+      )
 
       let matchstrValue: string
       if (patterns.length === 0) {
         matchstrValue = '〈受信データ〉'
-      } else if (patterns[0] === '') {
+      } else if (patterns[0]!.pattern === '') {
         matchstrValue = ''
       } else {
         matchstrValue = simulated || '〈受信データ〉'
       }
-      const matchOrigin =
-        patterns.length > 0 &&
-        tokens[offset + 1]?.kind === 'string' &&
-        patterns[0] === unquoteString(tokens[offset + 1]!.text)
-          ? 'literal'
-          : 'match-received'
+      // 先頭パターンが変数経由でも静的に確定していれば literal 扱いにする
+      // （evaluator.ts の applyWaitReceiveEffects と同じ判定基準）。
+      const matchOrigin = patterns.length > 0 && patterns[0]!.determinate ? 'literal' : 'match-received'
       setScalar(env, 'matchstr', { kind: 'str', value: matchstrValue, origin: matchOrigin })
 
       setResult(env, cmd, 1, 'literal')

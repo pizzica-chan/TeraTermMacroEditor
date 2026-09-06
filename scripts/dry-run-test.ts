@@ -1397,5 +1397,19 @@ console.log('\n=== 72. single-line if ... then exit inside an include leaves the
   assert(sends.join(',') === 'main', 'single-line if ... then exit does not fall through to the next include line', sends)
 }
 
+console.log('\n=== 73. matchstr resolves statically when wait pattern is a known constant variable ===')
+{
+  const state = await runDryRun({
+    source: `UsernamePrompt = 'login:'\nwait UsernamePrompt\nstrcopy matchstr 1 5 dest\nsendln dest\nend`,
+    dialogAdapter: createMockDialogAdapter([]),
+  })
+  const sends = eventsOfKind(state.events, 'send').map((e) => e.payload)
+  assert(
+    sends.join(',') === 'login',
+    'strcopy from matchstr resolves statically when the wait pattern variable is a known constant',
+    sends,
+  )
+}
+
 console.log(`\n=== DRY-RUN RESULT: ${passed} passed, ${failed} failed ===`)
 if (failed > 0) process.exit(1)
