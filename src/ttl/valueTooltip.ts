@@ -12,7 +12,7 @@ import {
   includeGraphRevisionField,
 } from './analysisContext'
 import { formatUnresolvedDisplay } from './unresolvedDisplay'
-import { isPositionInBlockComment } from './tokenize'
+import { blankBlockCommentSpans, isPositionInBlockComment } from './tokenize'
 
 const emptyEvaluation: EvaluationResult = {
   beforeLine: new Map(),
@@ -141,10 +141,12 @@ const varHoverTooltip = hoverTooltip(
   (view: EditorView, pos: number): Tooltip | null => {
     const line = view.state.doc.lineAt(pos)
     const column = pos - line.from
+    const source = view.state.doc.toString()
 
-    if (isPositionInBlockComment(view.state.doc.toString(), line.number, column)) return null
+    if (isPositionInBlockComment(source, line.number, column)) return null
 
-    const cmdTarget = findCommandHoverTarget(line.text, line.number, column)
+    const safeLineText = blankBlockCommentSpans(source, line.number, line.text)
+    const cmdTarget = findCommandHoverTarget(safeLineText, line.number, column)
     if (cmdTarget) {
       const hint = getCommandHint(cmdTarget.cmd)
       if (hint) {
@@ -162,7 +164,7 @@ const varHoverTooltip = hoverTooltip(
     // include のリンク変更や非同期解析の完了直後は StateField のスナップショットが
     // 一時的に古い場合があるため、現在の文書に対応する最新キャッシュを優先する。
     const evalResult =
-      getCachedEvaluation(view.state.doc.toString()) ??
+      getCachedEvaluation(source) ??
       view.state.field(evalField, false)
     if (!evalResult) return null
 

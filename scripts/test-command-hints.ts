@@ -6,7 +6,7 @@ import {
   getCommandHint,
   isCommandHoverTarget,
 } from '../src/ttl/commandHints'
-import { isPositionInBlockComment, tokenizeLine } from '../src/ttl/tokenize'
+import { blankBlockCommentSpans, isPositionInBlockComment, tokenizeLine } from '../src/ttl/tokenize'
 
 function tokenColumn(line: string, word: string): number {
   const tok = tokenizeLine(line, 1).find((t) => t.text.toLowerCase() === word.toLowerCase())
@@ -293,6 +293,27 @@ export function runCommandHintTests(): TestRunResult {
     ok('文字列リテラル内の /* はブロックコメント開始とみなさない')
   } else {
     ng('文字列リテラル内の /* はブロックコメント開始とみなさない')
+  }
+
+  const carriedOverSource = "/* start\nstill comment */ sendln 'x'"
+  const carriedOverLine2 = "still comment */ sendln 'x'"
+  const sendlnCol = carriedOverLine2.indexOf('sendln')
+  const safeLine = blankBlockCommentSpans(carriedOverSource, 2, carriedOverLine2)
+  const carriedOverHover = findCommandHoverTarget(safeLine, 2, sendlnCol + 1)
+  if (carriedOverHover?.cmd === 'sendln') {
+    ok('前の行から続くブロックコメントが行途中で閉じても、続く実コードのホバー対象を検出')
+  } else {
+    ng('前の行から続くブロックコメントが行途中で閉じても、続く実コードのホバー対象を検出', {
+      safeLine,
+      carriedOverHover,
+    })
+  }
+
+  const unaffectedLine = "send 'hello'"
+  if (blankBlockCommentSpans(unaffectedLine, 1, unaffectedLine) === unaffectedLine) {
+    ok('ブロックコメントを含まない行は変更しない')
+  } else {
+    ng('ブロックコメントを含まない行は変更しない', blankBlockCommentSpans(unaffectedLine, 1, unaffectedLine))
   }
 
   return { passed, failed }

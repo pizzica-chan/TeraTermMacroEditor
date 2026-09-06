@@ -337,11 +337,6 @@ export function collectWaitPatternDetails(tokens: Token[], start: number, env: E
   return patterns
 }
 
-/** wait 系コマンドの引数パターンを収集（1パターンは #NN 連結・隣接リテラル結合に対応） */
-export function collectWaitPatterns(tokens: Token[], start: number, env: Env): string[] {
-  return collectWaitPatternDetails(tokens, start, env).map((p) => p.pattern)
-}
-
 function cloneEnv(env: ReadonlyMap<string, RuntimeValue>): Env {
   const next = new Map<string, RuntimeValue>()
   for (const [k, v] of env) {
@@ -1587,6 +1582,15 @@ function blockRunToStmtResult(run: BlockRunResult, nextIdx: number): StmtResult 
   return { nextIdx }
 }
 
+/**
+ * exit の効果（include 内ならそのファイルだけ抜ける／それ以外はマクロ終了）。
+ * evaluator.ts と dryRun.ts の両方の exit ハンドラ（本体・単行 if タイル）が使う。
+ * ブロックの深さには関係しない（dryRun.ts の実行セマンティクスと同じ）。
+ */
+export function exitStopEffect(inInclude: boolean | undefined): { stopInclude: true } | { stopAll: true } {
+  return inInclude ? { stopInclude: true } : { stopAll: true }
+}
+
 function resolveEnvString(env: Env, name: string): string | undefined {
   const v = env.get(name)
   return v?.kind === 'str' && v.value ? v.value : undefined
@@ -1711,8 +1715,7 @@ function processSingleLineIfTail(
     return { nextIdx: lineIdx, stopAll: true }
   }
   if (tailCmd === 'exit') {
-    if (opts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
-    return { nextIdx: lineIdx, stopAll: true }
+    return { nextIdx: lineIdx, ...exitStopEffect(opts.inInclude) }
   }
   return { nextIdx: lineIdx }
 }
@@ -1821,8 +1824,7 @@ function processStatement(
   }
 
   if (cmd === 'exit') {
-    if (opts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
-    return { nextIdx: lineIdx, stopAll: true }
+    return { nextIdx: lineIdx, ...exitStopEffect(opts.inInclude) }
   }
 
   if (cmd === 'end') {

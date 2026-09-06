@@ -53,6 +53,7 @@ import {
   collectSendPayload,
   collectWaitPatternDetails,
   evalGroupedStringExprAt,
+  exitStopEffect,
   parseWaitPatternAt,
   createIfdefinedLookup,
   createMacroEnvironment,
@@ -1132,8 +1133,7 @@ export class DryRunSession {
         return this.processGotoCall(env, lines, lineIdx, tokens, tailStart, execOpts)
       }
       if (tailCmd === 'exit') {
-        if (execOpts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
-        return { nextIdx: lineIdx, stopAll: true }
+        return { nextIdx: lineIdx, ...exitStopEffect(execOpts.inInclude) }
       }
       if (tailCmd === 'end') {
         return { nextIdx: lineIdx, stopAll: true }
@@ -2003,8 +2003,7 @@ export class DryRunSession {
     }
 
     if (cmd === 'exit') {
-      if (execOpts.inInclude) return { nextIdx: lineIdx, stopInclude: true }
-      return { nextIdx: lineIdx, stopAll: true }
+      return { nextIdx: lineIdx, ...exitStopEffect(execOpts.inInclude) }
     }
     if (cmd === 'end') {
       return { nextIdx: lineIdx, stopAll: true }

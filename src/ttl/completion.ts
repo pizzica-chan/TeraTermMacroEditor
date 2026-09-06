@@ -13,7 +13,7 @@ import {
 import { analyzeTTL } from './analyzer'
 import { getCachedAnalysis, getEditorAnalyzeOptions } from './analysisContext'
 import { collectLabelNames } from './labels'
-import { isPositionInBlockComment, tokenizeLine } from './tokenize'
+import { blankBlockCommentSpans, isPositionInBlockComment, tokenizeLine } from './tokenize'
 
 const KEYWORDS = new Set([...CONTROL_KEYWORDS, ...LOGICAL_OPERATORS, 'then'])
 
@@ -119,7 +119,8 @@ function ttlCompletionSource(context: CompletionContext): CompletionResult | nul
   const col = context.pos - lineObj.from
   const source = context.state.doc.toString()
   if (isPositionInBlockComment(source, lineObj.number, col)) return null
-  const mode = getLineCompletionMode(lineObj.text, lineObj.number, col)
+  const safeLineText = blankBlockCommentSpans(source, lineObj.number, lineObj.text)
+  const mode = getLineCompletionMode(safeLineText, lineObj.number, col)
   if (!mode) return null
 
   const prefix = word.text

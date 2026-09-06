@@ -203,6 +203,8 @@ interface BlockCommentLineState {
   endsInBlockComment: boolean
   /** 0-based 列 col が `/* ... *\/` の範囲内か（文字列リテラル内の `/*` は対象外、stripComments と同じ規則） */
   isColumnInBlockComment(col: number): boolean
+  /** ブロックコメント（前の行から継続分を含む）が占める [start, end) の列範囲 */
+  ranges: ReadonlyArray<{ start: number; end: number }>
 }
 
 function scanBlockCommentState(rawLine: string, startInBlockComment: boolean): BlockCommentLineState {
@@ -252,6 +254,7 @@ function scanBlockCommentState(rawLine: string, startInBlockComment: boolean): B
   return {
     endsInBlockComment: inBlock,
     isColumnInBlockComment: (col) => ranges.some((r) => col >= r.start && col < r.end),
+    ranges,
   }
 }
 
@@ -282,6 +285,27 @@ export function isPositionInBlockComment(source: string, lineNum: number, col: n
   const line = lines[idx]
   if (line === undefined) return false
   return scanBlockCommentState(line, startsInBlock[idx] ?? false).isColumnInBlockComment(col)
+}
+
+/**
+ * `line` 内のブロックコメント部分（前の行から継続している分を含む）を、
+ * 列位置を保ったまま半角スペースへ置き換える。`tokenizeLine` は単一行しか見ないため、
+ * 複数行コメントが行の途中で閉じてそのあとに実コードが続く場合、そのままではコメント
+ * の残骸を識別子として誤ってトークン化してしまう。ホバー・補完で行を渡す前にこれを
+ * 通すことで、その行より前の複数行コメント状態を考慮した安全な行に変換する。
+ */
+export function blankBlockCommentSpans(source: string, lineNum: number, line: string): string {
+  const { startsInBlock } = getBlockCommentCache(source)
+  const idx = lineNum - 1
+  const { ranges } = scanBlockCommentState(line, startsInBlock[idx] ?? false)
+  if (ranges.length === 0) return line
+  let result = line
+  for (const r of ranges) {
+    const end = Math.min(r.end, result.length)
+    if (r.start >= end) continue
+    result = result.slice(0, r.start) + ' '.repeat(end - r.start) + result.slice(end)
+  }
+  return result
 }
 
 export function unquoteString(text: string): string {
