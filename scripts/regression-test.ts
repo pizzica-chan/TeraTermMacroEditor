@@ -306,14 +306,21 @@ assert(
   blockEndAnalysis.diagnostics,
 )
 
+// 末尾に end を置くのが再現の要件: 末尾 end が無いと新旧どちらの markExitEffect でも
+// childResult.terminator は 'end' にならず、この回帰テストは修正前のバグを検出できない
+// （exit をブロック内だけの効果として無視した旧実装は、endwhile 後のこの end を
+// 「確実に到達する」と誤解釈し、その terminator: 'end' が親に伝播して初めて
+// 親を誤って到達不能にしていた）。
 const blockExitResolver: IncludeResolver = {
   ...includeResolver,
-  resolve: (path) => (path === 'sub.ttl' ? `while 1\nexit\nendwhile` : null),
+  resolve: (path) => (path === 'sub.ttl' ? `while 1\nexit\nendwhile\nend` : null),
 }
 const blockExitAnalysis = analyzeTTL(includeSource, { includeResolver: blockExitResolver })
 assert(
-  !blockExitAnalysis.diagnostics.some((diag) => diag.line === 2 && diag.message.includes('到達しません')),
-  'include block exit (unlike end) keeps parent continuation reachable',
+  !blockExitAnalysis.diagnostics.some(
+    (diag) => (diag.line === 2 || diag.line === 3) && diag.message.includes('到達しません'),
+  ),
+  'include block exit followed by a trailing end (unlike a bare end) keeps parent continuation reachable',
   blockExitAnalysis.diagnostics,
 )
 const blockExitEval = evaluateTTL(includeSource, { includeResolver: blockExitResolver })
@@ -382,6 +389,23 @@ assert(
   hoverReferences.getHoverAt(3, 7)?.info.display === '123',
   'assigned value is shown when hovering an assignment RHS reference',
   hoverReferences.getHoverAt(3, 7),
+)
+
+// stripComments はコメント部分を空白で埋めて列位置を保つ必要がある。除去してしまうと
+// コメントより後ろのコードの列が詰まり、その行のホバーが実際のエディタ上の列とずれて
+// 常に外れてしまう（getHoverAt は stripComments 後の行を使うため）。
+const hoverAfterInlineBlockComment = evaluateTTL(`x = 5\nsend 'a' /* note */ x`)
+assert(
+  hoverAfterInlineBlockComment.getHoverAt(2, 20)?.info.display === '5',
+  'hovering a variable after a same-line block comment uses the original column',
+  hoverAfterInlineBlockComment.getHoverAt(2, 20),
+)
+
+const hoverAfterCarriedBlockComment = evaluateTTL(`x = 5\n/* start\nstill comment */ send x`)
+assert(
+  hoverAfterCarriedBlockComment.getHoverAt(3, 22)?.info.display === '5',
+  'hovering a variable after a multi-line block comment that closes mid-line uses the original column',
+  hoverAfterCarriedBlockComment.getHoverAt(3, 22),
 )
 
 const selfReferentialAssignment = evaluateTTL(`cnt = 5\ncnt = cnt + 1`)

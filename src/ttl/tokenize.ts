@@ -158,8 +158,14 @@ export function stripComments(source: string): string[] {
     while (i < rawLine.length) {
       if (inBlock) {
         const end = rawLine.indexOf('*/', i)
-        if (end === -1) break
+        if (end === -1) {
+          // 行末までコメント継続。列位置を保つため空白で埋める
+          // （ホバー・診断が元の行の列とずれないようにするため、除去せず空白化する）。
+          line += ' '.repeat(rawLine.length - i)
+          break
+        }
         inBlock = false
+        line += ' '.repeat(end + 2 - i)
         i = end + 2
         continue
       }
@@ -175,6 +181,7 @@ export function stripComments(source: string): string[] {
 
       if (rawLine.slice(i, i + 2) === '/*') {
         inBlock = true
+        line += '  '
         i += 2
         continue
       }
@@ -186,7 +193,11 @@ export function stripComments(source: string): string[] {
         continue
       }
 
-      if (ch === ';') break
+      if (ch === ';') {
+        // 行コメントも同様に列位置を保つため空白で埋める
+        line += ' '.repeat(rawLine.length - i)
+        break
+      }
 
       line += ch
       i++

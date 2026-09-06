@@ -1329,9 +1329,11 @@ export class DryRunSession {
       } else {
         matchstrValue = simulated || '〈受信データ〉'
       }
-      // 先頭パターンが変数経由でも静的に確定していれば literal 扱いにする
+      // 他の候補パターンが未確定なら実際にどれが一致したか分からないため、
+      // 全パターンが確定しているときだけ literal 扱いにする
       // （evaluator.ts の applyWaitReceiveEffects と同じ判定基準）。
-      const matchOrigin = patterns.length > 0 && patterns[0]!.determinate ? 'literal' : 'match-received'
+      const matchOrigin =
+        patterns.length > 0 && patterns.every((p) => p.determinate) ? 'literal' : 'match-received'
       setScalar(env, 'matchstr', { kind: 'str', value: matchstrValue, origin: matchOrigin })
 
       setResult(env, cmd, 1, 'literal')

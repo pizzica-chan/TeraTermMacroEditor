@@ -1501,6 +1501,36 @@ end`
   if (matchstrItem?.line === 3) ok('wait の引数が未確定変数なら matchstr も未確定のまま')
   else ng('wait の引数が未確定変数なら matchstr も未確定のまま', waitUnknownVarVars)
 
+  // wait は複数パターンのどれかに一致する。先頭パターンが既知でも、後続の
+  // 候補パターンが未確定なら実際に一致したのがどちらか分からないため、
+  // matchstr は保守的に未確定のままにする（先頭パターンだけを見て確定扱いに
+  // していた場合の偽の確信を防ぐ）。
+  const waitMixedPatternsSrc = `A = 'known'\ninputbox 'p' 'title'\np = inputstr\nwait A p\nsendln 'x'\nend`
+  const waitMixedPatternsEval = evaluateTTL(waitMixedPatternsSrc)
+  const waitMixedPatternsVars = collectIndeterminateVariables(
+    waitMixedPatternsSrc,
+    waitMixedPatternsEval.beforeLine,
+    waitMixedPatternsEval.afterLine,
+  )
+  const mixedMatchstrItem = waitMixedPatternsVars.find((v) => v.name === 'matchstr')
+  if (mixedMatchstrItem?.line === 4) {
+    ok('wait の先頭パターンが既知でも後続パターンが未確定なら matchstr も未確定にする')
+  } else {
+    ng(
+      'wait の先頭パターンが既知でも後続パターンが未確定なら matchstr も未確定にする',
+      waitMixedPatternsVars,
+    )
+  }
+
+  const waitAllLiteralPatternsSrc = `wait 'a' 'b'\nsendln 'x'\nend`
+  const waitAllLiteralPatternsEval = evaluateTTL(waitAllLiteralPatternsSrc)
+  const matchstrAfterAllLiteral = waitAllLiteralPatternsEval.afterLine.get(1)?.get('matchstr')
+  if (matchstrAfterAllLiteral?.kind === 'str' && matchstrAfterAllLiteral.origin === 'literal') {
+    ok('全パターンが確定していれば従来どおり matchstr を確定値にする')
+  } else {
+    ng('全パターンが確定していれば従来どおり matchstr を確定値にする', matchstrAfterAllLiteral)
+  }
+
   return { passed, failed }
 }
 

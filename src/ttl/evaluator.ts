@@ -1231,11 +1231,13 @@ function applyWaitReceiveEffects(
   } else {
     matchstrValue = patterns[0]!.pattern
   }
-  // 先頭パターンが変数経由でも静的に確定していれば literal 扱いにする
-  // （wait 'x' と wait v（v = 'x'）を同じ扱いにする。他の候補パターンとの
-  // 一致可能性は元々未考慮で、表示している patterns[0] 自体の確定性だけを見る）。
+  // 表示は常に先頭パターン（patterns[0]）の値を使うが、他の候補パターンが
+  // 未確定なら実際にどれが一致したか分からないため、その未確定候補も含めて
+  // 全パターンが確定しているときだけ literal 扱いにする
+  // （wait A p のように A が既知でも p が未確定なら、一致した文字列が本当に
+  // A のままとは限らないため保守的に match-received のままにする）。
   const origin: ValueOrigin =
-    patterns.length > 0 && patterns[0]!.determinate ? 'literal' : 'match-received'
+    patterns.length > 0 && patterns.every((p) => p.determinate) ? 'literal' : 'match-received'
   const matchstr =
     origin === 'match-received'
       ? withUnresolvedSourceIds({ kind: 'str', value: matchstrValue, origin }, seq)
