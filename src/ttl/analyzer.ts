@@ -336,14 +336,9 @@ function markExitEffect(
   ctx: AnalysisContext,
   loopOpts: LineLoopOpts,
 ): LineLoopResult | undefined {
-  if (ctx.suppressDiagnostics && ctx.blockStack.length > 0) {
-    markBlockOnlyTerminator(ctx)
-    return undefined
-  }
-  if (ctx.suppressDiagnostics) {
-    if (loopOpts.stopOnExit) return { exit: true, terminator: 'exit' }
-    return undefined
-  }
+  // exit は include を抜けるだけでブロックの深さに関係なく確定効果を持つ
+  // （dryRun.ts / evaluator.ts と同じ判定基準。end と同様、未確定ブロック内だけ
+  // block-only にする）。
   if (isConditionalTerminatorContext(ctx)) {
     markBlockOnlyTerminator(ctx)
     return undefined

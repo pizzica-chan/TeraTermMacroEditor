@@ -306,6 +306,23 @@ assert(
   blockEndAnalysis.diagnostics,
 )
 
+const blockExitResolver: IncludeResolver = {
+  ...includeResolver,
+  resolve: (path) => (path === 'sub.ttl' ? `while 1\nexit\nendwhile` : null),
+}
+const blockExitAnalysis = analyzeTTL(includeSource, { includeResolver: blockExitResolver })
+assert(
+  !blockExitAnalysis.diagnostics.some((diag) => diag.line === 2 && diag.message.includes('到達しません')),
+  'include block exit (unlike end) keeps parent continuation reachable',
+  blockExitAnalysis.diagnostics,
+)
+const blockExitEval = evaluateTTL(includeSource, { includeResolver: blockExitResolver })
+assert(
+  blockExitEval.sendEntries.map((entry) => entry.payload).join(',') === 'after',
+  'include block exit matches analyzer: parent send after include still runs',
+  blockExitEval.sendEntries,
+)
+
 const includeCallResolver: IncludeResolver = {
   ...includeResolver,
   resolve: (path) =>

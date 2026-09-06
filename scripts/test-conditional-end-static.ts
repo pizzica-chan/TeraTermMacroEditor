@@ -99,6 +99,26 @@ const CASES: StaticCase[] = [
     mustSend: ['after'],
     mustNotSend: ['in-then'],
   },
+  {
+    name: 'if 1 then exit / endif 以降は到達不能（end と同じ扱い）',
+    source: `if 1 then\n exit\nendif\naaa = 0`,
+    mustBeUnreachable: [4],
+  },
+  {
+    name: 'if result=0 then exit / endif 以降は到達可能',
+    source: `if result = 0 then\n exit\nendif\naaa = 0`,
+    mustBeReachable: [4],
+  },
+  {
+    name: 'while 1 内の exit も endwhile 以降を到達不能にする',
+    source: `while 1\n exit\nendwhile\naaa = 0`,
+    mustBeUnreachable: [4],
+  },
+  {
+    name: '単行 if 1 then exit の次行は到達不能',
+    source: `if 1 then exit\naaa = 0`,
+    mustBeUnreachable: [2],
+  },
 ]
 
 function unreachableLines(source: string): Set<number> {
