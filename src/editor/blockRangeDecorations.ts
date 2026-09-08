@@ -13,7 +13,14 @@ const cache = new Map<string, BlockRange[]>()
 
 function getCachedBlockRanges(source: string): BlockRange[] {
   const hit = cache.get(source)
-  if (hit) return hit
+  if (hit) {
+    // Map は挿入順を保持するため、ヒットしたキーを再挿入して最後尾（最新）に
+    // 動かす。これをしないとヒットしても順序が変わらず、実質 FIFO になって
+    // よく使うタブが先に落ちてしまう。
+    cache.delete(source)
+    cache.set(source, hit)
+    return hit
+  }
   const ranges = collectBlockRanges(source)
   cache.set(source, ranges)
   if (cache.size > MAX_CACHE_ENTRIES) {
