@@ -1,5 +1,6 @@
-import { tokenizeLine, unquoteString, type Token } from './tokenize'
+import { stripComments, tokenizeLine, unquoteString, type Token } from './tokenize'
 import { evalTtlIntExprAt, evalTtlLiteralIntCondition, type TtlIntExprResolve } from './ttlExpression'
+import { findIfThenTailStart, findSingleLineIfTailStart, hasThenKeyword } from './subroutine'
 
 /** if/while/for/do/until の開閉ペア（配列形・analyzer 向け） */
 export const BLOCK_PAIR_LIST: ReadonlyArray<readonly [string, string]> = [
@@ -48,6 +49,82 @@ export function findBlockEnd(lines: string[], startIdx: number, open: string, cl
     }
   }
   return lines.length - 1
+}
+
+/** 閉じキーワード → 開キーワード */
+const CLOSE_TO_OPEN: Readonly<Record<string, string>> = Object.fromEntries(
+  BLOCK_PAIR_LIST.map(([open, close]) => [close, open]),
+)
+
+export interface BlockRange {
+  /** 'if' | 'while' | 'for' | 'do' | 'until' */
+  keyword: string
+  /** 開キーワードの行（1-based） */
+  startLine: number
+  /** 閉キーワードの行（1-based） */
+  endLine: number
+  /** if のとき、elseif/else を含む各分岐開始行（if 自身の行を含む、昇順） */
+  branchLines: number[]
+}
+
+/**
+ * ソース全体を 1 パスで走査し、if/while/for/do/until の開始行〜終了行の
+ * 対応をすべて集める（単行 if は対象外）。カーソル行が属するブロック範囲を
+ * エディタ側で即座に引けるようにするための事前計算。
+ * analyzer.ts の blockStack 管理（push/pop 条件）と同じ判定基準を使う。
+ */
+export function collectBlockRanges(source: string): BlockRange[] {
+  const lines = stripComments(source)
+  const stack: Array<{ keyword: string; startLine: number; branchLines: number[] }> = []
+  const ranges: BlockRange[] = []
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    const lineNum = i + 1
+    const tokens = tokenizeLine(line, lineNum)
+    const offset = tokens[0]?.kind === 'label' ? 1 : 0
+    const first = tokens[offset]
+    if (first?.kind !== 'identifier') continue
+    const cmd = first.text.toLowerCase()
+
+    if ((cmd === 'elseif' || cmd === 'else') && stack[stack.length - 1]?.keyword === 'if') {
+      stack[stack.length - 1]!.branchLines.push(lineNum)
+      continue
+    }
+
+    if (cmd === 'if') {
+      if (!hasThenKeyword(tokens, offset)) continue
+      if (findIfThenTailStart(tokens, offset) || findSingleLineIfTailStart(tokens, offset) !== null) continue
+      stack.push({ keyword: 'if', startLine: lineNum, branchLines: [lineNum] })
+      continue
+    }
+    if (cmd === 'while' || cmd === 'for' || cmd === 'do' || cmd === 'until') {
+      stack.push({ keyword: cmd, startLine: lineNum, branchLines: [] })
+      continue
+    }
+
+    const openKeyword = CLOSE_TO_OPEN[cmd]
+    if (!openKeyword) continue
+    let matchIdx = -1
+    for (let j = stack.length - 1; j >= 0; j--) {
+      if (stack[j]!.keyword === openKeyword) {
+        matchIdx = j
+        break
+      }
+    }
+    if (matchIdx < 0) continue
+    while (stack.length > matchIdx) {
+      const closed = stack.pop()!
+      ranges.push({
+        keyword: closed.keyword,
+        startLine: closed.startLine,
+        endLine: lineNum,
+        branchLines: closed.branchLines,
+      })
+    }
+  }
+
+  return ranges
 }
 
 /**

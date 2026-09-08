@@ -1101,6 +1101,11 @@ body {
   box-shadow: inset 3px 0 0 #c3a000;
 }
 
+/* if/while/for/do/until にカーソルがあるときの対応ブロック範囲（縦ガイドライン） */
+.cm-block-nest-line {
+  box-shadow: inset 3px 0 0 #8a7ee0aa;
+}
+
 .cm-variable-assumption-badge {
   display: inline-block;
   margin-left: 10px;

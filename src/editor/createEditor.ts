@@ -22,6 +22,7 @@ import {
   type VariableAssumptionDecoration,
 } from './variableAssumptionDecorations'
 import { includeGraphRevisionExtension, bumpIncludeGraphRevision, bumpAnalysisCacheRevision } from '../ttl/analysisContext'
+import { blockNestRangeExtension } from './blockRangeDecorations'
 import { createEditorHistoryExtension, PROGRAM_REPLACE_USER_EVENT } from './editorHistory'
 
 const SAMPLE_MACRO = `; Tera Term マクロ サンプル
@@ -112,6 +113,7 @@ function buildExtensions(onDocChange: (text: string) => void): Extension[] {
     branchAssumptionDecorationExtension,
     variableAssumptionDecorationExtension,
     executionDecorationExtension,
+    blockNestRangeExtension,
     includeGraphRevisionExtension,
     ttlAutocompletion,
     themeCompartment.of(darkTheme),

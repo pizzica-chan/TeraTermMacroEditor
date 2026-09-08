@@ -3,6 +3,7 @@
  */
 import { analyzeTTL, type IncludeResolver } from '../src/ttl/analyzer'
 import { evaluateTTL } from '../src/ttl/evaluator'
+import { collectBlockRanges } from '../src/ttl/controlFlow'
 import { includeLoopIterationBindingKey } from '../src/ttl/includeRefs'
 import { runConditionalEndStaticTests } from './test-conditional-end-static'
 import { runBranchAssumptionTests } from './test-branch-assumptions'
@@ -478,6 +479,55 @@ assert(
   loopSendEval.sendEntries[0]?.location === `${loopSendBindingKey}:L1`,
   'loop include send location uses loop binding key',
   loopSendEval.sendEntries[0]?.location,
+)
+
+console.log('\n=== K. collectBlockRanges（if/while ネスト範囲) ===')
+
+const simpleIfRanges = collectBlockRanges(`if x = 1 then\nsendln 'a'\nendif`)
+assert(
+  simpleIfRanges.length === 1
+    && simpleIfRanges[0]?.startLine === 1
+    && simpleIfRanges[0]?.endLine === 3
+    && simpleIfRanges[0]?.branchLines.join(',') === '1',
+  'simple if/endif produces one range spanning the whole block',
+  simpleIfRanges,
+)
+
+const nestedIfRanges = collectBlockRanges(
+  `if x = 1 then\n  sendln 'a'\n  if y = 2 then\n    sendln 'b'\n  endif\nelseif x = 2 then\n  sendln 'c'\nelse\n  sendln 'd'\nendif`,
+)
+const outerIfRange = nestedIfRanges.find((r) => r.startLine === 1)
+const innerIfRange = nestedIfRanges.find((r) => r.startLine === 3)
+assert(
+  nestedIfRanges.length === 2
+    && outerIfRange?.endLine === 10
+    && outerIfRange.branchLines.join(',') === '1,6,8'
+    && innerIfRange?.endLine === 5
+    && innerIfRange.branchLines.join(',') === '3',
+  'nested if with elseif/else tracks outer branch lines and inner block separately',
+  nestedIfRanges,
+)
+
+const loopRanges = collectBlockRanges(`for i 1 3\n  sendln i\nnext\ndo\n  sendln 'y'\nloop\nuntil z = 1\n  sendln 'z'\nenduntil`)
+assert(
+  loopRanges.map((r) => `${r.keyword}:${r.startLine}-${r.endLine}`).join(',')
+    === 'for:1-3,do:4-6,until:7-9',
+  'for/do/until block ranges are all tracked independently',
+  loopRanges,
+)
+
+const singleLineIfRanges = collectBlockRanges(`if x = 1 then sendln 'a'\nsendln 'b'`)
+assert(
+  singleLineIfRanges.length === 0,
+  'single-line if ... then command produces no block range',
+  singleLineIfRanges,
+)
+
+const singleLineIfNoThenRanges = collectBlockRanges(`if x = 1 sendln 'a'\nsendln 'b'`)
+assert(
+  singleLineIfNoThenRanges.length === 0,
+  'single-line if (no then) command produces no block range',
+  singleLineIfNoThenRanges,
 )
 
 console.log(`\n=== REGRESSION RESULT: ${passed} passed, ${failed} failed ===`)
