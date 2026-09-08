@@ -1106,6 +1106,23 @@ body {
   box-shadow: inset 3px 0 0 #8a7ee0aa;
 }
 
+/*
+ * box-shadow は単一プロパティのため、同じ行に複数のクラスが付くと
+ * 後勝ちで片方が完全に隠れてしまう。分岐仮定・変数仮定の色（意味的な情報）を
+ * ネストガイド（構造的な情報）より優先し、2本の inset を並べて両方見えるようにする。
+ */
+.cm-branch-assumption-line.true.cm-block-nest-line {
+  box-shadow: inset 3px 0 0 #37a447, inset 6px 0 0 #8a7ee0aa;
+}
+
+.cm-branch-assumption-line.false.cm-block-nest-line {
+  box-shadow: inset 3px 0 0 #d13438, inset 6px 0 0 #8a7ee0aa;
+}
+
+.cm-variable-assumption-line.cm-block-nest-line {
+  box-shadow: inset 3px 0 0 #c3a000, inset 6px 0 0 #8a7ee0aa;
+}
+
 .cm-variable-assumption-badge {
   display: inline-block;
   margin-left: 10px;

@@ -113,15 +113,20 @@ export function collectBlockRanges(source: string): BlockRange[] {
       }
     }
     if (matchIdx < 0) continue
-    while (stack.length > matchIdx) {
-      const closed = stack.pop()!
-      ranges.push({
-        keyword: closed.keyword,
-        startLine: closed.startLine,
-        endLine: lineNum,
-        branchLines: closed.branchLines,
-      })
+    // 食い違った閉じ（例: while → if → endwhile、endif 忘れ）で matchIdx より
+    // 内側に未閉じのブロックが残っている場合、それらは実際には閉じていないため
+    // 範囲を出さずに読み捨てる（closed.endLine を lineNum と偽らない）。
+    // 範囲を出すのは、この閉じキーワードに実際に対応する matchIdx の分だけ。
+    while (stack.length > matchIdx + 1) {
+      stack.pop()
     }
+    const closed = stack.pop()!
+    ranges.push({
+      keyword: closed.keyword,
+      startLine: closed.startLine,
+      endLine: lineNum,
+      branchLines: closed.branchLines,
+    })
   }
 
   return ranges

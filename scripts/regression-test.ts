@@ -516,6 +516,27 @@ assert(
   loopRanges,
 )
 
+const whileRanges = collectBlockRanges(`while 1\n  sendln 'x'\n  break\nendwhile`)
+assert(
+  whileRanges.length === 1
+    && whileRanges[0]?.keyword === 'while'
+    && whileRanges[0]?.startLine === 1
+    && whileRanges[0]?.endLine === 4
+    && whileRanges[0]?.branchLines.length === 0,
+  'while/endwhile produces one range spanning the whole loop',
+  whileRanges,
+)
+
+const mismatchedCloseRanges = collectBlockRanges(`while 1\nif x = 1 then\nsendln 'a'\nendwhile`)
+assert(
+  mismatchedCloseRanges.length === 1
+    && mismatchedCloseRanges[0]?.keyword === 'while'
+    && mismatchedCloseRanges[0]?.startLine === 1
+    && mismatchedCloseRanges[0]?.endLine === 4,
+  'a mismatched close (missing endif) does not fabricate a wrong range for the unclosed inner if',
+  mismatchedCloseRanges,
+)
+
 const singleLineIfRanges = collectBlockRanges(`if x = 1 then sendln 'a'\nsendln 'b'`)
 assert(
   singleLineIfRanges.length === 0,

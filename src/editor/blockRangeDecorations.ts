@@ -2,12 +2,24 @@ import { StateField, RangeSetBuilder, type Extension, type EditorState } from '@
 import { EditorView, Decoration, type DecorationSet } from '@codemirror/view'
 import { collectBlockRanges, type BlockRange } from '../ttl/controlFlow'
 
-let cache: { source: string; ranges: BlockRange[] } | null = null
+/**
+ * ソース文字列 → BlockRange[] の小さな LRU キャッシュ。
+ * タブ（エディタインスタンス）ごとにソースが異なるため単一スロットだと
+ * タブ切り替えのたびに再計算になる。数タブ分を覚えておけば十分なので
+ * 上限を設けた Map で代用する（正確な per-editor スコープまでは持たない）。
+ */
+const MAX_CACHE_ENTRIES = 8
+const cache = new Map<string, BlockRange[]>()
 
 function getCachedBlockRanges(source: string): BlockRange[] {
-  if (cache && cache.source === source) return cache.ranges
+  const hit = cache.get(source)
+  if (hit) return hit
   const ranges = collectBlockRanges(source)
-  cache = { source, ranges }
+  cache.set(source, ranges)
+  if (cache.size > MAX_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value
+    if (oldestKey !== undefined) cache.delete(oldestKey)
+  }
   return ranges
 }
 
